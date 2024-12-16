@@ -1,0 +1,26 @@
+[package]
+name = "burnlm-server"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+readme.workspace = true
+
+[dependencies]
+axum = { workspace = true }
+chrono = { workspace = true }
+clap = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+utoipa = { workspace = true }
+utoipa-swagger-ui = { workspace = true, features = ["axum"] }
+
+[dev-dependencies]
+async-openai = "0.26.0"
+rstest = { workspace = true }
+
+[[bin]]
+name = "server"
+path = "src/bin/server.rs"

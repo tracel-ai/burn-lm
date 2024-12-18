@@ -1,0 +1,11 @@
+procs:
+  open-webui:
+    shell: 'docker "logs" "-f" "open-webui"'
+    autostart: true
+    autorestart: true
+    stop: SIGTERM
+  openai-server:
+    shell: 'cargo "watch" "-q" "-c" "-w" "crates/burnlm-server/src/" "-x" "run --package burnlm-server --bin server -- run --port 3001"'
+    autostart: true
+    autorestart: true
+    stop: {send-keys: ["<C-c>"]}

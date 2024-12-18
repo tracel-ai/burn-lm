@@ -2589,6 +2589,7 @@ version = "1.0.0"
 dependencies = [
  "log",
  "strum",
+ "tokio",
  "tracel-xtask",
 ]
 

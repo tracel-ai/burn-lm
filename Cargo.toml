@@ -19,14 +19,23 @@ readme = "README.md"
 axum = "0.7.9"
 chrono = { version = "0.4.39", features = ["serde"] }
 clap = { version = "4.5.22", features = ["derive"] }
+dotenvy = "0.15.7"
+lazy_static = "1.5.0"
 log = "0.4.22"
 rstest = "0.2.1"
 serde = { version = "1.0.215", features = ["derive"] }
+serde_json = "1.0.133"
 strum = { version = "0.26.3", features = ["derive"] }
 thiserror = "2.0.7"
 tokio = { version = "1.42.0", features = ["full"] }
-tracing = "0.1.41"
-tracing-subscriber = "0.3.19"
+tower-http = { version = "0.6.0", features = [
+    "fs",
+    "cors",
+    "trace",
+    "request-id",
+] }
+tracing = { version = "0.1.41", features = ["log"] }
+tracing-subscriber = {version = "0.3.19", features = ["env-filter", "registry"]}
 utoipa = { version = "5.2.0", features = ["axum_extras"] }
 utoipa-swagger-ui = { version = "8.0.3", features = ["axum"] }
 

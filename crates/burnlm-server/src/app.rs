@@ -1,13 +1,17 @@
-use std::net::SocketAddr;
+use std::{net::SocketAddr, time::Duration};
 
-use axum::{routing::get, Router};
+use axum::{http::{HeaderName, Request}, response::Response, routing::get, Router};
 use tokio::net::TcpListener;
-use tracing::info;
-use tracing_subscriber::{filter, fmt, layer::SubscriberExt, util::SubscriberInitExt, Layer};
+use tower_http::{request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer}, trace::TraceLayer};
+use tracing::{info, Span};
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
-use crate::{openapi::ApiDoc, routers::model_routers, stores::model_store::ModelStore};
+use crate::{openapi::ApiDoc, routers::model_routers, stores::model_store::ModelStore, trace::{self, Latency}};
+
+lazy_static! {
+    pub static ref X_REQUEST_ID: HeaderName = HeaderName::from_static("x-request-id");
+}
 
 /// Application
 #[derive(Debug)]
@@ -23,9 +27,8 @@ impl Default for App {
 
 impl App {
     pub fn new(port: u16) -> Self {
-        tracing_subscriber::registry()
-            .with(fmt::layer().with_filter(filter::LevelFilter::INFO))
-            .init();
+        dotenvy::from_filename(".env").ok();
+        trace::init();
         Self { port }
     }
 }
@@ -42,6 +45,47 @@ impl App {
         let router = Router::new().merge(public_routes);
         Router::new().nest(version_prefix, router)
             .merge(SwaggerUi::new("/v1/swagger-ui").url("/v1/api-docs/openapi.json", openapi))
+            // Propagate request ID header from requests to responses
+            .layer(PropagateRequestIdLayer::new(X_REQUEST_ID.clone()))
+            // Log requests
+            .layer(
+                TraceLayer::new_for_http()
+                    .make_span_with(|request: &Request<_>| {
+                        // define a span only when debug level is set
+                        tracing::debug_span!(
+                            "http_request",
+                            headers = ?request.headers(),
+                            version = ?request.version(),
+                        )
+                    })
+                    .on_request(move |request: &Request<_>, _span: &Span| {
+                        tracing::debug!(
+                            request_id = ?request.headers()[X_REQUEST_ID.clone()],
+                            method = %request.method(),
+                            uri = %request.uri(),
+                            "incoming request",
+                        );
+                    })
+                    .on_response(
+                        move |response: &Response, latency: Duration, _span: &Span| {
+                            let latency = Latency {
+                                unit: tower_http::LatencyUnit::Millis,
+                                duration: latency,
+                            };
+                            tracing::info!(
+                                request_id = ?response.headers()[X_REQUEST_ID.clone()],
+                                %latency,
+                                status = response.status().as_u16(),
+                                "sent response",
+                            );
+                        },
+                    ),
+            )
+            // Create Request ID
+            .layer(SetRequestIdLayer::new(
+                X_REQUEST_ID.clone(),
+                MakeRequestUuid,
+            ))
     }
 
     /// Create and start the application HTTP server

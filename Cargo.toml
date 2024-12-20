@@ -4,8 +4,9 @@
 # https://doc.rust-lang.org/cargo/reference/resolver.html#feature-resolver-version-2
 resolver = "2"
 
-members = [ "crates/burnlm-server",
-    "crates/*",
+members = [
+    "crates/burnlm-server",
+    "models/llama-burn",
     "xtask",
 ]
 
@@ -16,9 +17,12 @@ license = "MIT OR Apache-2.0"
 readme = "README.md"
 
 [workspace.dependencies]
-axum = "0.7.9"
+burn = { version = "0.14.0", default-features = false, features = ["std"] }
+
+axum = { version = "0.7.9", features = ["macros"] }
 chrono = { version = "0.4.39", features = ["serde"] }
 clap = { version = "4.5.22", features = ["derive"] }
+dirs = { version = "5.0.1" }
 dotenvy = "0.15.7"
 lazy_static = "1.5.0"
 log = "0.4.22"
@@ -28,6 +32,7 @@ serde_json = "1.0.133"
 strum = { version = "0.26.3", features = ["derive"] }
 thiserror = "2.0.7"
 tokio = { version = "1.42.0", features = ["full"] }
+tokio-stream = "0.1.17"
 tower-http = { version = "0.6.0", features = [
     "fs",
     "cors",
@@ -38,6 +43,12 @@ tracing = { version = "0.1.41", features = ["log"] }
 tracing-subscriber = {version = "0.3.19", features = ["env-filter", "registry"]}
 utoipa = { version = "5.2.0", features = ["axum_extras"] }
 utoipa-swagger-ui = { version = "8.0.3", features = ["axum"] }
+
+# models
+base64 = { version = "0.22.1" }
+rustc-hash = { version = "1.1.0" }
+tiktoken-rs = { version = "0.5.8" }
+tokenizers = { version = "0.19.1", default-features = false, features = ["onig"] }
 
 ### For xtask crate ###
 tracel-xtask = { version = "=1.1.8" }

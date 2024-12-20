@@ -1,5 +1,5 @@
-use clap::{Parser, Subcommand};
 use burnlm_server::App;
+use clap::{Parser, Subcommand};
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -19,7 +19,7 @@ enum Commands {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>>{
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
     match cli.command {
         Commands::Run { port } => run_server(port).await,

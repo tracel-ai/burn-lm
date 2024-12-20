@@ -7,7 +7,6 @@ use crate::schemas::model_schemas::ModelResponseSchema;
 #[derive(OpenApi)]
 #[openapi(
     paths(get_model, list_models),
-    components(schemas(ModelResponseSchema)),
-    )
-]
+    components(schemas(ModelResponseSchema))
+)]
 pub(crate) struct ApiDoc;

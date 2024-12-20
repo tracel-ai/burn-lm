@@ -10,6 +10,7 @@ pub mod routers;
 pub mod schemas;
 pub mod stores;
 mod trace;
+mod utils;
 
 mod openapi;
 

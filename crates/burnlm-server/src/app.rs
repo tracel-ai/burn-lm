@@ -1,13 +1,26 @@
 use std::{net::SocketAddr, time::Duration};
 
-use axum::{http::{HeaderName, Request}, response::Response, routing::get, Router};
+use axum::{
+    http::{HeaderName, Request},
+    response::Response,
+    routing::get,
+    Router,
+};
 use tokio::net::TcpListener;
-use tower_http::{request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer}, trace::TraceLayer};
+use tower_http::{
+    request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer},
+    trace::TraceLayer,
+};
 use tracing::{info, Span};
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
-use crate::{openapi::ApiDoc, routers::model_routers, stores::model_store::ModelStore, trace::{self, Latency}};
+use crate::{
+    openapi::ApiDoc,
+    routers::{chat_routers, model_routers},
+    stores::model_store::ModelStore,
+    trace::{self, Latency},
+};
 
 lazy_static! {
     pub static ref X_REQUEST_ID: HeaderName = HeaderName::from_static("x-request-id");
@@ -41,9 +54,11 @@ impl App {
         let openapi = ApiDoc::openapi();
         let public_routes = Router::new()
             .route("/", get(|| async { "Home" }))
+            .merge(chat_routers::public_router())
             .merge(model_routers::public_router(model_store));
         let router = Router::new().merge(public_routes);
-        Router::new().nest(version_prefix, router)
+        Router::new()
+            .nest(version_prefix, router)
             .merge(SwaggerUi::new("/v1/swagger-ui").url("/v1/api-docs/openapi.json", openapi))
             // Propagate request ID header from requests to responses
             .layer(PropagateRequestIdLayer::new(X_REQUEST_ID.clone()))

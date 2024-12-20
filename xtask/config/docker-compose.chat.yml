@@ -6,10 +6,18 @@ services:
     ports:
       - "3000:8080"
     environment:
+      # https://docs.openwebui.com/getting-started/advanced-topics/env-configuration
+      ENABLE_OPENAI_API: "True"
       OPENAI_API_KEY: ""
       OPENAI_API_BASE_URL: "http://host.docker.internal:3001/v1"
+      ENABLE_OLLAMA_API: "False"
+      ENABLE_LOGIN_FORM: "False"
       ENABLE_SIGNUP: "False"
       WEBUI_AUTH: "False"
+      DEFAULT_MODELS: "TinyLlama"
+      ENABLE_MESSAGE_RATING: "False"
+      SAFE_MODE: "True"
+      TITLE_GENERATION_PROMPT_TEMPLATE: "Generate a concise and engaging title summarizing this conversation. Focus on its main topic and use clear language."
     volumes:
       - open-webui:/app/backend/data
 

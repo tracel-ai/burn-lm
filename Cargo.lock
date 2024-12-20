@@ -776,6 +776,7 @@ dependencies = [
  "dotenvy",
  "lazy_static",
  "llama-burn",
+ "rand",
  "rstest",
  "serde",
  "serde_json",

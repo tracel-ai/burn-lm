@@ -2,6 +2,7 @@ use axum::{http::{HeaderMap, HeaderName, HeaderValue, StatusCode}, response::{In
 use tokio::sync::mpsc;
 use tokio_stream::{wrappers::ReceiverStream, StreamExt};
 use tracing::info;
+use rand::Rng;
 
 use crate::{
     errors::ServerResult,
@@ -32,7 +33,9 @@ async fn handle_non_streaming_response(
 ) -> ServerResult<Response> {
     let mut config = llm::Config::default();
     config.prompt = llm::forge_prompt(&payload.messages);
+    config.seed = rand::thread_rng().gen::<u64>();
     let content = llm::complete(&config);
+    tracing::debug!("Answer: {content}");
     let response = ChatCompletionSchema {
         id: ChatCompletionId::new().to_string(),
         object: "chat.completion".to_string(),
@@ -65,7 +68,9 @@ async fn handle_streaming_response(
         async move {
             let mut config = llm::Config::default();
             config.prompt = llm::forge_prompt(&messages);
+            config.seed = rand::thread_rng().gen::<u64>();
             let content = llm::complete(&config);
+            tracing::debug!("Answer: {content}");
             let chunk = StreamingChunk::Data(ChatCompletionChunkSchema {
                 id: id.clone(),
                 object: "chat.completion.chunk".to_string(),

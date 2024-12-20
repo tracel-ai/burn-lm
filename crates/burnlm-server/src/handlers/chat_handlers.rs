@@ -34,6 +34,7 @@ async fn handle_non_streaming_response(
     let mut config = llm::Config::default();
     config.prompt = llm::forge_prompt(&payload.messages);
     config.seed = rand::thread_rng().gen::<u64>();
+    config.temperature = 0.2;
     let content = llm::complete(&config);
     tracing::debug!("Answer: {content}");
     let response = ChatCompletionSchema {

@@ -17,7 +17,7 @@ services:
       DEFAULT_MODELS: "TinyLlama"
       ENABLE_MESSAGE_RATING: "False"
       SAFE_MODE: "True"
-      TITLE_GENERATION_PROMPT_TEMPLATE: "Generate a concise and engaging title summarizing this conversation. Focus on its main topic and use clear language."
+      TITLE_GENERATION_PROMPT_TEMPLATE: "Create a concise but descriptive 3 to 5 words title in natural English for the following content: {{prompt}}"
     volumes:
       - open-webui:/app/backend/data
 

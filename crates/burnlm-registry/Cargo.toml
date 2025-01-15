@@ -1,0 +1,20 @@
+[package]
+name = "burnlm-registry"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+readme.workspace = true
+
+[lib]
+name = "burnlm_registry"
+crate-type = ["dylib"]
+
+[features]
+burnlm-cli = []
+
+[dependencies]
+burnlm-inference = { path = "../burnlm-inference" }
+burnlm-plugin-llama3 = { path = "../burnlm-plugin-llama3" }
+burnlm-plugin-tinyllama = { path = "../burnlm-plugin-tinyllama" }
+inventory = { workspace = true }
+

@@ -1,0 +1,15 @@
+[package]
+name = "burnlm-plugin-tinyllama"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+readme.workspace = true
+
+[dependencies]
+burnlm-inference = { path = "../burnlm-inference" }
+burnlm-macros = { path = "../burnlm-macros" }
+
+clap = { workspace = true }
+inventory = { workspace = true }
+serde = { workspace = true }
+

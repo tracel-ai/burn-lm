@@ -1,0 +1,20 @@
+[package]
+name = "burnlm-cli"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+readme.workspace = true
+
+[dependencies]
+burnlm-inference = { path = "../burnlm-inference" }
+burnlm-registry = { path = "../burnlm-registry" }
+
+anyhow = { workspace = true }
+clap = { workspace = true }
+inventory = { workspace = true }
+linkme = "0.3.31"
+paste.workspace = true
+
+[[bin]]
+name = "burnlm"
+path = "src/bin/burnlm.rs"

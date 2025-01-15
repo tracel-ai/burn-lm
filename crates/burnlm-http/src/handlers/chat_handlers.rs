@@ -1,16 +1,21 @@
-use axum::{http::{HeaderMap, HeaderName, HeaderValue, StatusCode}, response::{IntoResponse, Response}, Json};
+use axum::{
+    http::{HeaderMap, HeaderName, HeaderValue, StatusCode},
+    response::{IntoResponse, Response},
+    Json,
+};
+use rand::Rng;
 use tokio::sync::mpsc;
 use tokio_stream::{wrappers::ReceiverStream, StreamExt};
 use tracing::info;
-use rand::Rng;
 
 use crate::{
     errors::ServerResult,
     schemas::chat_schemas::{
-        ChatCompletionChunkSchema, ChatCompletionRequestSchema, ChatCompletionSchema, ChoiceMessageRoleSchema, ChoiceMessageSchema, ChoiceSchema, ChunkChoiceDeltaSchema, ChunkChoiceSchema, FinishReasonSchema, StreamingChunk, UsageSchema
+        ChatCompletionChunkSchema, ChatCompletionRequestSchema, ChatCompletionSchema,
+        ChoiceMessageRoleSchema, ChoiceMessageSchema, ChoiceSchema, ChunkChoiceDeltaSchema,
+        ChunkChoiceSchema, FinishReasonSchema, StreamingChunk, UsageSchema,
     },
-    utils::id::ChatCompletionId,
-    utils::llm,
+    utils::{id::ChatCompletionId, llm},
 };
 
 pub async fn chat_completions(
@@ -105,11 +110,24 @@ async fn handle_streaming_response(
 
     let stream = ReceiverStream::new(rx).map(|item| Ok::<_, std::io::Error>(item));
     let headers = HeaderMap::from_iter(vec![
-        (HeaderName::from_static("content-type"), HeaderValue::from_static("text/event-stream")),
-        (HeaderName::from_static("cache-control"), HeaderValue::from_static("no-cache")),
-        (HeaderName::from_static("connection"), HeaderValue::from_static("keep-alive")),
+        (
+            HeaderName::from_static("content-type"),
+            HeaderValue::from_static("text/event-stream"),
+        ),
+        (
+            HeaderName::from_static("cache-control"),
+            HeaderValue::from_static("no-cache"),
+        ),
+        (
+            HeaderName::from_static("connection"),
+            HeaderValue::from_static("keep-alive"),
+        ),
     ]);
 
-    Ok((StatusCode::OK, headers, axum::body::Body::from_stream(stream)).into_response())
+    Ok((
+        StatusCode::OK,
+        headers,
+        axum::body::Body::from_stream(stream),
+    )
+        .into_response())
 }
-

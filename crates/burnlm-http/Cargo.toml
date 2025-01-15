@@ -1,5 +1,5 @@
 [package]
-name = "burnlm-server"
+name = "burnlm-http"
 edition.workspace = true
 version.workspace = true
 license.workspace = true
@@ -24,6 +24,7 @@ wgpu = ["burn/wgpu"]
 [dependencies]
 burn = { workspace = true }
 llama-burn = { path = "../../models/llama-burn" }
+burnlm-inference = { path = "../burnlm-inference" }
 
 axum = { workspace = true }
 chrono = { workspace = true }

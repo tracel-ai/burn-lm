@@ -57,12 +57,20 @@ pub fn complete(config: &Config) -> String {
 }
 
 pub fn forge_prompt(messages: &Vec<ChoiceMessageSchema>) -> String {
-    let mut prompt: Vec<String> =vec![];
+    let mut prompt: Vec<String> = vec![];
     for message in messages {
         #[cfg(feature = "tinyllama")]
-        prompt.push(format!("<|{}|>\n{}</s>\n", message.role.to_string(), message.content));
+        prompt.push(format!(
+            "<|{}|>\n{}</s>\n",
+            message.role.to_string(),
+            message.content
+        ));
         #[cfg(feature = "llama3")]
-        prompt.push(format!("<|start_header_id|>{}<|end_header_id|>\n\n{}<|eot_id|>", message.role.to_string(), message.content));
+        prompt.push(format!(
+            "<|start_header_id|>{}<|end_header_id|>\n\n{}<|eot_id|>",
+            message.role.to_string(),
+            message.content
+        ));
     }
     let mut prompt = prompt.join("\n");
     #[cfg(feature = "tinyllama")]
@@ -70,7 +78,6 @@ pub fn forge_prompt(messages: &Vec<ChoiceMessageSchema>) -> String {
     #[cfg(feature = "llama3")]
     prompt.push_str("<|start_header_id|>assistant<|end_header_id|>\n\n");
     prompt
-
 }
 
 pub fn generate<B: Backend, T: Tokenizer>(
@@ -173,4 +180,3 @@ mod cuda {
         chat::<CudaJit<f32, i32>>(config, device)
     }
 }
-

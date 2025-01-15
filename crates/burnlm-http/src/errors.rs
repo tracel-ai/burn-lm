@@ -25,7 +25,6 @@ impl IntoResponse for ServerError {
     }
 }
 
-
 // IntoResponse error handlers
 
 fn handle_not_found_error() -> Response {

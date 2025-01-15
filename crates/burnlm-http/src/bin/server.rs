@@ -1,4 +1,4 @@
-use burnlm_server::App;
+use burnlm_http::App;
 use clap::{Parser, Subcommand};
 
 #[derive(Parser, Debug)]

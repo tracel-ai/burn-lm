@@ -1,0 +1,14 @@
+[package]
+name = "burnlm-macros"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+readme.workspace = true
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2 = { workspace = true }
+quote = { workspace = true }
+syn = { workspace = true }

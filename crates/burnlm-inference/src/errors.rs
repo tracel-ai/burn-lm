@@ -5,4 +5,6 @@ pub type InferenceOptionalResult<T> = Result<Option<T>, InferenceError>;
 pub enum InferenceError {
     #[error("Error loading model: {0}")]
     LoadError(String),
+    #[error("Model has not been loaded.")]
+    ModelNotLoaded,
 }

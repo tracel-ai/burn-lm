@@ -5,8 +5,8 @@ pub use burnlm_plugin_tinyllama::*;
 // ---------------------------------------------------------------------------
 use burnlm_inference::plugin::*;
 
-pub fn get_models() -> Vec<&'static InferenceModelPlugin<InferenceBackend>> {
-    inventory::iter::<InferenceModelPlugin<InferenceBackend>>
+pub fn get_inference_plugins() -> Vec<&'static InferencePluginMetadata<InferenceBackend>> {
+    inventory::iter::<InferencePluginMetadata<InferenceBackend>>
         .into_iter()
         .collect()
 }

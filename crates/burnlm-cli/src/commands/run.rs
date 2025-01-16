@@ -1,10 +1,10 @@
 pub(crate) fn create() -> clap::Command {
     let mut root = clap::Command::new("run").about("Run inference on chosen model");
     // Create a a subcommand for each registered model with its associated config flags
-    for model in burnlm_registry::get_models() {
-        let mut subcommand =
-            clap::Command::new(model.lc_name).about(format!("Use {} model", model.name));
-        subcommand = subcommand.args((model.config_flags)().get_arguments());
+    for plugin in burnlm_registry::get_inference_plugins() {
+        let mut subcommand = clap::Command::new(plugin.model_name_lc)
+            .about(format!("Use {} model", plugin.model_name));
+        subcommand = subcommand.args((plugin.config_flags_fn)().get_arguments());
         root = root.subcommand(subcommand);
     }
     root

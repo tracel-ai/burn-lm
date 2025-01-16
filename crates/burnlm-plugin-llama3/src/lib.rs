@@ -1,7 +1,10 @@
+use std::borrow::BorrowMut;
+
 use burn::prelude::Backend;
 use burnlm_inference::plugin::*;
 use llama_burn::{
     llama::{self, Llama},
+    sampling::{Sampler, TopP},
     tokenizer::Tiktoken,
 };
 
@@ -23,28 +26,28 @@ impl Default for LlamaVersion {
 }
 
 #[derive(clap::Parser)]
-pub struct Llama3Config {
+pub struct Llama3PluginConfig {
     /// Top-p probability threshold.
-    #[arg(long, default_value_t = Llama3Config::default().top_p)]
+    #[arg(long, default_value_t = Llama3PluginConfig::default().top_p)]
     pub top_p: f64,
     /// Temperature value for controlling randomness in sampling.
-    #[arg(long, default_value_t = Llama3Config::default().temperature)]
+    #[arg(long, default_value_t = Llama3PluginConfig::default().temperature)]
     pub temperature: f64,
     /// Maximum sequence length for input text.
-    #[arg(long, default_value_t = Llama3Config::default().max_seq_len)]
+    #[arg(long, default_value_t = Llama3PluginConfig::default().max_seq_len)]
     pub max_seq_len: usize,
     /// The number of new tokens to generate (i.e., the number of generation steps to take).
-    #[arg(long, default_value_t = Llama3Config::default().sample_len)]
+    #[arg(long, default_value_t = Llama3PluginConfig::default().sample_len)]
     pub sample_len: usize,
     /// The seed to use when generating random samples.
-    #[arg(long, default_value_t = Llama3Config::default().seed)]
+    #[arg(long, default_value_t = Llama3PluginConfig::default().seed)]
     pub seed: u64,
     /// The Llama 3 model version.
     #[arg(long)]
     pub model_version: LlamaVersion,
 }
 
-impl Default for Llama3Config {
+impl Default for Llama3PluginConfig {
     fn default() -> Self {
         Self {
             top_p: 0.9,
@@ -57,13 +60,14 @@ impl Default for Llama3Config {
     }
 }
 
-#[derive(BurnLM)]
-pub struct Llama3<B: Backend> {
+#[derive(InferencePlugin)]
+#[inference_plugin(model_name = "Llama3")]
+pub struct Llama3Plugin<B: Backend> {
     device: B::Device,
     model: Option<Llama<B, Tiktoken>>,
 }
 
-impl<B: Backend> Default for Llama3<B> {
+impl<B: Backend> Default for Llama3Plugin<B> {
     fn default() -> Self {
         Self {
             device: B::Device::default(),
@@ -72,18 +76,23 @@ impl<B: Backend> Default for Llama3<B> {
     }
 }
 
-impl<B: Backend> InferenceModel<Llama3Config> for Llama3<B> {
-    fn load(&mut self, config: Llama3Config) -> InferenceResult<()> {
-        self.model = match config.model_version {
-            LlamaVersion::V3Instruct => Some(
-                llama::LlamaConfig::llama3_8b_pretrained::<B>(config.max_seq_len, &self.device)
+impl<B: Backend> InferencePlugin<Llama3PluginConfig> for Llama3Plugin<B> {
+    fn load(&mut self, config: Llama3PluginConfig) -> InferenceResult<()> {
+        if self.model.is_none() {
+            self.model = match config.model_version {
+                LlamaVersion::V3Instruct => Some(
+                    llama::LlamaConfig::llama3_8b_pretrained::<B>(config.max_seq_len, &self.device)
+                        .unwrap(),
+                ),
+                LlamaVersion::V31Instruct => Some(
+                    llama::LlamaConfig::llama3_1_8b_pretrained::<B>(
+                        config.max_seq_len,
+                        &self.device,
+                    )
                     .unwrap(),
-            ),
-            LlamaVersion::V31Instruct => Some(
-                llama::LlamaConfig::llama3_1_8b_pretrained::<B>(config.max_seq_len, &self.device)
-                    .unwrap(),
-            ),
-        };
+                ),
+            };
+        }
         Ok(())
     }
 
@@ -106,7 +115,22 @@ impl<B: Backend> InferenceModel<Llama3Config> for Llama3<B> {
         Ok(prompt)
     }
 
-    fn complete(&self, _prompt: String, _config: Llama3Config) -> InferenceResult<Completion> {
-        Ok("".to_string())
+    fn complete(
+        &mut self,
+        prompt: Prompt,
+        config: Llama3PluginConfig,
+    ) -> InferenceResult<Completion> {
+        let model = match self.model.borrow_mut() {
+            Some(m) => m,
+            None => return Err(burnlm_inference::errors::InferenceError::ModelNotLoaded),
+        };
+        let mut sampler = if config.temperature > 0.0 {
+            Sampler::TopP(TopP::new(config.top_p, config.seed))
+        } else {
+            Sampler::Argmax
+        };
+        let generated =
+            model.generate(&prompt, config.sample_len, config.temperature, &mut sampler);
+        Ok(generated.text)
     }
 }

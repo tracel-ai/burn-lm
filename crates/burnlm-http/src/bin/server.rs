@@ -21,7 +21,7 @@ enum Commands {
 /// Function to list all registered models
 pub fn list_models() {
     println!("Available Models:");
-    for model in burnlm_registry::get_models() {
+    for model in burnlm_registry::get_inference_plugins() {
         println!("- {}", model.name);
     }
 }

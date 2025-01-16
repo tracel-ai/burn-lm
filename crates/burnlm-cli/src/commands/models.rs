@@ -4,8 +4,8 @@ pub(crate) fn create() -> clap::Command {
 
 pub(crate) fn handle() -> anyhow::Result<()> {
     println!("Available Models:");
-    for model in burnlm_registry::get_models() {
-        println!("- {}", model.name);
+    for plugin in burnlm_registry::get_inference_plugins() {
+        println!("- {}", plugin.model_name);
     }
     Ok(())
 }

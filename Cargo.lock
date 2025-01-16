@@ -830,6 +830,7 @@ dependencies = [
 name = "burnlm-macros"
 version = "0.0.1"
 dependencies = [
+ "darling",
  "proc-macro2 1.0.93",
  "quote 1.0.38",
  "syn 2.0.96",

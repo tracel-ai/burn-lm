@@ -29,6 +29,7 @@ anyhow = "1.0.95"
 axum = { version = "0.7.9", features = ["macros"] }
 chrono = { version = "0.4.39", features = ["serde"] }
 clap = { version = "4.5.22", features = ["derive", "cargo"] }
+darling = "0.20.10"
 dirs = { version = "5.0.1" }
 dotenvy = "0.15.7"
 gensym = "0.1.1"

@@ -5,11 +5,13 @@ version.workspace = true
 license.workspace = true
 readme.workspace = true
 
-[dependencies]
-burnlm-inference = { path = "../burnlm-inference" }
-burnlm-macros = { path = "../burnlm-macros" }
+[features]
+default = ["tch-gpu"]
 
-clap = { workspace = true }
-inventory = { workspace = true }
-serde = { workspace = true }
+tch-gpu = ["burn/tch", "burnlm-inference/tch-gpu"]
+
+[dependencies]
+burn = { workspace = true }
+burnlm-inference = { path = "../burnlm-inference" }
+llama-burn = { path = "../../models/llama-burn", features = ["tiny"] }
 

@@ -6,12 +6,7 @@ license.workspace = true
 readme.workspace = true
 
 [features]
-default = [
-  "burnlm-cli",
-  "tch-gpu",
-]
-
-burnlm-cli = ["clap"]
+default = ["tch-gpu"]
 
 # Burn backends
 tch-cpu = ["burn/tch"]
@@ -24,7 +19,7 @@ burn = { workspace = true }
 llama-burn = { path = "../../models/llama-burn" }
 burnlm-macros = { path = "../burnlm-macros" }
 
-clap = { workspace = true, optional = true }
+clap = { workspace = true }
 gensym = { workspace = true }
 inventory = { workspace = true }
 once_cell = { workspace = true }

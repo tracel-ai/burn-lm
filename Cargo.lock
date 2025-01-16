@@ -785,6 +785,7 @@ dependencies = [
  "axum",
  "burn",
  "burnlm-inference",
+ "burnlm-registry",
  "chrono",
  "clap",
  "dotenvy",
@@ -838,32 +839,28 @@ dependencies = [
 name = "burnlm-plugin-llama3"
 version = "0.0.1"
 dependencies = [
+ "burn",
  "burnlm-inference",
- "burnlm-macros",
- "clap",
- "inventory",
- "serde",
+ "llama-burn",
 ]
 
 [[package]]
 name = "burnlm-plugin-tinyllama"
 version = "0.0.1"
 dependencies = [
+ "burn",
  "burnlm-inference",
- "burnlm-macros",
- "clap",
- "inventory",
- "serde",
+ "llama-burn",
 ]
 
 [[package]]
 name = "burnlm-registry"
 version = "0.0.1"
 dependencies = [
+ "burn",
  "burnlm-inference",
  "burnlm-plugin-llama3",
  "burnlm-plugin-tinyllama",
- "inventory",
 ]
 
 [[package]]

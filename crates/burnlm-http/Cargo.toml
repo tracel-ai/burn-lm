@@ -25,6 +25,7 @@ wgpu = ["burn/wgpu"]
 burn = { workspace = true }
 llama-burn = { path = "../../models/llama-burn" }
 burnlm-inference = { path = "../burnlm-inference" }
+burnlm-registry = { path = "../burnlm-registry" }
 
 axum = { workspace = true }
 chrono = { workspace = true }

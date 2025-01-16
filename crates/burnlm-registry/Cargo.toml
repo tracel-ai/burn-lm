@@ -16,5 +16,5 @@ burnlm-cli = []
 burnlm-inference = { path = "../burnlm-inference" }
 burnlm-plugin-llama3 = { path = "../burnlm-plugin-llama3" }
 burnlm-plugin-tinyllama = { path = "../burnlm-plugin-tinyllama" }
-inventory = { workspace = true }
+burn = { workspace = true }
 

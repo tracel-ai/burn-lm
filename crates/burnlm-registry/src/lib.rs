@@ -1,11 +1,12 @@
+// ---------------------------------------------------------------------------
 // Register model crates
 pub use burnlm_plugin_llama3::*;
 pub use burnlm_plugin_tinyllama::*;
+// ---------------------------------------------------------------------------
+use burnlm_inference::plugin::*;
 
-use burnlm_inference::plugin::InferenceModelPlugin;
-
-pub fn get_models() -> Vec<&'static InferenceModelPlugin> {
-    inventory::iter::<InferenceModelPlugin>
+pub fn get_models() -> Vec<&'static InferenceModelPlugin<InferenceBackend>> {
+    inventory::iter::<InferenceModelPlugin<InferenceBackend>>
         .into_iter()
         .collect()
 }

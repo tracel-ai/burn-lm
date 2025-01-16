@@ -1,11 +1,11 @@
-use burnlm_inference::{
-    completion::Completion, errors::InferenceResult, message::Message, model::InferenceModel,
-    plugin::InferenceModelPlugin, prompt::Prompt,
+use burn::prelude::Backend;
+use burnlm_inference::plugin::*;
+use llama_burn::{
+    llama::{self, Llama},
+    tokenizer::SentiencePieceTokenizer,
 };
-use burnlm_macros::BurnLM;
-use clap::CommandFactory;
 
-#[derive(clap::Parser)]
+#[derive(Parser)]
 pub struct TinyLlamaConfig {
     /// Top-p probability threshold.
     #[arg(long, default_value_t = TinyLlamaConfig::default().top_p)]
@@ -37,19 +37,48 @@ impl Default for TinyLlamaConfig {
 }
 
 #[derive(BurnLM)]
-pub struct TinyLlama {}
+pub struct TinyLlama<B: Backend> {
+    device: B::Device,
+    model: Option<Llama<B, SentiencePieceTokenizer>>,
+}
 
-impl InferenceModel<TinyLlamaConfig> for TinyLlama {
-    fn load(&self, _config: TinyLlamaConfig) -> InferenceResult<()> {
+impl<B: Backend> Default for TinyLlama<B> {
+    fn default() -> Self {
+        Self {
+            device: B::Device::default(),
+            model: None,
+        }
+    }
+}
+
+impl<B: Backend> InferenceModel<TinyLlamaConfig> for TinyLlama<B> {
+    fn load(&mut self, config: TinyLlamaConfig) -> InferenceResult<()> {
+        if self.model.is_none() {
+            self.model = Some(
+                llama::LlamaConfig::tiny_llama_pretrained::<B>(config.max_seq_len, &self.device)
+                    .unwrap(),
+            );
+        }
         Ok(())
     }
 
-    fn unload(&self) -> InferenceResult<()> {
+    fn unload(&mut self) -> InferenceResult<()> {
+        self.model = None;
         Ok(())
     }
 
-    fn prompt(&self, _messages: Vec<Message>) -> InferenceResult<Prompt> {
-        Ok("".to_string())
+    fn prompt(&self, messages: Vec<Message>) -> InferenceResult<Prompt> {
+        let mut prompt: Vec<String> = vec![];
+        for message in messages {
+            prompt.push(format!(
+                "<|{}|>\n{}</s>\n",
+                message.role.to_string(),
+                message.content
+            ));
+        }
+        let mut prompt = prompt.join("\n");
+        prompt.push_str("<|assistant|>\n");
+        Ok(prompt)
     }
 
     fn complete(&self, _prompt: String, _config: TinyLlamaConfig) -> InferenceResult<Completion> {

@@ -1,9 +1,9 @@
-use burnlm_inference::{
-    completion::Completion, errors::InferenceResult, message::Message, model::InferenceModel,
-    plugin::InferenceModelPlugin, prompt::Prompt,
+use burn::prelude::Backend;
+use burnlm_inference::plugin::*;
+use llama_burn::{
+    llama::{self, Llama},
+    tokenizer::Tiktoken,
 };
-use burnlm_macros::BurnLM;
-use clap::CommandFactory;
 
 #[derive(Clone, Debug, clap::ValueEnum)]
 /// Llama-3 model variants to load.
@@ -58,19 +58,52 @@ impl Default for Llama3Config {
 }
 
 #[derive(BurnLM)]
-pub struct Llama3 {}
+pub struct Llama3<B: Backend> {
+    device: B::Device,
+    model: Option<Llama<B, Tiktoken>>,
+}
 
-impl InferenceModel<Llama3Config> for Llama3 {
-    fn load(&self, _config: Llama3Config) -> InferenceResult<()> {
+impl<B: Backend> Default for Llama3<B> {
+    fn default() -> Self {
+        Self {
+            device: B::Device::default(),
+            model: None,
+        }
+    }
+}
+
+impl<B: Backend> InferenceModel<Llama3Config> for Llama3<B> {
+    fn load(&mut self, config: Llama3Config) -> InferenceResult<()> {
+        self.model = match config.model_version {
+            LlamaVersion::V3Instruct => Some(
+                llama::LlamaConfig::llama3_8b_pretrained::<B>(config.max_seq_len, &self.device)
+                    .unwrap(),
+            ),
+            LlamaVersion::V31Instruct => Some(
+                llama::LlamaConfig::llama3_1_8b_pretrained::<B>(config.max_seq_len, &self.device)
+                    .unwrap(),
+            ),
+        };
         Ok(())
     }
 
-    fn unload(&self) -> InferenceResult<()> {
+    fn unload(&mut self) -> InferenceResult<()> {
+        self.model = None;
         Ok(())
     }
 
-    fn prompt(&self, _messages: Vec<Message>) -> InferenceResult<Prompt> {
-        Ok("".to_string())
+    fn prompt(&self, messages: Vec<Message>) -> InferenceResult<Prompt> {
+        let mut prompt: Vec<String> = vec![];
+        for message in messages {
+            prompt.push(format!(
+                "<|start_header_id|>{}<|end_header_id|>\n\n{}<|eot_id|>",
+                message.role.to_string(),
+                message.content
+            ));
+        }
+        let mut prompt = prompt.join("\n");
+        prompt.push_str("<|assistant|>\n");
+        Ok(prompt)
     }
 
     fn complete(&self, _prompt: String, _config: Llama3Config) -> InferenceResult<Completion> {

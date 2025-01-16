@@ -18,8 +18,17 @@ enum Commands {
     },
 }
 
+/// Function to list all registered models
+pub fn list_models() {
+    println!("Available Models:");
+    for model in burnlm_registry::get_models() {
+        println!("- {}", model.name);
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    list_models();
     let cli = Cli::parse();
     match cli.command {
         Commands::Run { port } => run_server(port).await,

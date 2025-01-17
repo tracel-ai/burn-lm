@@ -843,6 +843,7 @@ dependencies = [
  "burn",
  "burnlm-inference",
  "llama-burn",
+ "rand",
 ]
 
 [[package]]
@@ -852,6 +853,7 @@ dependencies = [
  "burn",
  "burnlm-inference",
  "llama-burn",
+ "rand",
 ]
 
 [[package]]

@@ -1,6 +1,7 @@
-use std::borrow::BorrowMut;
+use rand::Rng;
+use std::{any::Any, borrow::BorrowMut};
 
-use burn::prelude::Backend;
+use burn::{prelude::Backend, tensor::Device};
 use burnlm_inference::plugin::*;
 use llama_burn::{
     llama::{self, Llama},
@@ -39,7 +40,7 @@ pub struct Llama3PluginConfig {
     /// The number of new tokens to generate (i.e., the number of generation steps to take).
     #[arg(long, default_value_t = Llama3PluginConfig::default().sample_len)]
     pub sample_len: usize,
-    /// The seed to use when generating random samples.
+    /// The seed to use when generating random samples. If u64::MAX then a random seed is used for each inference.
     #[arg(long, default_value_t = Llama3PluginConfig::default().seed)]
     pub seed: u64,
     /// The Llama 3 model version.
@@ -54,7 +55,7 @@ impl Default for Llama3PluginConfig {
             temperature: 0.6,
             max_seq_len: 1024,
             sample_len: 1024,
-            seed: 42,
+            seed: u64::MAX,
             model_version: LlamaVersion::default(),
         }
     }
@@ -63,31 +64,37 @@ impl Default for Llama3PluginConfig {
 #[derive(InferencePlugin)]
 #[inference_plugin(model_name = "Llama3")]
 pub struct Llama3Plugin<B: Backend> {
-    device: B::Device,
+    config: Llama3PluginConfig,
+    device: Box<dyn Any>,
     model: Option<Llama<B, Tiktoken>>,
 }
 
-impl<B: Backend> Default for Llama3Plugin<B> {
-    fn default() -> Self {
-        Self {
-            device: B::Device::default(),
+impl<B: Backend> InferencePlugin for Llama3Plugin<B> {
+    fn new(config: Box<dyn Any>) -> Box<dyn InferencePlugin>
+    where
+        Self: Sized,
+    {
+        let config = config.downcast::<Llama3PluginConfig>().unwrap();
+        Box::new(Self {
+            config: *config,
+            device: Box::new(INFERENCE_DEVICE),
             model: None,
-        }
+        })
     }
-}
 
-impl<B: Backend> InferencePlugin<Llama3PluginConfig> for Llama3Plugin<B> {
-    fn load(&mut self, config: Llama3PluginConfig) -> InferenceResult<()> {
+    fn load(&mut self) -> InferenceResult<()> {
+        let device = self.device.downcast_mut::<Device<B>>().unwrap();
+        println!("Inference device used: {device:?}");
         if self.model.is_none() {
-            self.model = match config.model_version {
+            self.model = match self.config.model_version {
                 LlamaVersion::V3Instruct => Some(
-                    llama::LlamaConfig::llama3_8b_pretrained::<B>(config.max_seq_len, &self.device)
+                    llama::LlamaConfig::llama3_8b_pretrained::<B>(self.config.max_seq_len, &device)
                         .unwrap(),
                 ),
                 LlamaVersion::V31Instruct => Some(
                     llama::LlamaConfig::llama3_1_8b_pretrained::<B>(
-                        config.max_seq_len,
-                        &self.device,
+                        self.config.max_seq_len,
+                        &device,
                     )
                     .unwrap(),
                 ),
@@ -115,22 +122,27 @@ impl<B: Backend> InferencePlugin<Llama3PluginConfig> for Llama3Plugin<B> {
         Ok(prompt)
     }
 
-    fn complete(
-        &mut self,
-        prompt: Prompt,
-        config: Llama3PluginConfig,
-    ) -> InferenceResult<Completion> {
+    fn complete(&mut self, prompt: Prompt) -> InferenceResult<Completion> {
         let model = match self.model.borrow_mut() {
             Some(m) => m,
             None => return Err(burnlm_inference::errors::InferenceError::ModelNotLoaded),
         };
-        let mut sampler = if config.temperature > 0.0 {
-            Sampler::TopP(TopP::new(config.top_p, config.seed))
+        let seed = match self.config.seed {
+            u64::MAX => rand::thread_rng().gen::<u64>(),
+            s => s,
+        };
+        let mut sampler = if self.config.temperature > 0.0 {
+            Sampler::TopP(TopP::new(self.config.top_p, seed))
         } else {
             Sampler::Argmax
         };
-        let generated =
-            model.generate(&prompt, config.sample_len, config.temperature, &mut sampler);
+        println!("Generating...");
+        let generated = model.generate(
+            &prompt,
+            self.config.sample_len,
+            self.config.temperature,
+            &mut sampler,
+        );
         Ok(generated.text)
     }
 }

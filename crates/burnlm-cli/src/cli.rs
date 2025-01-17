@@ -10,8 +10,8 @@ pub fn run() -> anyhow::Result<()> {
     let matches = cli.get_matches();
     if let Some(_) = matches.subcommand_matches("models") {
         commands::models::handle()
-    } else if let Some(_) = matches.subcommand_matches("run") {
-        commands::run::handle()
+    } else if let Some(args) = matches.subcommand_matches("run") {
+        commands::run::handle(args)
     } else {
         Ok(())
     }

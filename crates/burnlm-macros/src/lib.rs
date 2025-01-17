@@ -18,6 +18,8 @@ pub fn inference_plugin(input: TokenStream) -> TokenStream {
         &input.generics.split_for_impl();
     let config_ident =
         syn::Ident::new(&format!("{}Config", input_ident_string), input_ident.span());
+    let cli_downcasting_err_msg =
+        format!("Args should be from {} struct", config_ident.to_string());
     // retrieve plugin info
     let attributes = InferencePluginAttributes::from_derive_input(&input)
         .expect("Should successfuly parse inference_plugin attributes");
@@ -36,11 +38,27 @@ pub fn inference_plugin(input: TokenStream) -> TokenStream {
             pub const fn model_name_lc() -> &'static str { #model_name_lc }
         }
 
+        impl #input_generics_impl InferencePluginAssociatedFn for #input_ident #input_generics_type #input_generics_where_clause {
+            fn parse_cli_config(args: &clap::ArgMatches) -> Box<dyn Any>
+            where
+                Self: Sized {
+                let config = #config_ident::from_arg_matches(args).expect(#cli_downcasting_err_msg);
+                Box::new(config)
+            }
+        }
+
         inventory::submit! {
             InferencePluginMetadata::<InferenceBackend>::new(
+                // model_name
                 #input_ident::<InferenceBackend>::model_name(),
+                // model_name_lc
                 #input_ident::<InferenceBackend>::model_name_lc(),
+                // create_cli_flags_fn
                 #config_ident::command,
+                // parse_cli_flags_fn
+                #input_ident::<InferenceBackend>::parse_cli_config,
+                // create_plugin_fn
+                #input_ident::<InferenceBackend>::new,
             )
         }
     };

@@ -1,4 +1,4 @@
-use burnlm_inference::{message::MessageRole, plugin::Message};
+use burnlm_registry::burnlm_plugin::{message::MessageRole, Message};
 
 pub(crate) fn create() -> clap::Command where {
     let mut root = clap::Command::new("run").about("Run inference on chosen model");
@@ -27,7 +27,10 @@ pub(crate) fn handle(args: &clap::ArgMatches) -> anyhow::Result<()> {
         .subcommand_matches(args.subcommand_name().unwrap())
         .unwrap();
     let config = (plugin_metadata.parse_cli_flags_fn)(config_flags);
+    let versions = (plugin_metadata.get_model_versions_fn)();
+    println!("Available model versions: {versions:?}");
     let mut plugin = (plugin_metadata.create_plugin_fn)(config);
+    println!("Selected model versions: {}", plugin.get_version());
     let prompt = config_flags
         .get_one::<String>("prompt")
         .expect("The prompt argument should be set.");

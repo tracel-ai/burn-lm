@@ -2,10 +2,10 @@ use axum::extract::Path;
 use axum::{extract::State, Json};
 
 use crate::errors::ServerError;
+use crate::stores::model_store::ModelStoreState;
 use crate::{
     controllers::model_controllers::ModelController, errors::ServerResult,
-    schemas::model_schemas::ModelSchema, stores::model_store::ModelStore,
-};
+    schemas::model_schemas::ModelSchema};
 
 use crate::constants::API_VERSION;
 
@@ -16,7 +16,8 @@ use crate::constants::API_VERSION;
         (status = 200, description = "Gets all models.", body = Vec<ModelSchema>),
     )
 )]
-pub async fn list_models(State(store): State<ModelStore>) -> ServerResult<Json<Vec<ModelSchema>>> {
+pub async fn list_models(State(state): State<ModelStoreState>) -> ServerResult<Json<Vec<ModelSchema>>> {
+    let store = state.lock().await;
     let models = store.list_models().await?;
     Ok(Json(models.into()))
 }
@@ -29,9 +30,10 @@ pub async fn list_models(State(store): State<ModelStore>) -> ServerResult<Json<V
     )
 )]
 pub async fn get_model(
-    State(store): State<ModelStore>,
+    State(state): State<ModelStoreState>,
     Path(model): Path<String>,
 ) -> ServerResult<Json<ModelSchema>> {
+    let store = state.lock().await;
     let models = store.list_models().await?;
     models
         .iter()

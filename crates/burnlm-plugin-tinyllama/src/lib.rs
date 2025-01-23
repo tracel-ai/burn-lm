@@ -2,7 +2,7 @@ use rand::Rng;
 use std::{any::Any, borrow::BorrowMut};
 
 use burn::{prelude::Backend, tensor::Device};
-use burnlm_inference::plugin::*;
+use burnlm_plugin::*;
 use llama_burn::{
     llama::{self, Llama},
     sampling::{Sampler, TopP},
@@ -41,7 +41,11 @@ impl Default for TinyLlamaPluginConfig {
 }
 
 #[derive(InferencePlugin)]
-#[inference_plugin(model_name = "TinyLlama")]
+#[inference_plugin(
+    model_name = "TinyLlama",
+    model_creation_date = "05/01/2024",
+    owned_by = "Tracel Technologies Inc.",
+)]
 pub struct TinyLlamaPlugin<B: Backend> {
     config: TinyLlamaPluginConfig,
     device: Box<dyn Any>,
@@ -95,7 +99,7 @@ impl<B: Backend> InferencePlugin for TinyLlamaPlugin<B> {
     fn complete(&mut self, prompt: Prompt) -> InferenceResult<Completion> {
         let model = match self.model.borrow_mut() {
             Some(m) => m,
-            _ => return Err(burnlm_inference::errors::InferenceError::ModelNotLoaded),
+            _ => return Err(burnlm_plugin::errors::InferenceError::ModelNotLoaded),
         };
         let seed = match self.config.seed {
             u64::MAX => rand::thread_rng().gen::<u64>(),

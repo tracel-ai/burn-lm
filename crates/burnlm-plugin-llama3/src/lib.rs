@@ -1,8 +1,9 @@
+use clap::ValueEnum;
 use rand::Rng;
 use std::{any::Any, borrow::BorrowMut};
 
 use burn::{prelude::Backend, tensor::Device};
-use burnlm_inference::plugin::*;
+use burnlm_plugin::*;
 use llama_burn::{
     llama::{self, Llama},
     sampling::{Sampler, TopP},
@@ -62,7 +63,12 @@ impl Default for Llama3PluginConfig {
 }
 
 #[derive(InferencePlugin)]
-#[inference_plugin(model_name = "Llama3")]
+#[inference_plugin(
+    model_name = "Llama3",
+    model_versions=LlamaVersion,
+    model_creation_date = "05/01/2024",
+    owned_by = "Tracel Technologies Inc.",
+)]
 pub struct Llama3Plugin<B: Backend> {
     config: Llama3PluginConfig,
     device: Box<dyn Any>,
@@ -80,6 +86,10 @@ impl<B: Backend> InferencePlugin for Llama3Plugin<B> {
             device: Box::new(INFERENCE_DEVICE),
             model: None,
         })
+    }
+
+    fn get_version(&self) -> String {
+        self.config.model_version.to_possible_value().unwrap().get_name().to_string()
     }
 
     fn load(&mut self) -> InferenceResult<()> {
@@ -125,7 +135,7 @@ impl<B: Backend> InferencePlugin for Llama3Plugin<B> {
     fn complete(&mut self, prompt: Prompt) -> InferenceResult<Completion> {
         let model = match self.model.borrow_mut() {
             Some(m) => m,
-            None => return Err(burnlm_inference::errors::InferenceError::ModelNotLoaded),
+            _ => return Err(burnlm_plugin::errors::InferenceError::ModelNotLoaded),
         };
         let seed = match self.config.seed {
             u64::MAX => rand::thread_rng().gen::<u64>(),

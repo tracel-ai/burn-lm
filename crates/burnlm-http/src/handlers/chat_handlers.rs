@@ -1,7 +1,5 @@
 use axum::{
-    http::{HeaderMap, HeaderName, HeaderValue, StatusCode},
-    response::{IntoResponse, Response},
-    Json,
+    extract::State, http::{HeaderMap, HeaderName, HeaderValue, StatusCode}, response::{IntoResponse, Response}, Json
 };
 use rand::Rng;
 use tokio::sync::mpsc;
@@ -9,16 +7,15 @@ use tokio_stream::{wrappers::ReceiverStream, StreamExt};
 use tracing::info;
 
 use crate::{
-    errors::ServerResult,
-    schemas::chat_schemas::{
+    errors::ServerResult, schemas::chat_schemas::{
         ChatCompletionChunkSchema, ChatCompletionRequestSchema, ChatCompletionSchema,
         ChoiceMessageRoleSchema, ChoiceMessageSchema, ChoiceSchema, ChunkChoiceDeltaSchema,
         ChunkChoiceSchema, FinishReasonSchema, StreamingChunk, UsageSchema,
-    },
-    utils::{id::ChatCompletionId, llm},
+    }, stores::model_store::ModelStoreState, utils::{id::ChatCompletionId, llm}
 };
 
 pub async fn chat_completions(
+    State(state): State<ModelStoreState>,
     Json(payload): Json<ChatCompletionRequestSchema>,
 ) -> ServerResult<Response> {
     info!(

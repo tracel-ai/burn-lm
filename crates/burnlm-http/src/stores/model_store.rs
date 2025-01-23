@@ -1,5 +1,6 @@
+use std::sync::Arc;
+
 use axum::async_trait;
-use chrono::Utc;
 
 use crate::{
     controllers::model_controllers::ModelController, errors::ServerResult,
@@ -8,45 +9,36 @@ use crate::{
 
 #[derive(Debug, Clone)]
 pub struct ModelStore {
-    models: Vec<ModelSchema>,
+    models: Vec<Arc<ModelSchema>>,
+    current: Option<Arc<ModelSchema>>,
 }
 
+pub type ModelStoreState = Arc<tokio::sync::Mutex<ModelStore>>;
+
 impl ModelStore {
-    pub fn new() -> Self {
-        let now = Utc::now().timestamp() as u32;
-        let object = "model".to_string();
-        let owned_by = "Tracel Technologies Inc.".to_string();
-        Self {
-            models: vec![
-                #[cfg(feature = "tinyllama")]
-                ModelSchema {
-                    id: "TinyLlama".to_string(),
-                    created: now,
-                    object: object.clone(),
-                    owned_by: owned_by.clone(),
-                },
-                #[cfg(feature = "llama3")]
-                ModelSchema {
-                    id: "llama 3".to_string(),
-                    created: now,
-                    object: object.clone(),
-                    owned_by: owned_by.clone(),
-                },
-                #[cfg(feature = "llama31")]
-                ModelSchema {
-                    id: "llama 3.1".to_string(),
-                    created: now,
-                    object: object.clone(),
-                    owned_by: owned_by.clone(),
-                },
-            ],
+    fn new() -> Self {
+        let mut models = vec![];
+        for plugin in burnlm_registry::get_inference_plugins() {
+            models.push(Arc::new(ModelSchema::from(plugin)));
         }
+        Self {
+            models,
+            current: None,
+        }
+    }
+
+    pub fn create_state() -> ModelStoreState {
+        Arc::new(tokio::sync::Mutex::new(ModelStore::new()))
     }
 }
 
 #[async_trait]
 impl ModelController for ModelStore {
-    async fn list_models(&self) -> ServerResult<Vec<ModelSchema>> {
+    async fn list_models(&self) -> ServerResult<Vec<Arc<ModelSchema>>> {
         Ok(self.models.clone())
+    }
+
+    async fn set_current(&self, name: &str) -> ServerResult<()> {
+        Ok(())
     }
 }

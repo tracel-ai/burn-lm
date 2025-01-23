@@ -8,11 +8,11 @@ readme.workspace = true
 [features]
 default = ["tch-gpu"]
 
-tch-gpu = ["burn/tch", "burnlm-inference/tch-gpu"]
+tch-gpu = ["burn/tch", "burnlm-plugin/tch-gpu"]
 
 [dependencies]
 burn = { workspace = true }
-burnlm-inference = { path = "../burnlm-inference" }
+burnlm-plugin = { path = "../burnlm-plugin" }
 llama-burn = { path = "../../models/llama-burn", features = ["tiny"] }
 
 rand = { workspace = true }

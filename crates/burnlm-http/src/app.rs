@@ -50,12 +50,12 @@ impl App {
     /// Define application service (router)
     async fn app(&self) -> Router {
         let version_prefix = "/v1";
-        let model_store = ModelStore::new();
+        let model_store = ModelStore::create_state();
         let openapi = ApiDoc::openapi();
         let public_routes = Router::new()
             .route("/", get(|| async { "Home" }))
-            .merge(chat_routers::public_router())
-            .merge(model_routers::public_router(model_store));
+            .merge(chat_routers::public_router(model_store.clone()))
+            .merge(model_routers::public_router(model_store.clone()));
         let router = Router::new().merge(public_routes);
         Router::new()
             .nest(version_prefix, router)

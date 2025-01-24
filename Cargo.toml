@@ -9,7 +9,7 @@ members = [
     "crates/burnlm-http",
     "crates/burnlm-inference",
     "crates/burnlm-macros",
-    "crates/burnlm-plugin",
+    # "crates/burnlm-plugin",
     "crates/burnlm-plugin-tinyllama",
     "crates/burnlm-plugin-llama3",
     "crates/burnlm-registry",

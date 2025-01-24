@@ -20,8 +20,7 @@ tracel-plugins = [
 community-plugins = []
 
 [dependencies]
-burnlm-plugin = { path = "../burnlm-plugin" }
+burnlm-inference = { path = "../burnlm-inference" }
 burnlm-plugin-llama3 = { path = "../burnlm-plugin-llama3", optional = true }
 burnlm-plugin-tinyllama = { path = "../burnlm-plugin-tinyllama", optional = true }
 burn = { workspace = true }
-

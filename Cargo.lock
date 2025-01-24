@@ -837,31 +837,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "burnlm-plugin"
-version = "0.0.1"
-dependencies = [
- "burn",
- "burnlm-macros",
- "clap",
- "gensym",
- "inventory",
- "llama-burn",
- "once_cell",
- "paste",
- "serde",
- "serde_json",
- "strum",
- "thiserror 2.0.7",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
 name = "burnlm-plugin-llama3"
 version = "0.0.1"
 dependencies = [
  "burn",
- "burnlm-plugin",
+ "burnlm-inference",
  "llama-burn",
  "rand",
 ]
@@ -871,7 +851,7 @@ name = "burnlm-plugin-tinyllama"
 version = "0.0.1"
 dependencies = [
  "burn",
- "burnlm-plugin",
+ "burnlm-inference",
  "llama-burn",
  "rand",
 ]
@@ -881,7 +861,7 @@ name = "burnlm-registry"
 version = "0.0.1"
 dependencies = [
  "burn",
- "burnlm-plugin",
+ "burnlm-inference",
  "burnlm-plugin-llama3",
  "burnlm-plugin-tinyllama",
 ]

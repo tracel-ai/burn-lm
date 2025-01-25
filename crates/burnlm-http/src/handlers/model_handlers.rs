@@ -19,7 +19,7 @@ use crate::constants::API_VERSION;
 pub async fn list_models(State(state): State<ModelStoreState>) -> ServerResult<Json<Vec<ModelSchema>>> {
     let store = state.lock().await;
     let models = store.list_models().await?;
-    Ok(Json(models.into()))
+    Ok(Json(models))
 }
 
 #[utoipa::path(

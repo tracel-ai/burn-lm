@@ -6,7 +6,7 @@ pub(crate) fn create() -> clap::Command {
 
 pub(crate) fn handle() -> anyhow::Result<()> {
     println!("Available Models:");
-    let mut registry = Registry::default();
+    let registry = Registry::new();
     for (name, ..) in registry.get().iter() {
         println!("- {}", name);
     }

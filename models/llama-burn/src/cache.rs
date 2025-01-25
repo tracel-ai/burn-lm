@@ -1,12 +1,14 @@
 use burn::tensor::{backend::Backend, Tensor};
 
 // Adapted from `burn::nn::cache`
+#[derive(Debug)]
 enum CacheState<T> {
     Value(T),
     Empty,
 }
 
 /// A cache for a tensor.
+#[derive(Debug)]
 struct TensorCache<B: Backend, const D: usize> {
     state: CacheState<Tensor<B, D>>,
 }
@@ -24,6 +26,7 @@ impl<B: Backend, const D: usize> TensorCache<B, D> {
     }
 }
 
+#[derive(Debug)]
 pub(crate) struct AutoregressiveCache<B: Backend> {
     /// Tensor cache with shape `[max_batch_size, num_heads, seq_len, head_dim]`
     cache: TensorCache<B, 4>,

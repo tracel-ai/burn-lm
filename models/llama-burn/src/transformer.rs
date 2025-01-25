@@ -205,6 +205,7 @@ impl<B: Backend> FeedForward<B> {
 }
 
 /// Key-value cache for autoregressive models.
+#[derive(Debug)]
 pub struct KeyValueCache<B: Backend> {
     key: AutoregressiveCache<B>,
     value: AutoregressiveCache<B>,

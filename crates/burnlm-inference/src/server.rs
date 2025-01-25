@@ -1,15 +1,17 @@
+use std::fmt::Debug;
 use std::any::Any;
 
 use clap::FromArgMatches;
+use serde::de::DeserializeOwned;
 
 use crate::{errors::InferenceResult, message::Message, Completion};
 
 /// Marker trait for server configurations.
-pub trait InferenceServerConfig: clap::FromArgMatches + 'static {}
+pub trait InferenceServerConfig: clap::FromArgMatches + DeserializeOwned + 'static + Debug {}
 
 /// Inference server interface aimed to be implemented to be able to register a
 /// model in Burn LM registry.
-pub trait InferenceServer: Default + Sync {
+pub trait InferenceServer: Default + Send + Sync + Debug {
     /// The configuration holding all the inference time parameter for a model
     type Config: InferenceServerConfig;
 
@@ -25,6 +27,12 @@ pub trait InferenceServer: Default + Sync {
     /// Parse CLI flags from burnlm-cli and return a config object.
     fn parse_cli_config(args: &clap::ArgMatches) -> Box<dyn Any> {
         let config = Self::Config::from_arg_matches(args).expect("Should be able to parse arguments from CLI");
+        Box::new(config)
+    }
+
+    /// Parse passed JSON and return a config oject
+    fn parse_json_config(json: &str) -> Box<dyn Any> {
+        let config: Self::Config = serde_json::from_str(json).expect("Should be able to parse JSON");
         Box::new(config)
     }
 

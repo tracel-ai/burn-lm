@@ -1,8 +1,9 @@
+use std::fmt::Debug;
 use std::any::Any;
 
 use crate::{errors::InferenceResult, message::Message, server::InferenceServer, Completion};
 
-pub trait InferenceChannel<Server: InferenceServer>: Send + Sync {
+pub trait InferenceChannel<Server: InferenceServer>: Send + Sync + Debug {
     /// Set configuration for inference.
     fn set_config(&self, config: Box<dyn Any>);
 

@@ -1,4 +1,5 @@
 use rand::Rng;
+use serde::Deserialize;
 use std::{any::Any, borrow::BorrowMut};
 
 use burn::prelude::Backend;
@@ -9,40 +10,59 @@ use llama_burn::{
     tokenizer::SentiencePieceTokenizer,
 };
 
-#[derive(Parser)]
+// #[derive(InferenceConfig, Parser, Deserialize, Debug)]
+#[derive(Parser, Deserialize, Debug)]
 pub struct TinyLlamaServerConfig {
     /// Top-p probability threshold.
-    #[arg(long, default_value_t = TinyLlamaServerConfig::default().top_p)]
+    #[arg(long, default_value_t = TinyLlamaServerConfig::default_top_p())]
+    #[serde(default = "TinyLlamaServerConfig::default_top_p")]
+    // #[config(default = 0.9)]
     pub top_p: f64,
     /// Temperature value for controlling randomness in sampling.
-    #[arg(long, default_value_t = TinyLlamaServerConfig::default().temperature)]
+    #[arg(long, default_value_t = TinyLlamaServerConfig::default_temperature())]
+    #[serde(default = "TinyLlamaServerConfig::default_temperature")]
+    // #[config(default = 0.6)]
     pub temperature: f64,
     /// Maximum sequence length for input text.
-    #[arg(long, default_value_t = TinyLlamaServerConfig::default().max_seq_len)]
+    #[arg(long, default_value_t = TinyLlamaServerConfig::default_max_seq_len())]
+    #[serde(default = "TinyLlamaServerConfig::default_max_seq_len")]
+    // #[config(default = 1024)]
     pub max_seq_len: usize,
     /// The number of new tokens to generate (i.e., the number of generation steps to take).
-    #[arg(long, default_value_t = TinyLlamaServerConfig::default().sample_len)]
+    #[arg(long, default_value_t = TinyLlamaServerConfig::default_sample_len())]
+    #[serde(default = "TinyLlamaServerConfig::default_sample_len")]
+    // #[config(default = 1024)]
     pub sample_len: usize,
-    /// The seed to use when generating random samples. If u64::MAX then a random seed is used for each inference.
-    #[arg(long, default_value_t = TinyLlamaServerConfig::default().seed)]
+    /// The seed to use when generating random samples. If it is 0 then a random seed is used for each inference.
+    #[arg(long, default_value_t = TinyLlamaServerConfig::default_seed())]
+    #[serde(default = "TinyLlamaServerConfig::default_seed")]
+    // #[config(default = 0)]
     pub seed: u64,
 }
 
 impl InferenceServerConfig for TinyLlamaServerConfig {}
 
+impl TinyLlamaServerConfig {
+    fn default_top_p() -> f64 { 0.9 }
+    fn default_temperature() -> f64 { 0.6 }
+    fn default_max_seq_len() -> usize { 1024 }
+    fn default_sample_len() -> usize { 1024 }
+    fn default_seed() -> u64 { 0 }
+}
+
 impl Default for TinyLlamaServerConfig {
     fn default() -> Self {
         Self {
-            top_p: 0.9,
-            temperature: 0.6,
-            max_seq_len: 1024,
-            sample_len: 1024,
-            seed: u64::MAX,
+            top_p: TinyLlamaServerConfig::default_top_p(),
+            temperature: TinyLlamaServerConfig::default_temperature(),
+            max_seq_len: TinyLlamaServerConfig::default_max_seq_len(),
+            sample_len: TinyLlamaServerConfig::default_sample_len(),
+            seed: TinyLlamaServerConfig::default_seed(),
         }
     }
 }
 
-#[derive(InferenceServer, Default)]
+#[derive(InferenceServer, Default, Debug)]
 #[inference_server(
     model_name = "TinyLlama",
     model_creation_date = "05/01/2024",
@@ -68,14 +88,11 @@ impl InferenceServer for TinyLlamaServer<InferenceBackend> {
     }
 
     fn complete(&mut self, messages: Vec<Message>) -> InferenceResult<Completion> {
+        println!("TinyLlama3Config: {:?}", self.config);
         self.load()?;
         let prompt = self.prompt(messages)?;
-        let model = match self.model.borrow_mut() {
-            Some(m) => m,
-            _ => return Err(InferenceError::ModelNotLoaded),
-        };
         let seed = match self.config.seed {
-            u64::MAX => rand::thread_rng().gen::<u64>(),
+            0 => rand::thread_rng().gen::<u64>(),
             s => s,
         };
         let mut sampler = if self.config.temperature > 0.0 {
@@ -84,12 +101,15 @@ impl InferenceServer for TinyLlamaServer<InferenceBackend> {
             Sampler::Argmax
         };
         println!("Generating...");
-        let generated = model.generate(
-            &prompt,
-            self.config.sample_len,
-            self.config.temperature,
-            &mut sampler,
-        );
+        let generated = match self.model.borrow_mut() {
+            Some(model) => model.generate(
+                &prompt,
+                self.config.sample_len,
+                self.config.temperature,
+                &mut sampler,
+            ),
+            _ => return Err(InferenceError::ModelNotLoaded),
+        };
         Ok(generated.text)
     }
 }

@@ -10,10 +10,11 @@ pub type Prompt = String;
 
 // ---------------------------------------------------------------------------
 // Re-exports for convenience so plugins implementors can just do:
+pub use crate::channels::mutex::MutexChannel;
 pub use crate::channels::passthrough::SingleThreadedChannel;
 pub use crate::client::InferenceClient;
 pub use crate::errors::*;
-pub use crate::message::Message;
+pub use crate::message::{Message, MessageRole};
 pub use crate::plugin::InferencePlugin;
 pub use crate::server::{InferenceServer, InferenceServerConfig};
 pub use burn_backend_types::*;

@@ -6,6 +6,7 @@ use super::InferenceChannel;
 
 /// Simple passthrough channel that just provides interior mutability.
 /// Not meant to be used in multithreaded environment.
+#[derive(Debug)]
 pub struct SingleThreadedChannel<Server: InferenceServer> {
     server: Arc<RefCell<Server>>,
 }

@@ -1,29 +1,25 @@
 use std::sync::Arc;
 
 use axum::async_trait;
+use burnlm_inference::InferencePlugin;
+use burnlm_registry::Registry;
 
 use crate::{
     controllers::model_controllers::ModelController, errors::ServerResult,
     schemas::model_schemas::ModelSchema,
 };
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct ModelStore {
-    models: Vec<Arc<ModelSchema>>,
-    current: Option<Arc<ModelSchema>>,
+    registry: Registry,
 }
 
 pub type ModelStoreState = Arc<tokio::sync::Mutex<ModelStore>>;
 
 impl ModelStore {
     fn new() -> Self {
-        let mut models = vec![];
-        for plugin in burnlm_registry::get_inference_plugins() {
-            models.push(Arc::new(ModelSchema::from(plugin)));
-        }
         Self {
-            models,
-            current: None,
+            registry: Registry::new(),
         }
     }
 
@@ -34,11 +30,17 @@ impl ModelStore {
 
 #[async_trait]
 impl ModelController for ModelStore {
-    async fn list_models(&self) -> ServerResult<Vec<Arc<ModelSchema>>> {
-        Ok(self.models.clone())
+    async fn list_models(&self) -> ServerResult<Vec<ModelSchema>> {
+        let mut models = vec![];
+        for (_name, plugin) in self.registry.get().iter() {
+            models.push(ModelSchema::from(plugin));
+        }
+        Ok(models)
     }
 
-    async fn set_current(&self, name: &str) -> ServerResult<()> {
-        Ok(())
+    async fn get_model_plugin(&self, name: &str) -> ServerResult<&Box<dyn InferencePlugin>> {
+        let plugin = self.registry.get().iter().find(|(pname, _)| (**pname).to_lowercase() == name.to_lowercase() ).map(|(_, plugin)| plugin);
+        let plugin = plugin.expect(&format!("Model plugin should be registered: {name}"));
+        Ok(plugin)
     }
 }

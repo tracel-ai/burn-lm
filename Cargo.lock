@@ -819,6 +819,7 @@ dependencies = [
  "once_cell",
  "paste",
  "serde",
+ "serde_json",
  "strum",
  "thiserror 2.0.7",
  "tracing",
@@ -844,6 +845,7 @@ dependencies = [
  "burnlm-inference",
  "llama-burn",
  "rand",
+ "serde",
 ]
 
 [[package]]
@@ -854,6 +856,7 @@ dependencies = [
  "burnlm-inference",
  "llama-burn",
  "rand",
+ "serde",
 ]
 
 [[package]]

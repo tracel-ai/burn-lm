@@ -440,6 +440,7 @@ pub struct GenerationOutput {
 }
 
 /// Meta Llama large language model and tokenizer.
+#[derive(Debug)]
 pub struct Llama<B: Backend, T: Tokenizer> {
     /// The tokenizer.
     pub tokenizer: T,

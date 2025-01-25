@@ -1,5 +1,6 @@
 use clap::ValueEnum;
 use rand::Rng;
+use serde::Deserialize;
 use std::{any::Any, borrow::BorrowMut};
 
 use burn::prelude::Backend;
@@ -10,7 +11,7 @@ use llama_burn::{
     tokenizer::Tiktoken,
 };
 
-#[derive(Clone, Debug, clap::ValueEnum)]
+#[derive(Clone, Debug, clap::ValueEnum, Deserialize)]
 /// Llama-3 model variants to load.
 pub enum LlamaVersion {
     /// Llama-3-8B-Instruct.
@@ -27,7 +28,7 @@ impl Default for LlamaVersion {
     }
 }
 
-#[derive(clap::Parser)]
+#[derive(clap::Parser, Deserialize, Debug)]
 pub struct Llama3ServerConfig {
     /// Top-p probability threshold.
     #[arg(long, default_value_t = Llama3ServerConfig::default().top_p)]
@@ -40,8 +41,9 @@ pub struct Llama3ServerConfig {
     pub max_seq_len: usize,
     /// The number of new tokens to generate (i.e., the number of generation steps to take).
     #[arg(long, default_value_t = Llama3ServerConfig::default().sample_len)]
+    #[serde(rename = "max_tokens")]
     pub sample_len: usize,
-    /// The seed to use when generating random samples. If u64::MAX then a random seed is used for each inference.
+    /// The seed to use when generating random samples. If it is 0 then a random seed is used for each inference.
     #[arg(long, default_value_t = Llama3ServerConfig::default().seed)]
     pub seed: u64,
     /// The Llama 3 model version.
@@ -58,13 +60,13 @@ impl Default for Llama3ServerConfig {
             temperature: 0.6,
             max_seq_len: 1024,
             sample_len: 1024,
-            seed: u64::MAX,
+            seed: 0,
             model_version: LlamaVersion::default(),
         }
     }
 }
 
-#[derive(InferenceServer, Default)]
+#[derive(InferenceServer, Default, Debug)]
 #[inference_server(
     model_name = "Llama3",
     model_versions=LlamaVersion,
@@ -95,14 +97,11 @@ impl InferenceServer for Llama3Server<InferenceBackend> {
     }
 
     fn complete(&mut self, messages: Vec<Message>) -> InferenceResult<Completion> {
+        println!("Llama3Config: {:?}", self.config);
         self.load()?;
         let prompt = self.prompt(messages)?;
-        let model = match self.model.borrow_mut() {
-            Some(m) => m,
-            _ => return Err(InferenceError::ModelNotLoaded),
-        };
         let seed = match self.config.seed {
-            u64::MAX => rand::thread_rng().gen::<u64>(),
+            0 => rand::thread_rng().gen::<u64>(),
             s => s,
         };
         let mut sampler = if self.config.temperature > 0.0 {
@@ -111,12 +110,15 @@ impl InferenceServer for Llama3Server<InferenceBackend> {
             Sampler::Argmax
         };
         println!("Generating...");
-        let generated = model.generate(
-            &prompt,
-            self.config.sample_len,
-            self.config.temperature,
-            &mut sampler,
-        );
+        let generated = match self.model.borrow_mut() {
+            Some(model) => model.generate(
+                &prompt,
+                self.config.sample_len,
+                self.config.temperature,
+                &mut sampler,
+            ),
+            _ => return Err(InferenceError::ModelNotLoaded),
+        };
         Ok(generated.text)
     }
 }

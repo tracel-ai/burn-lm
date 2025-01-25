@@ -1,17 +1,16 @@
 use axum::{
     extract::State, http::{HeaderMap, HeaderName, HeaderValue, StatusCode}, response::{IntoResponse, Response}, Json
 };
-use rand::Rng;
 use tokio::sync::mpsc;
 use tokio_stream::{wrappers::ReceiverStream, StreamExt};
 use tracing::info;
 
 use crate::{
-    errors::ServerResult, schemas::chat_schemas::{
+    controllers::model_controllers::ModelController, errors::ServerResult, schemas::chat_schemas::{
         ChatCompletionChunkSchema, ChatCompletionRequestSchema, ChatCompletionSchema,
         ChoiceMessageRoleSchema, ChoiceMessageSchema, ChoiceSchema, ChunkChoiceDeltaSchema,
         ChunkChoiceSchema, FinishReasonSchema, StreamingChunk, UsageSchema,
-    }, stores::model_store::ModelStoreState, utils::{id::ChatCompletionId, llm}
+    }, stores::model_store::ModelStoreState, utils::id::ChatCompletionId
 };
 
 pub async fn chat_completions(
@@ -24,20 +23,24 @@ pub async fn chat_completions(
     );
 
     if payload.stream {
-        handle_streaming_response(&payload).await
+        handle_streaming_response(state.clone(), payload).await
     } else {
-        handle_non_streaming_response(&payload).await
+        handle_non_streaming_response(state.clone(), payload).await
     }
 }
 
 async fn handle_non_streaming_response(
-    payload: &ChatCompletionRequestSchema,
+    state: ModelStoreState,
+    payload: ChatCompletionRequestSchema,
 ) -> ServerResult<Response> {
-    let mut config = llm::Config::default();
-    config.prompt = llm::forge_prompt(&payload.messages);
-    config.seed = rand::thread_rng().gen::<u64>();
-    config.temperature = 0.2;
-    let content = llm::complete(&config);
+    let store = state.lock().await;
+    let plugin = store.get_model_plugin(&payload.model).await?;
+    let messages: Vec<burnlm_inference::Message> = payload.messages.to_owned().into_iter().map(Into::into).collect();
+    let json_params = serde_json::to_string(&payload.params).expect("ChatCompletionParams should serialize to a JSON string");
+    info!("PARAMS JSON: {}", json_params);
+    let config = (plugin.parse_json_config_fn())(&json_params);
+    plugin.set_config(config);
+    let content = plugin.complete(messages).unwrap();
     tracing::debug!("Answer: {content}");
     let response = ChatCompletionSchema {
         id: ChatCompletionId::new().to_string(),
@@ -61,24 +64,26 @@ async fn handle_non_streaming_response(
 }
 
 async fn handle_streaming_response(
-    payload: &ChatCompletionRequestSchema,
+    state: ModelStoreState,
+    payload: ChatCompletionRequestSchema,
 ) -> ServerResult<Response> {
     let (tx, rx) = mpsc::channel(10);
     tokio::spawn({
-        let model = payload.model.clone();
-        let messages = payload.messages.clone();
         let id = ChatCompletionId::new().to_string();
         async move {
-            let mut config = llm::Config::default();
-            config.prompt = llm::forge_prompt(&messages);
-            config.seed = rand::thread_rng().gen::<u64>();
-            let content = llm::complete(&config);
+            let store = state.lock().await;
+            let plugin = store.get_model_plugin(&payload.model).await.unwrap();
+            let json_params = serde_json::to_string(&payload.params).expect("ChatCompletionParams should serialize to a JSON string");
+            let config = (plugin.parse_json_config_fn())(&json_params);
+            plugin.set_config(config);
+            let messages: Vec<burnlm_inference::Message> = payload.messages.to_owned().into_iter().map(Into::into).collect();
+            let content = plugin.complete(messages).unwrap();
             tracing::debug!("Answer: {content}");
             let chunk = StreamingChunk::Data(ChatCompletionChunkSchema {
                 id: id.clone(),
                 object: "chat.completion.chunk".to_string(),
                 created: chrono::Utc::now().timestamp(),
-                model: model.clone(),
+                model: "toto".to_string(),
                 choices: vec![ChunkChoiceSchema {
                     index: 0,
                     delta: Some(ChunkChoiceDeltaSchema {

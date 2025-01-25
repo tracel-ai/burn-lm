@@ -5,8 +5,18 @@ use utoipa::ToSchema;
 pub struct ChatCompletionRequestSchema {
     pub model: String,
     pub messages: Vec<ChoiceMessageSchema>,
+    #[serde(flatten)]
+    pub params: ChatCompletionParams,
     #[serde(default)]
     pub stream: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct ChatCompletionParams {
+    pub seed: Option<u64>,
+    pub temperature: Option<f32>,
+    pub top_p: Option<f32>,
+    pub max_tokens: Option<u64>,
 }
 
 #[derive(Clone, Debug, Serialize, ToSchema)]
@@ -27,6 +37,16 @@ pub struct ChoiceMessageSchema {
     pub refusal: Option<String>,
 }
 
+impl From<ChoiceMessageSchema> for burnlm_inference::Message {
+    fn from(schema: ChoiceMessageSchema) -> Self {
+        Self {
+            role: schema.role.into(),
+            content: schema.content,
+            refusal: schema.refusal,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, ToSchema)]
 pub struct ChoiceSchema {
     pub index: u32,
@@ -43,6 +63,19 @@ pub enum ChoiceMessageRoleSchema {
     Assistant,
     Tool,
     Unknown(String),
+
+}
+
+impl From<ChoiceMessageRoleSchema> for burnlm_inference::MessageRole {
+    fn from(role: ChoiceMessageRoleSchema) -> Self {
+        match role {
+            ChoiceMessageRoleSchema::System => burnlm_inference::MessageRole::System,
+            ChoiceMessageRoleSchema::User => burnlm_inference::MessageRole::User,
+            ChoiceMessageRoleSchema::Assistant => burnlm_inference::MessageRole::Assistant,
+            ChoiceMessageRoleSchema::Tool => burnlm_inference::MessageRole::Tool,
+            ChoiceMessageRoleSchema::Unknown(value) => burnlm_inference::MessageRole::Unknown(value),
+        }
+    }
 }
 
 #[derive(Default, Clone, Debug, Serialize, ToSchema)]

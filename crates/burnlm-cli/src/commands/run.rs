@@ -3,7 +3,7 @@ use burnlm_registry::Registry;
 
 pub(crate) fn create() -> clap::Command where {
     let mut root = clap::Command::new("run").about("Run inference on chosen model");
-    let mut registry = Registry::default();
+    let registry = Registry::new();
     // Create a a subcommand for each registered model with its associated  flags
     for (_name, plugin) in registry.get().iter() {
         let mut subcommand = clap::Command::new(plugin.model_name_lc())
@@ -22,10 +22,10 @@ pub(crate) fn create() -> clap::Command where {
 }
 
 pub(crate) fn handle(args: &clap::ArgMatches) -> anyhow::Result<()> {
-    let mut registry = Registry::default();
-    let client_name = args.subcommand_name().unwrap();
-    let plugin = registry.get().iter().find(|(name, _)| (**name).to_lowercase() == client_name.to_lowercase() ).map(|(_, client)| client);
-    let plugin = plugin.expect(&format!("Client should be registered: {client_name}"));
+    let registry = Registry::new();
+    let plugin_name = args.subcommand_name().unwrap();
+    let plugin = registry.get().iter().find(|(name, _)| (**name).to_lowercase() == plugin_name.to_lowercase() ).map(|(_, plugin)| plugin);
+    let plugin = plugin.expect(&format!("Plugin should be registered: {plugin_name}"));
     let versions = (plugin.get_model_versions_fn())();
     println!("Available model versions: {versions:?}");
     let config_flags = args

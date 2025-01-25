@@ -16,4 +16,5 @@ burnlm-inference = { path = "../burnlm-inference" }
 llama-burn = { path = "../../models/llama-burn", features = ["tiny"] }
 
 rand = { workspace = true }
+serde = { workspace = true }
 

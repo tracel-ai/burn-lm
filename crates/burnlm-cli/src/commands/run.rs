@@ -6,7 +6,7 @@ pub(crate) fn create() -> clap::Command where {
     let registry = Registry::new();
     // Create a a subcommand for each registered model with its associated  flags
     for (_name, plugin) in registry.get().iter() {
-        let mut subcommand = clap::Command::new(plugin.model_name_lc())
+        let mut subcommand = clap::Command::new(plugin.model_cli_param_name())
             .about(format!("Use {} model", plugin.model_name()));
         subcommand = subcommand
             .args((plugin.create_cli_flags_fn())().get_arguments())
@@ -26,8 +26,6 @@ pub(crate) fn handle(args: &clap::ArgMatches) -> anyhow::Result<()> {
     let plugin_name = args.subcommand_name().unwrap();
     let plugin = registry.get().iter().find(|(name, _)| (**name).to_lowercase() == plugin_name.to_lowercase() ).map(|(_, plugin)| plugin);
     let plugin = plugin.expect(&format!("Plugin should be registered: {plugin_name}"));
-    let versions = (plugin.get_model_versions_fn())();
-    println!("Available model versions: {versions:?}");
     let config_flags = args
         .subcommand_matches(args.subcommand_name().unwrap())
         .unwrap();
@@ -36,7 +34,6 @@ pub(crate) fn handle(args: &clap::ArgMatches) -> anyhow::Result<()> {
     let prompt = config_flags
         .get_one::<String>("prompt")
         .expect("The prompt argument should be set.");
-    println!("Selected version: {}", plugin.get_version());
     println!("Prompt: {prompt}");
     println!("Running inference...");
     let message = Message {

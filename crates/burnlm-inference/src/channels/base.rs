@@ -7,9 +7,6 @@ pub trait InferenceChannel<Server: InferenceServer>: Send + Sync + Debug {
     /// Set configuration for inference.
     fn set_config(&self, config: Box<dyn Any>);
 
-    /// Return the selected version of the model.
-    fn get_version(&self) -> String;
-
     /// Unload the model.
     fn unload(&self) -> InferenceResult<()>;
 

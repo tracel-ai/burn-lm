@@ -76,10 +76,9 @@ pub fn inference_server(input: TokenStream) -> TokenStream {
     let expanded = quote! {
         impl #input_generics_impl #input_ident #input_generics_type #input_generics_where_clause {
             pub const fn model_name() -> &'static str { #model_name }
-            pub const fn model_name_lc() -> &'static str { #model_name_lc }
+            pub const fn model_cli_param_name() -> &'static str { #model_cli_param_name }
             pub const fn model_creation_date() -> &'static str { #model_creation_date }
             pub const fn owned_by() -> &'static str { #owned_by }
-            #model_versions_impl
         }
     };
     TokenStream::from(expanded)

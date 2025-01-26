@@ -36,7 +36,4 @@ pub trait InferenceServer: Default + Send + Sync + Debug {
         Box::new(config)
     }
 
-    /// Return the selected version of the model as a string.
-    fn get_version(&self) -> String { "default".to_string() }
-
 }

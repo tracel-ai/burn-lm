@@ -26,10 +26,6 @@ impl<Server: InferenceServer> InferenceChannel<Server> for SingleThreadedChannel
         self.server.borrow_mut().set_config(config);
     }
 
-    fn get_version(&self) -> String {
-        self.server.borrow().get_version()
-    }
-
     fn unload(&self) -> InferenceResult<()> {
         self.server.borrow_mut().unload()
     }

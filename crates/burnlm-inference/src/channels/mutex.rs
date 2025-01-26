@@ -24,11 +24,6 @@ impl<Server: InferenceServer> InferenceChannel<Server> for MutexChannel<Server> 
         server.set_config(config);
     }
 
-    fn get_version(&self) -> String {
-        let server = self.server.lock().unwrap();
-        server.get_version()
-    }
-
     fn unload(&self) -> InferenceResult<()> {
         let mut server = self.server.lock().unwrap();
         server.unload()

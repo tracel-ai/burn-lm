@@ -10,9 +10,12 @@ pub type Channel<B> = MutexChannel<B>;
 // TinyLlama
 pub type TinyLlamaS = TinyLlamaServer<InferenceBackend>;
 pub type TinyLlamaC = InferenceClient<TinyLlamaS, Channel<TinyLlamaS>>;
-// Llama3
-pub type Llama3S = Llama3Server<InferenceBackend>;
+// Llama 3
+pub type Llama3S = LlamaV3Params8BInstructServer<InferenceBackend>;
 pub type Llama3C = InferenceClient<Llama3S, Channel<Llama3S>>;
+// Llama 3.1
+pub type Llama31S = LlamaV31Params8BInstructServer<InferenceBackend>;
+pub type Llama31C = InferenceClient<Llama31S, Channel<Llama31S>>;
 
 pub type DynClients = HashMap<&'static str, Box<dyn InferencePlugin>>;
 
@@ -30,13 +33,12 @@ impl Registry {
                 S::model_name(),
                 Box::new(TinyLlamaC::new(
                     S::model_name(),
-                    S::model_name_lc(),
+                    S::model_cli_param_name(),
                     S::model_creation_date(),
                     S::owned_by(),
                     <S as InferenceServer>::Config::command,
                     S::parse_cli_config,
                     S::parse_json_config,
-                    S::get_model_versions,
                     Channel::<S>::new(),
                 )),
             );
@@ -47,13 +49,28 @@ impl Registry {
                 S::model_name(),
                 Box::new(Llama3C::new(
                     S::model_name(),
-                    S::model_name_lc(),
+                    S::model_cli_param_name(),
                     S::model_creation_date(),
                     S::owned_by(),
                     <S as InferenceServer>::Config::command,
                     S::parse_cli_config,
                     S::parse_json_config,
-                    S::get_model_versions,
+                    Channel::<S>::new(),
+                )),
+            );
+        }
+        {
+            type S = Llama31S;
+            map.insert(
+                S::model_name(),
+                Box::new(Llama31C::new(
+                    S::model_name(),
+                    S::model_cli_param_name(),
+                    S::model_creation_date(),
+                    S::owned_by(),
+                    <S as InferenceServer>::Config::command,
+                    S::parse_cli_config,
+                    S::parse_json_config,
                     Channel::<S>::new(),
                 )),
             );

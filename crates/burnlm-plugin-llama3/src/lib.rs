@@ -1,4 +1,3 @@
-use clap::ValueEnum;
 use rand::Rng;
 use serde::Deserialize;
 use std::{any::Any, borrow::BorrowMut};
@@ -11,81 +10,149 @@ use llama_burn::{
     tokenizer::Tiktoken,
 };
 
-#[derive(Clone, Debug, clap::ValueEnum, Deserialize)]
+#[derive(Clone, Debug, Default)]
 /// Llama-3 model variants to load.
 pub enum LlamaVersion {
     /// Llama-3-8B-Instruct.
-    #[value(name = "llama-3-8b-instruct")]
     V3Instruct,
     /// Llama-3.1-8B-Instruct.
-    #[value(name = "llama-3.1-8b-instruct")]
+    #[default]
     V31Instruct,
 }
 
-impl Default for LlamaVersion {
-    fn default() -> Self {
-        LlamaVersion::V3Instruct
-    }
-}
-
-#[derive(clap::Parser, Deserialize, Debug)]
+#[derive(Parser, Deserialize, Debug)]
 pub struct Llama3ServerConfig {
     /// Top-p probability threshold.
-    #[arg(long, default_value_t = Llama3ServerConfig::default().top_p)]
+    #[arg(long, default_value_t = Llama3ServerConfig::default_top_p())]
+    #[serde(default = "Llama3ServerConfig::default_top_p")]
     pub top_p: f64,
     /// Temperature value for controlling randomness in sampling.
-    #[arg(long, default_value_t = Llama3ServerConfig::default().temperature)]
+    #[arg(long, default_value_t = Llama3ServerConfig::default_temperature())]
+    #[serde(default = "Llama3ServerConfig::default_temperature")]
     pub temperature: f64,
     /// Maximum sequence length for input text.
-    #[arg(long, default_value_t = Llama3ServerConfig::default().max_seq_len)]
+    #[arg(long, default_value_t = Llama3ServerConfig::default_max_seq_len())]
+    #[serde(default = "Llama3ServerConfig::default_max_seq_len")]
     pub max_seq_len: usize,
     /// The number of new tokens to generate (i.e., the number of generation steps to take).
-    #[arg(long, default_value_t = Llama3ServerConfig::default().sample_len)]
-    #[serde(rename = "max_tokens")]
+    #[arg(long, default_value_t = Llama3ServerConfig::default_sample_len())]
+    #[serde(default = "Llama3ServerConfig::default_sample_len")]
     pub sample_len: usize,
     /// The seed to use when generating random samples. If it is 0 then a random seed is used for each inference.
-    #[arg(long, default_value_t = Llama3ServerConfig::default().seed)]
+    #[arg(long, default_value_t = Llama3ServerConfig::default_seed())]
+    #[serde(default = "Llama3ServerConfig::default_seed")]
     pub seed: u64,
-    /// The Llama 3 model version.
-    #[arg(long)]
-    pub model_version: LlamaVersion,
 }
 
 impl InferenceServerConfig for Llama3ServerConfig {}
 
+impl Llama3ServerConfig {
+    fn default_top_p() -> f64 { 0.9 }
+    fn default_temperature() -> f64 { 0.6 }
+    fn default_max_seq_len() -> usize { 1024 }
+    fn default_sample_len() -> usize { 1024 }
+    fn default_seed() -> u64 { 0 }
+}
+
 impl Default for Llama3ServerConfig {
     fn default() -> Self {
         Self {
-            top_p: 0.9,
-            temperature: 0.6,
-            max_seq_len: 1024,
-            sample_len: 1024,
-            seed: 0,
-            model_version: LlamaVersion::default(),
+            top_p: Llama3ServerConfig::default_top_p(),
+            temperature: Llama3ServerConfig::default_temperature(),
+            max_seq_len: Llama3ServerConfig::default_max_seq_len(),
+            sample_len: Llama3ServerConfig::default_sample_len(),
+            seed: Llama3ServerConfig::default_seed(),
         }
     }
 }
 
-#[derive(InferenceServer, Default, Debug)]
+#[derive(InferenceServer, Debug)]
 #[inference_server(
-    model_name = "Llama3",
-    model_versions=LlamaVersion,
+    model_name = "Llama 3 (8B Instruct)",
+    model_cli_param_name = "llama3",
     model_creation_date = "05/01/2024",
     owned_by = "Tracel Technologies Inc.",
 )]
-pub struct Llama3Server<B: Backend> {
-    config: Llama3ServerConfig,
-    model: Option<Llama<B, Tiktoken>>,
+pub struct LlamaV3Params8BInstructServer<B: Backend> {
+    server: Llama3BaseServer<B>,
 }
 
-unsafe impl<B: Backend> Sync for Llama3Server<B> {}
+impl<B: Backend> Default for LlamaV3Params8BInstructServer<B> {
+    fn default() -> Self {
+        Self { server: Llama3BaseServer::<B>::new(LlamaVersion::V3Instruct) }
+    }
+}
 
-impl InferenceServer for Llama3Server<InferenceBackend> {
+impl InferenceServer for LlamaV3Params8BInstructServer<InferenceBackend> {
     type Config = Llama3ServerConfig;
 
-    fn get_version(&self) -> String {
-        self.config.model_version.to_possible_value().unwrap().get_name().to_string()
+    fn set_config(&mut self, config: Box<dyn Any>) {
+        self.server.set_config(config);
     }
+
+    fn unload(&mut self) -> InferenceResult<()> {
+        self.server.unload()
+    }
+
+    fn complete(&mut self, messages: Vec<Message>) -> InferenceResult<Completion> {
+        self.server.complete(messages)
+    }
+}
+
+#[derive(InferenceServer, Debug)]
+#[inference_server(
+    model_name = "Llama 3.1 (8B Instruct)",
+    model_cli_param_name = "llama31",
+    model_creation_date = "05/01/2024",
+    owned_by = "Tracel Technologies Inc.",
+)]
+pub struct LlamaV31Params8BInstructServer<B: Backend> {
+    server: Llama3BaseServer<B>,
+}
+
+impl<B: Backend> Default for LlamaV31Params8BInstructServer<B> {
+    fn default() -> Self {
+        Self { server: Llama3BaseServer::<B>::new(LlamaVersion::V31Instruct) }
+    }
+}
+
+impl InferenceServer for LlamaV31Params8BInstructServer<InferenceBackend> {
+    type Config = Llama3ServerConfig;
+
+    fn set_config(&mut self, config: Box<dyn Any>) {
+        self.server.set_config(config);
+    }
+
+    fn unload(&mut self) -> InferenceResult<()> {
+        self.server.unload()
+    }
+
+    fn complete(&mut self, messages: Vec<Message>) -> InferenceResult<Completion> {
+        self.server.complete(messages)
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct Llama3BaseServer<B: Backend> {
+    config: Llama3ServerConfig,
+    model: Option<Llama<B, Tiktoken>>,
+    version: LlamaVersion,
+}
+
+unsafe impl<B: Backend> Sync for Llama3BaseServer<B> {}
+
+impl<B: Backend> Llama3BaseServer<B> {
+   pub fn new(version: LlamaVersion) -> Self {
+       Self {
+           config: Llama3ServerConfig::default(),
+           model: None,
+           version
+       }
+   }
+}
+
+impl InferenceServer for Llama3BaseServer<InferenceBackend> {
+    type Config = Llama3ServerConfig;
 
     fn set_config(&mut self, config: Box<dyn Any>) {
         self.config = *config.downcast::<Llama3ServerConfig>().unwrap();
@@ -123,10 +190,10 @@ impl InferenceServer for Llama3Server<InferenceBackend> {
     }
 }
 
-impl Llama3Server<InferenceBackend> {
+impl Llama3BaseServer<InferenceBackend> {
     fn load(&mut self) -> burnlm_inference::errors::InferenceResult<()> {
         if self.model.is_none() {
-            self.model = match self.config.model_version {
+            self.model = match self.version {
                 LlamaVersion::V3Instruct => Some(
                     llama::LlamaConfig::llama3_8b_pretrained::<InferenceBackend>(self.config.max_seq_len, &INFERENCE_DEVICE)
                         .unwrap(),

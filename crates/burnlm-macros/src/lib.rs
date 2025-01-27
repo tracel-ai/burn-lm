@@ -1,8 +1,11 @@
 use chrono::NaiveDate;
-use darling::{ast, FromDeriveInput, FromField};
+use darling::{
+    ast::{self, NestedMeta},
+    FromDeriveInput, FromField, FromMeta,
+};
 use proc_macro::TokenStream;
-use quote::quote;
-use syn::{parse_macro_input, DeriveInput, ItemStruct};
+use quote::{format_ident, quote};
+use syn::{parse_macro_input, punctuated::Punctuated, DeriveInput, ItemStruct};
 
 // InferenceSeverConfig
 
@@ -229,4 +232,123 @@ pub fn inference_server(input: TokenStream) -> TokenStream {
         }
     };
     TokenStream::from(expanded)
+}
+
+// Register inference servers
+
+#[derive(Debug, FromMeta)]
+struct InferenceServerEntry {
+    server_name: String,
+    #[darling(rename = "server_type")]
+    server_ty: String,
+}
+
+#[derive(Debug, Default, FromMeta)]
+#[darling(default)]
+struct InferenceServerEntries {
+    #[darling(default, rename = "server", multiple)]
+    servers: Vec<InferenceServerEntry>,
+}
+
+/// This macro implements the new() function for the Registry struct given a
+/// list of Inference Server entries.
+/// This macro also defines some type aliases to make the generated code more readable.
+/// For instance for "MyModel" server_name the macro will define the following types:
+///   - MyModelS = "type of the server passed as server_type"
+///   - MyModelC = InferenceClient<MyModelS, Channel<MyModelS>
+#[proc_macro_attribute]
+pub fn inference_server_registry(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let parsed_attr =
+        parse_macro_input!(attr with Punctuated::<NestedMeta, syn::Token![,]>::parse_terminated);
+    let attributes_meta: Vec<NestedMeta> = parsed_attr.into_iter().collect();
+    // Use Darling to parse the attributes meta into InferenceServerEntries
+    let registry_args = match InferenceServerEntries::from_list(&attributes_meta) {
+        Ok(args) => args,
+        Err(e) => {
+            return e.write_errors().into();
+        }
+    };
+    let input_struct = parse_macro_input!(item as ItemStruct);
+    let struct_ident = &input_struct.ident;
+    // generate type aliases and hash map entry for each server entry
+    let mut type_aliases = Vec::new();
+    let mut registry_entries = Vec::new();
+    for server in &registry_args.servers {
+        let type_prefix_str = &server.server_name;
+        let server_ty_str = &server.server_ty;
+        let server_alias_id = format_ident!("{}S", type_prefix_str);
+        let client_alias_id = format_ident!("{}C", type_prefix_str);
+        let server_ty: syn::Type = match syn::parse_str(server_ty_str) {
+            Ok(ty) => ty,
+            Err(e) => {
+                // Server type is unkown
+                let msg = format!("Invalid server_type `{}`: {}", server_ty_str, e);
+                return syn::Error::new_spanned(
+                    syn::Lit::Str(syn::LitStr::new(
+                        server_ty_str,
+                        proc_macro2::Span::call_site(),
+                    )),
+                    msg,
+                )
+                .to_compile_error()
+                .into();
+            }
+        };
+        // Type aliases
+        let aliases = quote! {
+            pub type #server_alias_id = #server_ty;
+            pub type #client_alias_id = InferenceClient<#server_alias_id, Channel<#server_alias_id>>;
+        };
+        type_aliases.push(aliases);
+        // registry hash map entry
+        let registry_entry = quote! {
+            {
+                type S = #server_alias_id;
+                map.insert(
+                    S::model_name(),
+                    Box::new(#client_alias_id::new(
+                        S::model_name(),
+                        S::model_cli_param_name(),
+                        S::model_creation_date(),
+                        S::owned_by(),
+                        <S as InferenceServer>::Config::command,
+                        S::parse_cli_config,
+                        S::parse_json_config,
+                        Channel::<S>::new(),
+                    )),
+                );
+            }
+        };
+        registry_entries.push(registry_entry);
+    }
+
+    // Output
+    let output = quote! {
+        // Type aliases
+        #(#type_aliases)*
+        // Original struct
+        #input_struct
+        // new() implementation
+        impl #struct_ident {
+            pub fn new() -> Self {
+                let mut map: DynClients = ::std::collections::HashMap::new();
+                #(#registry_entries)*
+                Self {
+                    clients: ::std::sync::Arc::new(map),
+                }
+            }
+            pub fn get(&self) -> &DynClients {
+                &self.clients
+            }
+        }
+
+        // Implement default to make clippy happy
+        impl ::std::default::Default for #struct_ident {
+            fn default() -> Self {
+                Self::new()
+            }
+        }
+    };
+
+    output.into()
 }

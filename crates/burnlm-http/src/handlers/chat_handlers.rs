@@ -91,12 +91,8 @@ async fn handle_streaming_response(
             info!("PARAMS JSON: {}", json_params);
             let config = (plugin.parse_json_config_fn())(&json_params);
             plugin.set_config(config);
-            let messages: Vec<burnlm_inference::Message> = payload
-                .messages
-                .iter()
-                .cloned()
-                .map(Into::into)
-                .collect();
+            let messages: Vec<burnlm_inference::Message> =
+                payload.messages.iter().cloned().map(Into::into).collect();
             let content = plugin.complete(messages).unwrap();
             tracing::debug!("Answer: {content}");
             let chunk = StreamingChunk::Data(ChatCompletionChunkSchema {

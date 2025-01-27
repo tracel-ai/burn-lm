@@ -17,6 +17,7 @@ community-plugins = []
 
 [dependencies]
 burnlm-inference = { path = "../burnlm-inference" }
+burnlm-macros = { path = "../burnlm-macros" }
 burnlm-inference-llama3 = { path = "../burnlm-inference-llama3", optional = true }
 burnlm-inference-tinyllama = { path = "../burnlm-inference-tinyllama", optional = true }
 burn = { workspace = true }

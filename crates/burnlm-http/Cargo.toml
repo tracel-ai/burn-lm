@@ -46,7 +46,6 @@ utoipa = { workspace = true }
 utoipa-swagger-ui = { workspace = true }
 
 [dev-dependencies]
-async-openai = "0.26.0"
 rstest = { workspace = true }
 
 [[bin]]

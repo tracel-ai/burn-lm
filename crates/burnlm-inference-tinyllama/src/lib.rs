@@ -33,7 +33,7 @@ pub struct TinyLlamaServerConfig {
 #[inference_server(
     model_name = "TinyLlama",
     model_creation_date = "05/01/2024",
-    owned_by = "Tracel Technologies Inc.",
+    owned_by = "Tracel Technologies Inc."
 )]
 pub struct TinyLlamaServer<B: Backend> {
     config: TinyLlamaServerConfig,
@@ -85,8 +85,11 @@ impl TinyLlamaServer<InferenceBackend> {
     fn load(&mut self) -> InferenceResult<()> {
         if self.model.is_none() {
             self.model = Some(
-                llama::LlamaConfig::tiny_llama_pretrained::<InferenceBackend>(self.config.max_seq_len, &INFERENCE_DEVICE)
-                    .unwrap(),
+                llama::LlamaConfig::tiny_llama_pretrained::<InferenceBackend>(
+                    self.config.max_seq_len,
+                    &INFERENCE_DEVICE,
+                )
+                .unwrap(),
             );
         }
         Ok(())
@@ -95,11 +98,7 @@ impl TinyLlamaServer<InferenceBackend> {
     fn prompt(&self, messages: Vec<Message>) -> InferenceResult<burnlm_inference::Prompt> {
         let mut prompt: Vec<String> = vec![];
         for message in messages {
-            prompt.push(format!(
-                "<|{}|>\n{}</s>\n",
-                message.role.to_string(),
-                message.content
-            ));
+            prompt.push(format!("<|{}|>\n{}</s>\n", message.role, message.content));
         }
         let mut prompt = prompt.join("\n");
         prompt.push_str("<|assistant|>\n");

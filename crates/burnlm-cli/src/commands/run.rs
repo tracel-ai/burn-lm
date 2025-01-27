@@ -24,8 +24,12 @@ pub(crate) fn create() -> clap::Command where {
 pub(crate) fn handle(args: &clap::ArgMatches) -> anyhow::Result<()> {
     let registry = Registry::new();
     let plugin_name = args.subcommand_name().unwrap();
-    let plugin = registry.get().iter().find(|(name, _)| (**name).to_lowercase() == plugin_name.to_lowercase() ).map(|(_, plugin)| plugin);
-    let plugin = plugin.expect(&format!("Plugin should be registered: {plugin_name}"));
+    let plugin = registry
+        .get()
+        .iter()
+        .find(|(name, _)| (**name).to_lowercase() == plugin_name.to_lowercase())
+        .map(|(_, plugin)| plugin);
+    let plugin = plugin.unwrap_or_else(|| panic!("Plugin should be registered: {plugin_name}"));
     let config_flags = args
         .subcommand_matches(args.subcommand_name().unwrap())
         .unwrap();

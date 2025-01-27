@@ -1,5 +1,5 @@
-use std::fmt::Debug;
 use std::any::Any;
+use std::fmt::Debug;
 
 use clap::FromArgMatches;
 use serde::de::DeserializeOwned;
@@ -26,14 +26,15 @@ pub trait InferenceServer: Default + Send + Sync + Debug {
 
     /// Parse CLI flags from burnlm-cli and return a config object.
     fn parse_cli_config(args: &clap::ArgMatches) -> Box<dyn Any> {
-        let config = Self::Config::from_arg_matches(args).expect("Should be able to parse arguments from CLI");
+        let config = Self::Config::from_arg_matches(args)
+            .expect("Should be able to parse arguments from CLI");
         Box::new(config)
     }
 
     /// Parse passed JSON and return a config oject
     fn parse_json_config(json: &str) -> Box<dyn Any> {
-        let config: Self::Config = serde_json::from_str(json).expect("Should be able to parse JSON");
+        let config: Self::Config =
+            serde_json::from_str(json).expect("Should be able to parse JSON");
         Box::new(config)
     }
-
 }

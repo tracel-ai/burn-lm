@@ -13,10 +13,16 @@ pub struct SingleThreadedChannel<Server: InferenceServer> {
 unsafe impl<Server: InferenceServer> Send for SingleThreadedChannel<Server> {}
 unsafe impl<Server: InferenceServer> Sync for SingleThreadedChannel<Server> {}
 
+impl<Server: InferenceServer> Default for SingleThreadedChannel<Server> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<Server: InferenceServer> SingleThreadedChannel<Server> {
     pub fn new() -> Self {
         Self {
-            server: Arc::new(RefCell::new(Server::default()))
+            server: Arc::new(RefCell::new(Server::default())),
         }
     }
 }

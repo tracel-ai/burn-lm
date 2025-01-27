@@ -67,7 +67,6 @@ pub enum ChoiceMessageRoleSchema {
     Assistant,
     Tool,
     Unknown(String),
-
 }
 
 impl From<ChoiceMessageRoleSchema> for burnlm_inference::MessageRole {
@@ -77,7 +76,9 @@ impl From<ChoiceMessageRoleSchema> for burnlm_inference::MessageRole {
             ChoiceMessageRoleSchema::User => burnlm_inference::MessageRole::User,
             ChoiceMessageRoleSchema::Assistant => burnlm_inference::MessageRole::Assistant,
             ChoiceMessageRoleSchema::Tool => burnlm_inference::MessageRole::Tool,
-            ChoiceMessageRoleSchema::Unknown(value) => burnlm_inference::MessageRole::Unknown(value),
+            ChoiceMessageRoleSchema::Unknown(value) => {
+                burnlm_inference::MessageRole::Unknown(value)
+            }
         }
     }
 }

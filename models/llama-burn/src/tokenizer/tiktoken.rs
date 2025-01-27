@@ -66,7 +66,6 @@ impl Tokenizer for Tiktoken {
                 .map(|t| t.to_string())
                 .collect::<Vec<_>>(),
             (0..NUM_RESERVED_SPECIAL_TOKENS - SPECIAL_TOKENS.len())
-                .into_iter()
                 .map(|i| format!("<|reserved_special_token_{}|>", i + 2))
                 .collect::<Vec<_>>(),
         ]

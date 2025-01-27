@@ -1,9 +1,9 @@
-use std::{collections::HashMap, sync::Arc};
 use burnlm_inference::*;
+use std::{collections::HashMap, sync::Arc};
 
 // Register model crates
-pub use burnlm_plugin_llama3::*;
-pub use burnlm_plugin_tinyllama::*;
+pub use burnlm_inference_llama3::*;
+pub use burnlm_inference_tinyllama::*;
 
 pub type Channel<B> = MutexChannel<B>;
 
@@ -22,6 +22,12 @@ pub type DynClients = HashMap<&'static str, Box<dyn InferencePlugin>>;
 #[derive(Debug)]
 pub struct Registry {
     clients: Arc<DynClients>,
+}
+
+impl Default for Registry {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Registry {
@@ -84,4 +90,3 @@ impl Registry {
         &self.clients
     }
 }
-

@@ -5,7 +5,8 @@ use crate::errors::ServerError;
 use crate::stores::model_store::ModelStoreState;
 use crate::{
     controllers::model_controllers::ModelController, errors::ServerResult,
-    schemas::model_schemas::ModelSchema};
+    schemas::model_schemas::ModelSchema,
+};
 
 use crate::constants::API_VERSION;
 
@@ -16,7 +17,9 @@ use crate::constants::API_VERSION;
         (status = 200, description = "Gets all models.", body = Vec<ModelSchema>),
     )
 )]
-pub async fn list_models(State(state): State<ModelStoreState>) -> ServerResult<Json<Vec<ModelSchema>>> {
+pub async fn list_models(
+    State(state): State<ModelStoreState>,
+) -> ServerResult<Json<Vec<ModelSchema>>> {
     let store = state.lock().await;
     let models = store.list_models().await?;
     Ok(Json(models))

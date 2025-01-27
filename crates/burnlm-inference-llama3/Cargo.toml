@@ -1,5 +1,5 @@
 [package]
-name = "burnlm-plugin-llama3"
+name = "burnlm-inference-llama3"
 edition.workspace = true
 version.workspace = true
 license.workspace = true

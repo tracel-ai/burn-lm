@@ -1,5 +1,5 @@
 [package]
-name = "burnlm-plugin-tinyllama"
+name = "burnlm-inference-tinyllama"
 edition.workspace = true
 version.workspace = true
 license.workspace = true

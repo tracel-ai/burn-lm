@@ -1,8 +1,8 @@
+use chrono::NaiveDate;
 use darling::{ast, FromDeriveInput, FromField};
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::{parse_macro_input, DeriveInput, ItemStruct};
-use chrono::NaiveDate;
 
 // InferenceSeverConfig
 
@@ -82,7 +82,8 @@ impl InferenceServerConfigReceiver {
                 syn::Ident::new(&format!("default_{}", field_ident), field_ident.span());
             // we need the serde default value as a string
             let serde_default_string = format!("{}::{}", struct_name, default_fn_name);
-            let serde_default_lit_str = syn::LitStr::new(&serde_default_string, proc_macro2::Span::call_site());
+            let serde_default_lit_str =
+                syn::LitStr::new(&serde_default_string, proc_macro2::Span::call_site());
             // rewritten field
             quote! {
                 #(#docs)*
@@ -188,7 +189,7 @@ pub fn inference_server(input: TokenStream) -> TokenStream {
             let param_name = param_name.to_lowercase().replace(" ", "-");
             quote! { #param_name }
         }
-        None =>  {
+        None => {
             let param_name = model_name.to_lowercase().replace(" ", "-");
             quote! { #param_name }
         }
@@ -197,7 +198,10 @@ pub fn inference_server(input: TokenStream) -> TokenStream {
     let model_creation_date = match attributes.model_creation_date {
         Some(ref date_str) => {
             if NaiveDate::parse_from_str(date_str, "%m/%d/%Y").is_err() {
-                let err_msg = format!("Invalid 'model_creation_date': {}. Must be in MM/DD/YYYY format.", date_str);
+                let err_msg = format!(
+                    "Invalid 'model_creation_date': {}. Must be in MM/DD/YYYY format.",
+                    date_str
+                );
                 return TokenStream::from(quote! { compile_error!(#err_msg) });
             }
             quote! { #date_str }
@@ -226,4 +230,3 @@ pub fn inference_server(input: TokenStream) -> TokenStream {
     };
     TokenStream::from(expanded)
 }
-

@@ -8,13 +8,11 @@ pub fn run() -> anyhow::Result<()> {
 
     // Execute commands
     let matches = cli.get_matches();
-    if let Some(_) = matches.subcommand_matches("models") {
+    if matches.subcommand_matches("models").is_some() {
         commands::models::handle()
-    }
-     else if let Some(args) = matches.subcommand_matches("run") {
+    } else if let Some(args) = matches.subcommand_matches("run") {
         commands::run::handle(args)
-    }
-    else {
+    } else {
         Ok(())
     }
 }

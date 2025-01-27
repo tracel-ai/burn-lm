@@ -1,16 +1,23 @@
 use axum::{
-    extract::State, http::{HeaderMap, HeaderName, HeaderValue, StatusCode}, response::{IntoResponse, Response}, Json
+    extract::State,
+    http::{HeaderMap, HeaderName, HeaderValue, StatusCode},
+    response::{IntoResponse, Response},
+    Json,
 };
 use tokio::sync::mpsc;
 use tokio_stream::{wrappers::ReceiverStream, StreamExt};
 use tracing::info;
 
 use crate::{
-    controllers::model_controllers::ModelController, errors::ServerResult, schemas::chat_schemas::{
+    controllers::model_controllers::ModelController,
+    errors::ServerResult,
+    schemas::chat_schemas::{
         ChatCompletionChunkSchema, ChatCompletionRequestSchema, ChatCompletionSchema,
         ChoiceMessageRoleSchema, ChoiceMessageSchema, ChoiceSchema, ChunkChoiceDeltaSchema,
         ChunkChoiceSchema, FinishReasonSchema, StreamingChunk, UsageSchema,
-    }, stores::model_store::ModelStoreState, utils::id::ChatCompletionId
+    },
+    stores::model_store::ModelStoreState,
+    utils::id::ChatCompletionId,
 };
 
 pub async fn chat_completions(
@@ -35,8 +42,14 @@ async fn handle_non_streaming_response(
 ) -> ServerResult<Response> {
     let store = state.lock().await;
     let plugin = store.get_model_plugin(&payload.model).await?;
-    let messages: Vec<burnlm_inference::Message> = payload.messages.to_owned().into_iter().map(Into::into).collect();
-    let json_params = serde_json::to_string(&payload.params).expect("ChatCompletionParams should serialize to a JSON string");
+    let messages: Vec<burnlm_inference::Message> = payload
+        .messages
+        .to_owned()
+        .into_iter()
+        .map(Into::into)
+        .collect();
+    let json_params = serde_json::to_string(&payload.params)
+        .expect("ChatCompletionParams should serialize to a JSON string");
     info!("PARAMS JSON: {}", json_params);
     let config = (plugin.parse_json_config_fn())(&json_params);
     plugin.set_config(config);
@@ -73,11 +86,17 @@ async fn handle_streaming_response(
         async move {
             let store = state.lock().await;
             let plugin = store.get_model_plugin(&payload.model).await.unwrap();
-            let json_params = serde_json::to_string(&payload.params).expect("ChatCompletionParams should serialize to a JSON string");
+            let json_params = serde_json::to_string(&payload.params)
+                .expect("ChatCompletionParams should serialize to a JSON string");
             info!("PARAMS JSON: {}", json_params);
             let config = (plugin.parse_json_config_fn())(&json_params);
             plugin.set_config(config);
-            let messages: Vec<burnlm_inference::Message> = payload.messages.to_owned().into_iter().map(Into::into).collect();
+            let messages: Vec<burnlm_inference::Message> = payload
+                .messages
+                .iter()
+                .cloned()
+                .map(Into::into)
+                .collect();
             let content = plugin.complete(messages).unwrap();
             tracing::debug!("Answer: {content}");
             let chunk = StreamingChunk::Data(ChatCompletionChunkSchema {
@@ -111,7 +130,7 @@ async fn handle_streaming_response(
         }
     });
 
-    let stream = ReceiverStream::new(rx).map(|item| Ok::<_, std::io::Error>(item));
+    let stream = ReceiverStream::new(rx).map(Ok::<_, std::io::Error>);
     let headers = HeaderMap::from_iter(vec![
         (
             HeaderName::from_static("content-type"),

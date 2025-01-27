@@ -44,7 +44,7 @@ pub struct Llama3ServerConfig {
     model_name = "Llama 3 (8B Instruct)",
     model_cli_param_name = "llama3",
     model_creation_date = "05/01/2024",
-    owned_by = "Tracel Technologies Inc.",
+    owned_by = "Tracel Technologies Inc."
 )]
 pub struct LlamaV3Params8BInstructServer<B: Backend> {
     server: Llama3BaseServer<B>,
@@ -52,7 +52,9 @@ pub struct LlamaV3Params8BInstructServer<B: Backend> {
 
 impl<B: Backend> Default for LlamaV3Params8BInstructServer<B> {
     fn default() -> Self {
-        Self { server: Llama3BaseServer::<B>::new(LlamaVersion::V3Instruct) }
+        Self {
+            server: Llama3BaseServer::<B>::new(LlamaVersion::V3Instruct),
+        }
     }
 }
 
@@ -77,7 +79,7 @@ impl InferenceServer for LlamaV3Params8BInstructServer<InferenceBackend> {
     model_name = "Llama 3.1 (8B Instruct)",
     model_cli_param_name = "llama31",
     model_creation_date = "05/01/2024",
-    owned_by = "Tracel Technologies Inc.",
+    owned_by = "Tracel Technologies Inc."
 )]
 pub struct LlamaV31Params8BInstructServer<B: Backend> {
     server: Llama3BaseServer<B>,
@@ -85,7 +87,9 @@ pub struct LlamaV31Params8BInstructServer<B: Backend> {
 
 impl<B: Backend> Default for LlamaV31Params8BInstructServer<B> {
     fn default() -> Self {
-        Self { server: Llama3BaseServer::<B>::new(LlamaVersion::V31Instruct) }
+        Self {
+            server: Llama3BaseServer::<B>::new(LlamaVersion::V31Instruct),
+        }
     }
 }
 
@@ -115,13 +119,13 @@ pub struct Llama3BaseServer<B: Backend> {
 unsafe impl<B: Backend> Sync for Llama3BaseServer<B> {}
 
 impl<B: Backend> Llama3BaseServer<B> {
-   pub fn new(version: LlamaVersion) -> Self {
-       Self {
-           config: Llama3ServerConfig::default(),
-           model: None,
-           version
-       }
-   }
+    pub fn new(version: LlamaVersion) -> Self {
+        Self {
+            config: Llama3ServerConfig::default(),
+            model: None,
+            version,
+        }
+    }
 }
 
 impl InferenceServer for Llama3BaseServer<InferenceBackend> {
@@ -168,8 +172,11 @@ impl Llama3BaseServer<InferenceBackend> {
         if self.model.is_none() {
             self.model = match self.version {
                 LlamaVersion::V3Instruct => Some(
-                    llama::LlamaConfig::llama3_8b_pretrained::<InferenceBackend>(self.config.max_seq_len, &INFERENCE_DEVICE)
-                        .unwrap(),
+                    llama::LlamaConfig::llama3_8b_pretrained::<InferenceBackend>(
+                        self.config.max_seq_len,
+                        &INFERENCE_DEVICE,
+                    )
+                    .unwrap(),
                 ),
                 LlamaVersion::V31Instruct => Some(
                     llama::LlamaConfig::llama3_1_8b_pretrained::<InferenceBackend>(
@@ -183,13 +190,15 @@ impl Llama3BaseServer<InferenceBackend> {
         Ok(())
     }
 
-    fn prompt(&self, messages: Vec<burnlm_inference::message::Message>) -> burnlm_inference::errors::InferenceResult<burnlm_inference::Prompt> {
+    fn prompt(
+        &self,
+        messages: Vec<burnlm_inference::message::Message>,
+    ) -> burnlm_inference::errors::InferenceResult<burnlm_inference::Prompt> {
         let mut prompt: Vec<String> = vec![];
         for message in messages {
             prompt.push(format!(
                 "<|start_header_id|>{}<|end_header_id|>\n\n{}<|eot_id|>",
-                message.role.to_string(),
-                message.content
+                message.role, message.content
             ));
         }
         let mut prompt = prompt.join("\n");

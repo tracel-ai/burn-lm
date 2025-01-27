@@ -32,7 +32,7 @@ pub(crate) async fn start_chat() -> anyhow::Result<()> {
     up_docker_compose()?;
     info!("Launching chat stack...",);
     StdCommand::new("mprocs")
-        .args(["--config", &mproc_config])
+        .args(["--config", mproc_config])
         .status()
         .map_err(|e| anyhow::anyhow!("Failed to start chat: {e}"))?;
     info!("Chat shutdown!",);

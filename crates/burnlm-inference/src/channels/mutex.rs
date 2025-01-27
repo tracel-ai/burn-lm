@@ -10,10 +10,16 @@ pub struct MutexChannel<Server: InferenceServer> {
     server: Arc<Mutex<Server>>,
 }
 
+impl<Server: InferenceServer> Default for MutexChannel<Server> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<Server: InferenceServer> MutexChannel<Server> {
     pub fn new() -> Self {
         Self {
-            server: Arc::new(Mutex::new(Server::default()))
+            server: Arc::new(Mutex::new(Server::default())),
         }
     }
 }

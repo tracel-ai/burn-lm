@@ -38,10 +38,7 @@ impl Tokenizer for SentiencePieceTokenizer {
 
     fn decode(&self, tokens: Vec<u32>) -> String {
         self.bpe
-            .decode(
-                &tokens.into_iter().map(|t| t as u32).collect::<Vec<u32>>(),
-                true,
-            )
+            .decode(&tokens.into_iter().collect::<Vec<u32>>(), true)
             .unwrap()
     }
 

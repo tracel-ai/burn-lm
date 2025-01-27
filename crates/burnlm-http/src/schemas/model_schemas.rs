@@ -1,7 +1,7 @@
 use burnlm_inference::InferencePlugin;
+use chrono::NaiveDate;
 use serde::Serialize;
 use utoipa::ToSchema;
-use chrono::NaiveDate;
 
 #[derive(Clone, Debug, Serialize, ToSchema)]
 pub struct ModelSchema {
@@ -13,7 +13,8 @@ pub struct ModelSchema {
 
 impl From<&Box<dyn InferencePlugin>> for ModelSchema {
     fn from(plugin: &Box<dyn InferencePlugin>) -> Self {
-        let created_date = NaiveDate::parse_from_str(&plugin.model_creation_date(), "%m/%d/%Y").expect("Valid date format expected (MM/DD/YYYY)");
+        let created_date = NaiveDate::parse_from_str(plugin.model_creation_date(), "%m/%d/%Y")
+            .expect("Valid date format expected (MM/DD/YYYY)");
         let created = created_date
             .and_hms_opt(0, 0, 0)
             .expect("Should be a valid time using MM/DD/YYYY format")
@@ -27,7 +28,6 @@ impl From<&Box<dyn InferencePlugin>> for ModelSchema {
         }
     }
 }
-
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct ModelResponseSchema {

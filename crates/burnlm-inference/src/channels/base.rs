@@ -1,5 +1,5 @@
-use std::fmt::Debug;
 use std::any::Any;
+use std::fmt::Debug;
 
 use crate::{errors::InferenceResult, message::Message, server::InferenceServer, Completion};
 

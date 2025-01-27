@@ -5,22 +5,18 @@ version.workspace = true
 license.workspace = true
 readme.workspace = true
 
-[lib]
-name = "burnlm_registry"
-crate-type = ["dylib"]
-
 [features]
 default = ["tracel-plugins"]
 
 tracel-plugins = [
-"burnlm-plugin-llama3",
-"burnlm-plugin-tinyllama",
+"burnlm-inference-llama3",
+"burnlm-inference-tinyllama",
 ]
 
 community-plugins = []
 
 [dependencies]
 burnlm-inference = { path = "../burnlm-inference" }
-burnlm-plugin-llama3 = { path = "../burnlm-plugin-llama3", optional = true }
-burnlm-plugin-tinyllama = { path = "../burnlm-plugin-tinyllama", optional = true }
+burnlm-inference-llama3 = { path = "../burnlm-inference-llama3", optional = true }
+burnlm-inference-tinyllama = { path = "../burnlm-inference-tinyllama", optional = true }
 burn = { workspace = true }

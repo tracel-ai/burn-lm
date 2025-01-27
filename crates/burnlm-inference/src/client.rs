@@ -1,6 +1,13 @@
 use std::{any::Any, marker::PhantomData};
 
-use crate::{channels::InferenceChannel, errors::InferenceResult, message::Message, plugin::{CreateCliFlagsFn, InferencePlugin, ParseCliFlagsFn, ParseJSONConfigFn}, server::InferenceServer, Completion};
+use crate::{
+    channels::InferenceChannel,
+    errors::InferenceResult,
+    message::Message,
+    plugin::{CreateCliFlagsFn, InferencePlugin, ParseCliFlagsFn, ParseJSONConfigFn},
+    server::InferenceServer,
+    Completion,
+};
 
 #[derive(Debug)]
 pub struct InferenceClient<Server: InferenceServer, Channel> {
@@ -19,13 +26,15 @@ unsafe impl<Server, Channel> Sync for InferenceClient<Server, Channel>
 where
     Server: InferenceServer,
     Channel: InferenceChannel<Server>,
-{}
+{
+}
 
 impl<Server, Channel> InferenceClient<Server, Channel>
 where
     Server: InferenceServer,
     Channel: InferenceChannel<Server>,
 {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         model_name: &'static str,
         model_cli_param_name: &'static str,

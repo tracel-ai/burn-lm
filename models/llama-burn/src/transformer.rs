@@ -84,7 +84,7 @@ impl<B: Backend> Transformer<B> {
     ) -> Tensor<B, 3> {
         let mut h = self.tok_embeddings.forward(input);
 
-        for (layer, c) in self.layers.iter().zip(cache.into_iter()) {
+        for (layer, c) in self.layers.iter().zip(cache.iter_mut()) {
             h = layer.forward(h, c, rope);
         }
 

@@ -20,50 +20,23 @@ pub enum LlamaVersion {
     V31Instruct,
 }
 
-#[derive(Parser, Deserialize, Debug)]
+#[inference_server_config]
 pub struct Llama3ServerConfig {
     /// Top-p probability threshold.
-    #[arg(long, default_value_t = Llama3ServerConfig::default_top_p())]
-    #[serde(default = "Llama3ServerConfig::default_top_p")]
+    #[config(default = 0.9)]
     pub top_p: f64,
     /// Temperature value for controlling randomness in sampling.
-    #[arg(long, default_value_t = Llama3ServerConfig::default_temperature())]
-    #[serde(default = "Llama3ServerConfig::default_temperature")]
+    #[config(default = 0.6)]
     pub temperature: f64,
     /// Maximum sequence length for input text.
-    #[arg(long, default_value_t = Llama3ServerConfig::default_max_seq_len())]
-    #[serde(default = "Llama3ServerConfig::default_max_seq_len")]
+    #[config(default = 1024)]
     pub max_seq_len: usize,
     /// The number of new tokens to generate (i.e., the number of generation steps to take).
-    #[arg(long, default_value_t = Llama3ServerConfig::default_sample_len())]
-    #[serde(default = "Llama3ServerConfig::default_sample_len")]
+    #[config(default = 128)]
     pub sample_len: usize,
     /// The seed to use when generating random samples. If it is 0 then a random seed is used for each inference.
-    #[arg(long, default_value_t = Llama3ServerConfig::default_seed())]
-    #[serde(default = "Llama3ServerConfig::default_seed")]
+    #[config(default = 0)]
     pub seed: u64,
-}
-
-impl InferenceServerConfig for Llama3ServerConfig {}
-
-impl Llama3ServerConfig {
-    fn default_top_p() -> f64 { 0.9 }
-    fn default_temperature() -> f64 { 0.6 }
-    fn default_max_seq_len() -> usize { 1024 }
-    fn default_sample_len() -> usize { 1024 }
-    fn default_seed() -> u64 { 0 }
-}
-
-impl Default for Llama3ServerConfig {
-    fn default() -> Self {
-        Self {
-            top_p: Llama3ServerConfig::default_top_p(),
-            temperature: Llama3ServerConfig::default_temperature(),
-            max_seq_len: Llama3ServerConfig::default_max_seq_len(),
-            sample_len: Llama3ServerConfig::default_sample_len(),
-            seed: Llama3ServerConfig::default_seed(),
-        }
-    }
 }
 
 #[derive(InferenceServer, Debug)]

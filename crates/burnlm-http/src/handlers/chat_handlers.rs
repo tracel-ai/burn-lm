@@ -74,6 +74,7 @@ async fn handle_streaming_response(
             let store = state.lock().await;
             let plugin = store.get_model_plugin(&payload.model).await.unwrap();
             let json_params = serde_json::to_string(&payload.params).expect("ChatCompletionParams should serialize to a JSON string");
+            info!("PARAMS JSON: {}", json_params);
             let config = (plugin.parse_json_config_fn())(&json_params);
             plugin.set_config(config);
             let messages: Vec<burnlm_inference::Message> = payload.messages.to_owned().into_iter().map(Into::into).collect();

@@ -24,7 +24,9 @@ license = "MIT OR Apache-2.0"
 readme = "README.md"
 
 [workspace.dependencies]
-burn = { version = "0.14.0", default-features = false, features = ["std"] }
+# NOTE: autotune and fusion are disabled without default features 
+# (and autotune is not correctly propagated to cuda if manually enabled)
+burn = { version = "0.16.0", default-features = false, features = ["std"] }
 
 anyhow = "1.0.95"
 axum = { version = "0.7.9", features = ["macros"] }

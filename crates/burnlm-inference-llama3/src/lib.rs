@@ -198,11 +198,12 @@ impl Llama3BaseServer<InferenceBackend> {
         for message in messages {
             prompt.push(format!(
                 "<|start_header_id|>{}<|end_header_id|>\n\n{}<|eot_id|>",
-                message.role, message.content
+                message.role.to_string().to_lowercase(),
+                message.content
             ));
         }
-        let mut prompt = prompt.join("\n");
-        prompt.push_str("<|assistant|>\n");
+        let mut prompt = prompt.join("");
+        prompt.push_str("<|start_header_id|>assistant<|end_header_id|>\n\n");
         Ok(prompt)
     }
 }

@@ -27,7 +27,7 @@ pub(crate) fn handle(args: &clap::ArgMatches) -> anyhow::Result<()> {
     let plugin = registry
         .get()
         .iter()
-        .find(|(name, _)| (**name).to_lowercase() == plugin_name.to_lowercase())
+        .find(|(_, p)| p.model_cli_param_name() == plugin_name.to_lowercase())
         .map(|(_, plugin)| plugin);
     let plugin = plugin.unwrap_or_else(|| panic!("Plugin should be registered: {plugin_name}"));
     let config_flags = args

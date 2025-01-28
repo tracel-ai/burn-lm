@@ -7,7 +7,7 @@ use proc_macro::TokenStream;
 use quote::{format_ident, quote};
 use syn::{parse_macro_input, punctuated::Punctuated, DeriveInput, ItemStruct};
 
-// InferenceSeverConfig
+// InferenceSeverConfig ------------------------------------------------------
 
 /// This macro consumes the struct, extracts any `#[config(default = ...)]` attributes
 /// and regenerates a brand-new struct with:
@@ -42,6 +42,7 @@ struct InferenceServerConfigField {
     attrs: Vec<syn::Attribute>,
     #[darling(default)]
     default: Option<syn::Lit>,
+    openwebui_param: Option<syn::LitStr>,
 }
 
 impl InferenceServerConfigReceiver {
@@ -87,11 +88,16 @@ impl InferenceServerConfigReceiver {
             let serde_default_string = format!("{}::{}", struct_name, default_fn_name);
             let serde_default_lit_str =
                 syn::LitStr::new(&serde_default_string, proc_macro2::Span::call_site());
+            // map config to open webui parameter name
+            let serde_rename = match &f.openwebui_param {
+                Some(lit) => lit.clone(),
+                None => syn::LitStr::new(&field_ident.to_string(), proc_macro2::Span::call_site()),
+            };
             // rewritten field
             quote! {
                 #(#docs)*
                 #[arg(long, default_value_t = #struct_name::#default_fn_name())]
-                #[serde(default = #serde_default_lit_str)]
+                #[serde(default = #serde_default_lit_str, rename = #serde_rename)]
                 pub #field_ident: #field_ty,
             }
         });
@@ -158,7 +164,7 @@ impl InferenceServerConfigReceiver {
     }
 }
 
-// InferenceServer
+// InferenceServer -----------------------------------------------------------
 
 #[derive(FromDeriveInput, Default)]
 #[darling(default, attributes(inference_server))]
@@ -234,7 +240,7 @@ pub fn inference_server(input: TokenStream) -> TokenStream {
     TokenStream::from(expanded)
 }
 
-// Register inference servers
+// Register inference servers ------------------------------------------------
 
 #[derive(Debug, FromMeta)]
 struct InferenceServerEntry {

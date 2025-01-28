@@ -6,13 +6,13 @@ pub struct ChatCompletionRequestSchema {
     pub model: String,
     pub messages: Vec<ChoiceMessageSchema>,
     #[serde(flatten)]
-    pub params: ChatCompletionParams,
+    pub params: ChatCompletionParamsSchema,
     #[serde(default)]
     pub stream: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
-pub struct ChatCompletionParams {
+pub struct ChatCompletionParamsSchema {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub seed: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]

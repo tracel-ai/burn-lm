@@ -40,8 +40,6 @@ pub struct TinyLlamaServer<B: Backend> {
     model: Option<Llama<B, SentiencePieceTokenizer>>,
 }
 
-unsafe impl<B: Backend> Sync for TinyLlamaServer<B> {}
-
 impl InferenceServer for TinyLlamaServer<InferenceBackend> {
     type Config = TinyLlamaServerConfig;
 

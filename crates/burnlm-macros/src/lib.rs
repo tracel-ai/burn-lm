@@ -1,10 +1,12 @@
+use std::collections::BTreeSet;
+
 use chrono::NaiveDate;
 use darling::{
     ast::{self, NestedMeta},
     FromDeriveInput, FromField, FromMeta,
 };
 use proc_macro::TokenStream;
-use quote::{format_ident, quote};
+use quote::quote;
 use syn::{parse_macro_input, punctuated::Punctuated, DeriveInput, ItemStruct};
 
 // InferenceSeverConfig ------------------------------------------------------
@@ -228,6 +230,10 @@ pub fn inference_server(input: TokenStream) -> TokenStream {
             return TokenStream::from(quote! { compile_error!(#err_msg) });
         }
     };
+    // Generate Sync trait implementation
+    let sync_marker_trait = quote! {
+        unsafe impl #input_generics_impl Sync for #input_ident #input_generics_type #input_generics_where_clause {}
+    };
 
     let expanded = quote! {
         impl #input_generics_impl #input_ident #input_generics_type #input_generics_where_clause {
@@ -236,6 +242,8 @@ pub fn inference_server(input: TokenStream) -> TokenStream {
             pub const fn model_creation_date() -> &'static str { #model_creation_date }
             pub const fn owned_by() -> &'static str { #owned_by }
         }
+        // Sync marker
+        #sync_marker_trait
     };
     TokenStream::from(expanded)
 }
@@ -244,7 +252,7 @@ pub fn inference_server(input: TokenStream) -> TokenStream {
 
 #[derive(Debug, FromMeta)]
 struct InferenceServerEntry {
-    server_name: String,
+    crate_namespace: String,
     #[darling(rename = "server_type")]
     server_ty: String,
 }
@@ -276,14 +284,14 @@ pub fn inference_server_registry(attr: TokenStream, item: TokenStream) -> TokenS
     };
     let input_struct = parse_macro_input!(item as ItemStruct);
     let struct_ident = &input_struct.ident;
-    // generate type aliases and hash map entry for each server entry
-    let mut type_aliases = Vec::new();
+    // generate hash map entry for each server entry
     let mut registry_entries = Vec::new();
+    let mut crate_namespaces = BTreeSet::new();
     for server in &registry_args.servers {
-        let type_prefix_str = &server.server_name;
+        // crate namespaces set
+        crate_namespaces.insert(&server.crate_namespace);
+        // registry hash map entry
         let server_ty_str = &server.server_ty;
-        let server_alias_id = format_ident!("{}S", type_prefix_str);
-        let client_alias_id = format_ident!("{}C", type_prefix_str);
         let server_ty: syn::Type = match syn::parse_str(server_ty_str) {
             Ok(ty) => ty,
             Err(e) => {
@@ -296,23 +304,17 @@ pub fn inference_server_registry(attr: TokenStream, item: TokenStream) -> TokenS
                     )),
                     msg,
                 )
-                .to_compile_error()
-                .into();
+                    .to_compile_error()
+                    .into();
             }
         };
-        // Type aliases
-        let aliases = quote! {
-            pub type #server_alias_id = #server_ty;
-            pub type #client_alias_id = InferenceClient<#server_alias_id, Channel<#server_alias_id>>;
-        };
-        type_aliases.push(aliases);
-        // registry hash map entry
         let registry_entry = quote! {
             {
-                type S = #server_alias_id;
+                type S = #server_ty;
+                type C = InferenceClient<#server_ty, Channel<#server_ty>>;
                 map.insert(
                     S::model_name(),
-                    Box::new(#client_alias_id::new(
+                    Box::new(C::new(
                         S::model_name(),
                         S::model_cli_param_name(),
                         S::model_creation_date(),
@@ -327,11 +329,20 @@ pub fn inference_server_registry(attr: TokenStream, item: TokenStream) -> TokenS
         };
         registry_entries.push(registry_entry);
     }
+    // Imports
+    let mut crate_imports = Vec::new();
+    for namespace in crate_namespaces {
+        let crate_path: syn::Path = syn::parse_str(&namespace).expect("crate namespace should be a valid path");
+        let use_crate = quote! {
+            pub use #crate_path::*;
+        };
+        crate_imports.push(use_crate);
+    };
 
     // Output
     let output = quote! {
-        // Type aliases
-        #(#type_aliases)*
+        // imports
+        #(#crate_imports)*
         // Original struct
         #input_struct
         // new() implementation

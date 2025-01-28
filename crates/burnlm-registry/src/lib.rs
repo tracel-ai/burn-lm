@@ -7,21 +7,23 @@ pub type Channel<B> = MutexChannel<B>;
 pub type DynClients = HashMap<&'static str, Box<dyn InferencePlugin>>;
 
 // Register model crates
-pub use burnlm_inference_llama3::*;
-pub use burnlm_inference_tinyllama::*;
 #[inference_server_registry(
     server(
-        server_name = "TinyLlama",
-        server_type = "TinyLlamaServer<InferenceBackend>"
+        crate_namespace = "burnlm_inference_llama3",
+        server_type = "LlamaV3Params8BInstructServer<InferenceBackend>",
     ),
     server(
-        server_name = "Llama3",
-        server_type = "LlamaV3Params8BInstructServer<InferenceBackend>"
+        crate_namespace = "burnlm_inference_llama3",
+        server_type = "LlamaV31Params8BInstructServer<InferenceBackend>",
     ),
     server(
-        server_name = "Llama31",
-        server_type = "LlamaV31Params8BInstructServer<InferenceBackend>"
-    )
+        crate_namespace = "burnlm_inference_template",
+        server_type = "ParrotServer<InferenceBackend>",
+    ),
+    server(
+        crate_namespace = "burnlm_inference_tinyllama",
+        server_type = "TinyLlamaServer<InferenceBackend>",
+    ),
 )]
 #[derive(Debug)]
 pub struct Registry {

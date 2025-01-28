@@ -1,0 +1,19 @@
+[package]
+name = "burnlm-inference-template"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+readme.workspace = true
+
+[features]
+default = ["tch-gpu"]
+
+tch-gpu = ["burn/tch", "burnlm-inference/tch-gpu"]
+
+[dependencies]
+burn = { workspace = true }
+burnlm-inference = { path = "../burnlm-inference" }
+
+rand = { workspace = true }
+serde = { workspace = true }
+

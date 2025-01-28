@@ -782,6 +782,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "burnlm-inference-template"
+version = "0.0.1"
+dependencies = [
+ "burn",
+ "burnlm-inference",
+ "rand",
+ "serde",
+]
+
+[[package]]
 name = "burnlm-inference-tinyllama"
 version = "0.0.1"
 dependencies = [
@@ -810,6 +820,7 @@ dependencies = [
  "burn",
  "burnlm-inference",
  "burnlm-inference-llama3",
+ "burnlm-inference-template",
  "burnlm-inference-tinyllama",
  "burnlm-macros",
 ]

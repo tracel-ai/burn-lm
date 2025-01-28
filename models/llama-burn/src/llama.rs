@@ -1,4 +1,11 @@
-use std::time::Instant;
+use std::{
+    sync::{
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+        mpsc::Sender,
+        Arc,
+    },
+    time::Instant,
+};
 
 use burn::{
     config::Config,
@@ -597,6 +604,75 @@ pub struct GenerationOutput {
     pub time: f64,
 }
 
+#[derive(Clone)]
+/// The text generation state, used to check when a stop token has been reached.
+pub struct TextGenerationState<B: Backend> {
+    tokens: Tensor<B, 1, Int>,
+    num_tokens: usize,
+    stop: Arc<AtomicBool>,
+    num_generated: Arc<AtomicUsize>,
+    sender: Sender<Tensor<B, 1, Int>>,
+}
+
+impl<B: Backend> TextGenerationState<B> {
+    /// Create a new instance.
+    pub fn new(max_sample_len: usize, stop_tokens: Tensor<B, 1, Int>) -> Self {
+        let (sender, receiver) = std::sync::mpsc::channel::<Tensor<B, 1, Int>>();
+        let stop = Arc::new(AtomicBool::new(false));
+        let num_generated = Arc::new(AtomicUsize::new(0));
+        let num_generated_clone = Arc::clone(&num_generated);
+        let state_clone = Arc::clone(&stop);
+        let device = stop_tokens.device();
+
+        std::thread::spawn(move || {
+            for tokens in receiver.iter() {
+                let num_tokens = tokens.shape().num_elements();
+                let total_num_tokens = num_generated_clone.load(Ordering::Relaxed) + num_tokens;
+                if stop_tokens.clone().equal(tokens).any().into_scalar() {
+                    state_clone.store(true, Ordering::Relaxed);
+                }
+                num_generated_clone.store(total_num_tokens, Ordering::Relaxed);
+            }
+        });
+
+        Self {
+            tokens: Tensor::<B, 1, Int>::empty([max_sample_len], &device),
+            num_tokens: 0,
+            stop,
+            num_generated,
+            sender,
+        }
+    }
+
+    /// Add generated tokens to the state (without checking for stop condition).
+    pub fn append(&mut self, tokens: Tensor<B, 1, Int>) {
+        let num_tokens_prev = self.num_tokens;
+        self.num_tokens += tokens.shape().num_elements();
+        self.tokens = self
+            .tokens
+            .clone()
+            .slice_assign([num_tokens_prev..self.num_tokens], tokens);
+    }
+
+    /// Update the state with newly generated tokens.
+    pub fn update(&mut self, tokens: Tensor<B, 1, Int>) {
+        self.append(tokens.clone());
+        if !self.should_stop() {
+            self.sender.send(tokens).unwrap();
+        }
+    }
+
+    /// True if the state previously detected a stop token.
+    pub fn should_stop(&self) -> bool {
+        self.stop.load(Ordering::Relaxed)
+    }
+
+    /// Returns the number of tokens generated.
+    pub fn num_tokens_generated(&self) -> usize {
+        self.num_generated.load(Ordering::Relaxed)
+    }
+}
+
 /// Meta Llama large language model and tokenizer.
 #[derive(Debug)]
 pub struct Llama<B: Backend, T: Tokenizer> {
@@ -632,16 +708,24 @@ impl<B: Backend, T: Tokenizer> Llama<B, T> {
     ) -> GenerationOutput {
         let input_tokens = self.tokenize(prompt);
         let prompt_len = input_tokens.dims()[0];
-        let mut tokens = Tensor::<B, 1, Int>::empty([prompt_len + sample_len], &self.device);
-        tokens = tokens.slice_assign([0..prompt_len], input_tokens);
 
-        let stop_tokens = Tensor::from_ints(self.tokenizer.stop_ids().as_slice(), &self.device);
+        let mut state = TextGenerationState::new(
+            prompt_len + sample_len,
+            Tensor::from_ints(self.tokenizer.stop_ids().as_slice(), &self.device),
+        );
+        state.append(input_tokens);
 
-        let mut num_tokens: usize = 0;
         let mut input_pos = Tensor::<B, 1, Int>::arange(0..prompt_len as i64, &self.device);
         let now = Instant::now();
-        for i in 0..sample_len {
-            let x = tokens.clone().select(0, input_pos.clone()).reshape([1, -1]);
+        for _ in 0..sample_len {
+            if state.should_stop() {
+                break;
+            }
+            let x = state
+                .tokens
+                .clone()
+                .select(0, input_pos.clone())
+                .reshape([1, -1]);
             let logits = self.model.forward(x, &mut self.cache, &self.rope);
 
             let [batch_size, seq_len, _vocab_size] = logits.dims();
@@ -655,28 +739,20 @@ impl<B: Backend, T: Tokenizer> Llama<B, T> {
 
             let next_token = sampler.sample(next_token_logits).squeeze(0);
 
-            // Stop when any of the valid stop tokens is encountered
-            if stop_tokens
-                .clone()
-                .equal(next_token.clone())
-                .any()
-                .into_scalar()
-            {
-                break;
-            }
-
             // Update with the new generated token
-            tokens = tokens.slice_assign([prompt_len + i..prompt_len + i + 1], next_token);
-            num_tokens += 1;
+            state.update(next_token);
 
             // Advance
             let t = input_pos.dims()[0];
             input_pos = input_pos.slice([t - 1..t]) + 1;
         }
 
-        let tokens = tokens.into_data().as_slice::<B::IntElem>().unwrap()
-            [prompt_len..prompt_len + num_tokens]
-            .iter()
+        let num_tokens = state.num_tokens_generated();
+        let tokens = state
+            .tokens
+            .slice([prompt_len..prompt_len + num_tokens - 1]) // -1 to ignore stop token
+            .into_data()
+            .iter::<B::IntElem>()
             .map(|t| t.elem::<u32>())
             .collect::<Vec<_>>();
 

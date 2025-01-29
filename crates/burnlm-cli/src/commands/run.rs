@@ -2,7 +2,7 @@ use burnlm_inference::{message::MessageRole, Message};
 use burnlm_registry::Registry;
 
 pub(crate) fn create() -> clap::Command {
-    let mut root = clap::Command::new("run").about("Run inference on chosen model");
+    let mut root = clap::Command::new("run").about("Run inference on chosen model in the terminal");
     let registry = Registry::new();
     // Create a a subcommand for each registered model with its associated  flags
     for (_name, plugin) in registry.get().iter() {

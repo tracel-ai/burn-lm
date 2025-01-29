@@ -5,7 +5,8 @@ pub fn run() -> anyhow::Result<()> {
     let cli = clap::command!()
         .subcommand(commands::models::create())
         .subcommand(commands::run::create())
-        .subcommand(commands::new::create());
+        .subcommand(commands::new::create())
+        .subcommand(commands::web::create());
 
     // Execute commands
     let matches = cli.get_matches();
@@ -15,6 +16,8 @@ pub fn run() -> anyhow::Result<()> {
         commands::new ::handle(args)
     } else if let Some(args) = matches.subcommand_matches("run") {
         commands::run::handle(args)
+    } else if let Some(args) = matches.subcommand_matches("web") {
+        commands::web::handle(args)
     } else {
         Ok(())
     }

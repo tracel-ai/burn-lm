@@ -23,7 +23,7 @@ First make sure `docker` is available on your system.
 Then execute the command:
 
 ```sh
-cargo xtask chat start
+cargo burnlm web start
 ```
 
 Open http://localhost:3000 in your browser.

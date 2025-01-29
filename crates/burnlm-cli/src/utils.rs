@@ -69,6 +69,35 @@ pub(crate) fn replace_in_file<P: AsRef<std::path::Path>>(path: P, replacements: 
         .expect("should write the updated content successfully");
 }
 
+/// Run a process
+pub(crate) fn run_process(
+    name: &str,
+    args: &[&str],
+    envs: Option<std::collections::HashMap<&str, &str>>,
+    path: Option<&std::path::Path>,
+    error_msg: &str,
+) -> anyhow::Result<()> {
+    let mut command = std::process::Command::new(name);
+    if let Some(path) = path {
+        command.current_dir(path);
+    }
+    if let Some(envs) = envs {
+        command.envs(&envs);
+    }
+    let status = command.args(args).status().map_err(|e| {
+        anyhow::anyhow!(
+            "Failed to execute {} {}: {}",
+            name,
+            args.first().unwrap(),
+            e
+        )
+    })?;
+    if !status.success() {
+        return Err(anyhow::anyhow!("{}", error_msg));
+    }
+    anyhow::Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

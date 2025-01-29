@@ -18,7 +18,7 @@ tinyllama = ["llama-burn/tiny"]
 # Burn backends
 tch-cpu = ["burn/tch"]
 tch-gpu = ["burn/tch"]
-cuda = ["burn/cuda-jit"]
+cuda = ["burn/cuda"]
 wgpu = ["burn/wgpu"]
 
 [dependencies]

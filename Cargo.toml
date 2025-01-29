@@ -22,7 +22,10 @@ license = "MIT OR Apache-2.0"
 readme = "README.md"
 
 [workspace.dependencies]
-burn = { version = "0.14.0", default-features = false, features = ["std"] }
+# NOTE: autotune and fusion are disabled without default features 
+# (and autotune is not correctly propagated to cuda if manually enabled)
+burn = { version = "0.17.0", default-features = false, features = ["std"] }
+burn-import = { version = "0.17.0" }
 
 anyhow = "1.0.95"
 axum = { version = "0.7.9", features = ["macros"] }
@@ -65,6 +68,11 @@ tokenizers = { version = "0.19.1", default-features = false, features = ["onig"]
 
 ### For xtask crate ###
 tracel-xtask = { version = "=1.1.8" }
+
+# For dev we use the latest burn revision
+[patch.crates-io]
+burn = { git = "https://github.com/tracel-ai/burn", rev = "04c5e74daac2adbfda4f5293746bc37ab6be56ea" }
+burn-import = { git = "https://github.com/tracel-ai/burn", rev = "04c5e74daac2adbfda4f5293746bc37ab6be56ea" }
 
 [profile.dev]
 debug = 0 # Speed up compilation time and not necessary.

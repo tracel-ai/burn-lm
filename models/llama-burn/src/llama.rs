@@ -1,4 +1,11 @@
-use std::time::Instant;
+use std::{
+    sync::{
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+        mpsc::Sender,
+        Arc,
+    },
+    time::Instant,
+};
 
 use burn::{
     config::Config,
@@ -51,27 +58,74 @@ pub struct LlamaConfig {
     /// RMSNorm epsilon
     #[config(default = "1e-5")]
     pub norm_eps: f64,
-    /// Rotary positional encoding (RoPE) theta.
-    #[config(default = "10000.0")]
-    pub rope_theta: f32,
-    /// Use scaled RoPE.
-    #[config(default = "false")]
-    pub rope_scaled: bool,
+    /// Rotary positional encoding (RoPE).
+    #[config(default = "RopeConfig::new(10000.0)")]
+    pub rope: RopeConfig,
     /// Maximum sequence length for input text.
     #[config(default = "128")]
     pub max_seq_len: usize,
+    /// Maximum batch size (used for key-value cache).
+    #[config(default = "1")]
+    pub max_batch_size: usize,
     /// The tokenizer path.
     pub tokenizer: String,
 }
 
+/// Rotary positional encoding (RoPE)
+#[derive(Config, Debug)]
+pub struct RopeConfig {
+    pub theta: f32,
+    #[config(default = "None")]
+    pub scaled: Option<RopeFrequencyScaling>,
+}
+
+/// RoPE frequency scaling.
+#[derive(Config, Debug)]
+pub struct RopeFrequencyScaling {
+    #[config(default = "8.")]
+    pub scale_factor: f32,
+    #[config(default = "1.")]
+    pub low_freq_factor: f32,
+    #[config(default = "4.")]
+    pub high_freq_factor: f32,
+    #[config(default = "8192.")]
+    pub old_context_len: f32,
+}
+
 impl LlamaConfig {
+    /// Llama-3.2-3B configuration.
+    pub fn llama3_2_3b(tokenizer_path: &str) -> Self {
+        // hidden_size = 8192; vocab_size = 128256
+        Self::new(8192, 128256, tokenizer_path.to_string())
+            .with_d_model(3072)
+            .with_num_hidden_layers(28)
+            .with_num_attention_heads(24)
+            .with_num_key_value_heads(Some(8))
+            .with_rope(
+                RopeConfig::new(500000.0)
+                    .with_scaled(Some(RopeFrequencyScaling::new().with_scale_factor(32.))),
+            )
+    }
+
+    /// Llama-3.2-1B configuration.
+    pub fn llama3_2_1b(tokenizer_path: &str) -> Self {
+        // hidden_size = 8192; vocab_size = 128256
+        Self::new(8192, 128256, tokenizer_path.to_string())
+            .with_d_model(2048)
+            .with_num_hidden_layers(16)
+            .with_num_key_value_heads(Some(8))
+            .with_rope(
+                RopeConfig::new(500000.0)
+                    .with_scaled(Some(RopeFrequencyScaling::new().with_scale_factor(32.))),
+            )
+    }
+
     /// Llama-3.1-8B configuration.
     pub fn llama3_1_8b(tokenizer_path: &str) -> Self {
         // hidden_size = 14336; vocab_size = 128256
         Self::new(14336, 128256, tokenizer_path.to_string())
             .with_num_key_value_heads(Some(8))
-            .with_rope_theta(500000.0)
-            .with_rope_scaled(true)
+            .with_rope(RopeConfig::new(500000.0).with_scaled(Some(RopeFrequencyScaling::new())))
     }
 
     /// Llama-3-8B configuration.
@@ -79,7 +133,7 @@ impl LlamaConfig {
         // hidden_size = 14336; vocab_size = 128256
         Self::new(14336, 128256, tokenizer_path.to_string())
             .with_num_key_value_heads(Some(8))
-            .with_rope_theta(500000.0)
+            .with_rope(RopeConfig::new(500000.0))
     }
 
     /// TinyLlama-1.1B Chat v1.0 configuration.
@@ -89,7 +143,111 @@ impl LlamaConfig {
             .with_d_model(2048)
             .with_num_hidden_layers(22)
             .with_num_key_value_heads(Some(4))
-            .with_rope_theta(10000.0)
+            .with_rope(RopeConfig::new(10000.0))
+    }
+
+    /// Load pre-trained Llama-3.2-3B model with [Tiktoken](https://github.com/openai/tiktoken) tokenizer.
+    #[cfg(feature = "llama3")]
+    pub fn load_llama3_2_3b<B: Backend>(
+        checkpoint: &str,
+        tokenizer_path: &str,
+        max_seq_len: usize,
+        device: &Device<B>,
+    ) -> Result<Llama<B, Tiktoken>, String> {
+        use burn::record::NamedMpkFileRecorder;
+
+        let llama = Self::llama3_2_3b(tokenizer_path)
+            .with_max_seq_len(max_seq_len)
+            .init::<B, Tiktoken>(device)?;
+
+        let recorder = NamedMpkFileRecorder::<HalfPrecisionSettings>::new();
+        let llama = llama
+            .load(checkpoint, &recorder)
+            .map_err(|err| format!("Failed to load pre-trained Llama model.\nError: {err}"))?;
+
+        Ok(llama)
+    }
+
+    /// Load pre-trained Llama-3.2-3B-Instruct model with [Tiktoken](https://github.com/openai/tiktoken) tokenizer.
+    ///
+    /// # Arguments
+    /// - `max_seq_len` - The maximum sequence length for input text.
+    /// - `device` - The device to load the model on.
+    #[cfg(all(feature = "llama3", feature = "pretrained"))]
+    pub fn llama3_2_3b_pretrained<B: Backend>(
+        max_seq_len: usize,
+        device: &Device<B>,
+    ) -> Result<Llama<B, Tiktoken>, String> {
+        // Llama-3.2 models support context length up to 128K tokens.
+        check_context_length(max_seq_len, 128 * 1024);
+
+        // Download checkpoint and tokenizer
+        let model = pretrained::Llama::Llama323bInstruct.pretrained();
+        let checkpoint = model
+            .download_weights()
+            .map_err(|err| format!("Could not download weights.\nError: {err}"))?;
+        let tokenizer = model
+            .download_tokenizer()
+            .map_err(|err| format!("Could not download tokenizer.\nError: {err}"))?;
+
+        Self::load_llama3_2_3b(
+            checkpoint.to_str().unwrap(),
+            tokenizer.to_str().unwrap(),
+            max_seq_len,
+            device,
+        )
+    }
+
+    /// Load pre-trained Llama-3.2-1B model with [Tiktoken](https://github.com/openai/tiktoken) tokenizer.
+    #[cfg(feature = "llama3")]
+    pub fn load_llama3_2_1b<B: Backend>(
+        checkpoint: &str,
+        tokenizer_path: &str,
+        max_seq_len: usize,
+        device: &Device<B>,
+    ) -> Result<Llama<B, Tiktoken>, String> {
+        use burn::record::NamedMpkFileRecorder;
+
+        let llama = Self::llama3_2_1b(tokenizer_path)
+            .with_max_seq_len(max_seq_len)
+            .init::<B, Tiktoken>(device)?;
+
+        let recorder = NamedMpkFileRecorder::<HalfPrecisionSettings>::new();
+        let llama = llama
+            .load(checkpoint, &recorder)
+            .map_err(|err| format!("Failed to load pre-trained Llama model.\nError: {err}"))?;
+
+        Ok(llama)
+    }
+
+    /// Load pre-trained Llama-3.2-3B-Instruct model with [Tiktoken](https://github.com/openai/tiktoken) tokenizer.
+    ///
+    /// # Arguments
+    /// - `max_seq_len` - The maximum sequence length for input text.
+    /// - `device` - The device to load the model on.
+    #[cfg(all(feature = "llama3", feature = "pretrained"))]
+    pub fn llama3_2_1b_pretrained<B: Backend>(
+        max_seq_len: usize,
+        device: &Device<B>,
+    ) -> Result<Llama<B, Tiktoken>, String> {
+        // Llama-3.2 models support context length up to 128K tokens.
+        check_context_length(max_seq_len, 128 * 1024);
+
+        // Download checkpoint and tokenizer
+        let model = pretrained::Llama::Llama321bInstruct.pretrained();
+        let checkpoint = model
+            .download_weights()
+            .map_err(|err| format!("Could not download weights.\nError: {err}"))?;
+        let tokenizer = model
+            .download_tokenizer()
+            .map_err(|err| format!("Could not download tokenizer.\nError: {err}"))?;
+
+        Self::load_llama3_2_1b(
+            checkpoint.to_str().unwrap(),
+            tokenizer.to_str().unwrap(),
+            max_seq_len,
+            device,
+        )
     }
 
     /// Load pre-trained Llama-3.1-8B model with [Tiktoken](https://github.com/openai/tiktoken) tokenizer.
@@ -139,8 +297,6 @@ impl LlamaConfig {
         Self::load_llama3_1_8b(
             checkpoint.to_str().unwrap(),
             tokenizer.to_str().unwrap(),
-            // "/home/laggui/workspace/llama-models/models/llama3_1/Meta-Llama-3.1-8B-Instruct/model",
-            // "/home/laggui/workspace/llama-models/models/llama3_1/Meta-Llama-3.1-8B-Instruct/tokenizer.model",
             max_seq_len,
             device,
         )
@@ -266,17 +422,26 @@ impl LlamaConfig {
         .init(device);
 
         let cache = (0..self.num_hidden_layers)
-            .map(|_| KeyValueCache::new(self.max_seq_len))
+            .map(|_| {
+                KeyValueCache::new(
+                    self.max_batch_size,
+                    num_key_value_heads,
+                    self.max_seq_len,
+                    self.d_model / self.num_attention_heads,
+                    device,
+                )
+            })
             .collect::<Vec<_>>();
 
         let rope = RotaryEncodingConfig::new(
             self.max_seq_len * 2,
             self.d_model / self.num_attention_heads,
         )
-        .with_theta(self.rope_theta);
+        .with_theta(self.rope.theta);
 
-        let rope = if self.rope_scaled {
-            rope.init_with_frequency_scaling(freq_scaling_by_parts, device)
+        let rope = if let Some(scaling) = &self.rope.scaled {
+            let freq_scaling_fn = move |x| scaling.freq_scaling_by_parts(x);
+            rope.init_with_frequency_scaling(freq_scaling_fn, device)
         } else {
             rope.init(device)
         };
@@ -439,6 +604,75 @@ pub struct GenerationOutput {
     pub time: f64,
 }
 
+#[derive(Clone)]
+/// The text generation state, used to check when a stop token has been reached.
+pub struct TextGenerationState<B: Backend> {
+    tokens: Tensor<B, 1, Int>,
+    num_tokens: usize,
+    stop: Arc<AtomicBool>,
+    num_generated: Arc<AtomicUsize>,
+    sender: Sender<Tensor<B, 1, Int>>,
+}
+
+impl<B: Backend> TextGenerationState<B> {
+    /// Create a new instance.
+    pub fn new(max_sample_len: usize, stop_tokens: Tensor<B, 1, Int>) -> Self {
+        let (sender, receiver) = std::sync::mpsc::channel::<Tensor<B, 1, Int>>();
+        let stop = Arc::new(AtomicBool::new(false));
+        let num_generated = Arc::new(AtomicUsize::new(0));
+        let num_generated_clone = Arc::clone(&num_generated);
+        let state_clone = Arc::clone(&stop);
+        let device = stop_tokens.device();
+
+        std::thread::spawn(move || {
+            for tokens in receiver.iter() {
+                let num_tokens = tokens.shape().num_elements();
+                let total_num_tokens = num_generated_clone.load(Ordering::Relaxed) + num_tokens;
+                if stop_tokens.clone().equal(tokens).any().into_scalar() {
+                    state_clone.store(true, Ordering::Relaxed);
+                }
+                num_generated_clone.store(total_num_tokens, Ordering::Relaxed);
+            }
+        });
+
+        Self {
+            tokens: Tensor::<B, 1, Int>::empty([max_sample_len], &device),
+            num_tokens: 0,
+            stop,
+            num_generated,
+            sender,
+        }
+    }
+
+    /// Add generated tokens to the state (without checking for stop condition).
+    pub fn append(&mut self, tokens: Tensor<B, 1, Int>) {
+        let num_tokens_prev = self.num_tokens;
+        self.num_tokens += tokens.shape().num_elements();
+        self.tokens = self
+            .tokens
+            .clone()
+            .slice_assign([num_tokens_prev..self.num_tokens], tokens);
+    }
+
+    /// Update the state with newly generated tokens.
+    pub fn update(&mut self, tokens: Tensor<B, 1, Int>) {
+        self.append(tokens.clone());
+        if !self.should_stop() {
+            self.sender.send(tokens).unwrap();
+        }
+    }
+
+    /// True if the state previously detected a stop token.
+    pub fn should_stop(&self) -> bool {
+        self.stop.load(Ordering::Relaxed)
+    }
+
+    /// Returns the number of tokens generated.
+    pub fn num_tokens_generated(&self) -> usize {
+        self.num_generated.load(Ordering::Relaxed)
+    }
+}
+
 /// Meta Llama large language model and tokenizer.
 #[derive(Debug)]
 pub struct Llama<B: Backend, T: Tokenizer> {
@@ -472,15 +706,26 @@ impl<B: Backend, T: Tokenizer> Llama<B, T> {
         temperature: f64,
         sampler: &mut Sampler,
     ) -> GenerationOutput {
-        let mut tokens = self.tokenize(prompt);
-        let prompt_len = tokens.dims()[0];
-        let stop_tokens = Tensor::from_ints(self.tokenizer.stop_ids().as_slice(), &self.device);
+        let input_tokens = self.tokenize(prompt);
+        let prompt_len = input_tokens.dims()[0];
 
-        let mut num_tokens: usize = 0;
-        let mut input_pos = Tensor::<B, 1, Int>::arange(0..tokens.dims()[0] as i64, &self.device);
+        let mut state = TextGenerationState::new(
+            prompt_len + sample_len,
+            Tensor::from_ints(self.tokenizer.stop_ids().as_slice(), &self.device),
+        );
+        state.append(input_tokens);
+
+        let mut input_pos = Tensor::<B, 1, Int>::arange(0..prompt_len as i64, &self.device);
         let now = Instant::now();
         for _ in 0..sample_len {
-            let x = tokens.clone().select(0, input_pos.clone()).reshape([1, -1]);
+            if state.should_stop() {
+                break;
+            }
+            let x = state
+                .tokens
+                .clone()
+                .select(0, input_pos.clone())
+                .reshape([1, -1]);
             let logits = self.model.forward(x, &mut self.cache, &self.rope);
 
             let [batch_size, seq_len, _vocab_size] = logits.dims();
@@ -489,32 +734,25 @@ impl<B: Backend, T: Tokenizer> Llama<B, T> {
                 .squeeze(1); // [batch_size=1, vocab_size]
 
             if temperature > 0.0 {
-                next_token_logits = softmax(next_token_logits / temperature, 1);
+                next_token_logits = temperature_scaled_softmax(next_token_logits, temperature);
             };
 
             let next_token = sampler.sample(next_token_logits).squeeze(0);
 
-            // Stop when any of the valid stop tokens is encountered
-            if stop_tokens
-                .clone()
-                .equal(next_token.clone())
-                .any()
-                .into_scalar()
-            {
-                break;
-            }
-
-            // Concatenate the new generated token
-            tokens = Tensor::cat(vec![tokens, next_token], 0);
-            num_tokens += 1;
+            // Update with the new generated token
+            state.update(next_token);
 
             // Advance
             let t = input_pos.dims()[0];
             input_pos = input_pos.slice([t - 1..t]) + 1;
         }
 
-        let tokens = tokens.into_data().as_slice::<B::IntElem>().unwrap()[prompt_len..]
-            .iter()
+        let num_tokens = state.num_tokens_generated();
+        let tokens = state
+            .tokens
+            .slice([prompt_len..prompt_len + num_tokens - 1]) // -1 to ignore stop token
+            .into_data()
+            .iter::<B::IntElem>()
             .map(|t| t.elem::<u32>())
             .collect::<Vec<_>>();
 
@@ -530,8 +768,7 @@ impl<B: Backend, T: Tokenizer> Llama<B, T> {
 
     /// Encode a string into a tensor of tokens.
     fn tokenize(&self, text: &str) -> Tensor<B, 1, Int> {
-        let bos = !cfg!(feature = "tiny"); // TinyLlama Chat doesn't prepend BOS token with the chat format
-        let tokens = self.tokenizer.encode(text, bos, false);
+        let tokens = self.tokenizer.encode(text, false, false);
 
         let shape = Shape::new([tokens.len()]);
         Tensor::<B, 1, Int>::from_data(TensorData::new(tokens, shape), &self.device)
@@ -566,45 +803,143 @@ impl<B: Backend, T: Tokenizer> Llama<B, T> {
 
         Ok(self)
     }
+
+    /// Reset the model state (used between generations)
+    pub fn reset(&mut self) {
+        self.cache.iter_mut().for_each(|cache| cache.reset());
+    }
 }
 
-/// Applies frequency scaling by parts following Llama 3.1's scheme.
-///
-/// Adapted from: https://github.com/meta-llama/llama-models/blob/main/models/llama3/reference_impl/model.py#L45
-fn freq_scaling_by_parts<B: Backend>(freqs: Tensor<B, 1>) -> Tensor<B, 1> {
-    let scale_factor = 8.;
-    let low_freq_factor = 1.;
-    let high_freq_factor = 4.;
-    let old_context_len = 8192.;
+impl RopeFrequencyScaling {
+    /// Applies frequency scaling by parts following Llama 3.1's scheme.
+    ///
+    /// Adapted from: https://github.com/meta-llama/llama-models/blob/main/models/llama3/reference_impl/model.py#L45
+    pub fn freq_scaling_by_parts<B: Backend>(&self, freqs: Tensor<B, 1>) -> Tensor<B, 1> {
+        let low_freq_wavelen = self.old_context_len / self.low_freq_factor;
+        let high_freq_wavelen = self.old_context_len / self.high_freq_factor;
 
-    let low_freq_wavelen = old_context_len / low_freq_factor;
-    let high_freq_wavelen = old_context_len / high_freq_factor;
+        let wavelen = freqs.clone().recip().mul_scalar(2. * core::f32::consts::PI);
 
-    let wavelen = freqs.clone().recip().mul_scalar(2. * core::f32::consts::PI);
+        // if wavelen >= high_freq_wavelen
+        let cond = wavelen.clone().greater_equal_elem(high_freq_wavelen);
+        let smooth = wavelen
+            .clone()
+            .recip()
+            .mul_scalar(self.old_context_len)
+            .sub_scalar(self.low_freq_factor)
+            .div_scalar(self.high_freq_factor - self.low_freq_factor);
+        // (1 - smooth) * freq / scale_factor + smooth * freq
+        let new_freqs = smooth
+            .clone()
+            .neg()
+            .add_scalar(1.)
+            .mul(freqs.clone().div_scalar(self.scale_factor))
+            .add(smooth.clone().mul(freqs.clone()));
+        let new_freqs = freqs.clone().mask_where(cond, new_freqs);
 
-    // if wavelen >= high_freq_wavelen
-    let cond = wavelen.clone().greater_equal_elem(high_freq_wavelen);
-    let smooth = wavelen
-        .clone()
-        .recip()
-        .mul_scalar(old_context_len)
-        .sub_scalar(low_freq_factor)
-        .div_scalar(high_freq_factor - low_freq_factor);
-    // (1 - smooth) * freq / scale_factor + smooth * freq
-    let new_freqs = smooth
-        .clone()
-        .neg()
-        .add_scalar(1.)
-        .mul(freqs.clone().div_scalar(scale_factor))
-        .add(smooth.clone().mul(freqs.clone()));
-    let new_freqs = freqs.clone().mask_where(cond, new_freqs);
+        // if wavelen > low_freq_wavelen
+        let cond = wavelen.clone().greater_elem(low_freq_wavelen);
+        let new_freqs = new_freqs.mask_where(cond, freqs.clone().div_scalar(self.scale_factor));
 
-    // if wavelen > low_freq_wavelen
-    let cond = wavelen.clone().greater_elem(low_freq_wavelen);
-    let new_freqs = new_freqs.mask_where(cond, freqs.clone().div_scalar(scale_factor));
+        // if wavelen < high_freq_wavelen
+        let cond = wavelen.lower_elem(high_freq_wavelen);
+        let new_freqs = new_freqs.mask_where(cond, freqs);
 
-    // if wavelen < high_freq_wavelen
-    let cond = wavelen.lower_elem(high_freq_wavelen);
+        new_freqs
+    }
+}
 
-    new_freqs.mask_where(cond, freqs)
+pub(crate) fn temperature_scaled_softmax<B: Backend>(
+    logits: Tensor<B, 2>,
+    temperature: f64,
+) -> Tensor<B, 2> {
+    softmax(logits / temperature, 1)
+}
+
+#[cfg(test)]
+#[cfg(any(feature = "cuda", feature = "tch-gpu"))]
+mod tests {
+    use super::*;
+    use crate::tests::*;
+
+    use burn::tensor::TensorData;
+
+    #[test]
+    fn test_temperature_softmax() {
+        let tensor = TestTensor::<2>::from([[21.3125, 19.859375, 19.0625, 18.75, 18.171875]]);
+
+        let output = crate::llama::temperature_scaled_softmax(tensor, 0.6);
+        let expected = TensorData::from([[
+            0.8691406,
+            0.07836914,
+            0.020767212,
+            0.0124053955,
+            0.0047035217,
+        ]]);
+
+        output.into_data().assert_approx_eq(&expected, 3);
+    }
+
+    #[test]
+    fn test_transformer_block() {
+        let device = Default::default();
+
+        let max_seq_len = 16;
+        let block = crate::transformer::TransformerBlockConfig::new(
+            /*n_layers=*/ 1, /*d_model=*/ 4, /*hidden_size=*/ 16,
+            /*n_heads=*/ 2, /*n_kv_heads=*/ 1, /*norm_eps=*/ 0.00001,
+        )
+        .init::<TestBackend>(&device);
+        let mut cache = crate::transformer::KeyValueCache::new(max_seq_len);
+
+        let rope = RopeConfig::new(500000.0)
+            .with_scaled(Some(RopeFrequencyScaling::new().with_scale_factor(32.)));
+        let scaling = rope.scaled.unwrap();
+        let freq_scaling_fn = move |x| scaling.freq_scaling_by_parts(x);
+
+        let rope = RotaryEncodingConfig::new(max_seq_len * 2, 4 / 2)
+            .with_theta(rope.theta)
+            .init_with_frequency_scaling(freq_scaling_fn, &device);
+
+        // input: [batch_size, seq_len, d_model]
+        let input = TestTensor::<3>::from([[
+            [0.0026, 0.003, -0.006, 0.006],
+            [0.001, 0.0008, 0.0015, -0.016],
+        ]]);
+        let output = block.forward(input, &mut cache, &rope);
+        let expected = TensorData::from([[
+            [-0.04269409, 0.020523071, -0.0791626, 0.12731934],
+            [-0.091674805, -0.013809204, 0.03152466, -0.058776855],
+        ]]);
+
+        output.into_data().assert_approx_eq(&expected, 3);
+    }
+
+    #[test]
+    fn test_rope() {
+        let device = Default::default();
+
+        let max_seq_len = 16;
+        let rope = RopeConfig::new(500000.0)
+            .with_scaled(Some(RopeFrequencyScaling::new().with_scale_factor(32.)));
+        let scaling = rope.scaled.unwrap();
+        let freq_scaling_fn = move |x| scaling.freq_scaling_by_parts(x);
+
+        let rope = RotaryEncodingConfig::new(max_seq_len * 2, 4 / 2)
+            .with_theta(rope.theta)
+            .init_with_frequency_scaling(freq_scaling_fn, &device);
+
+        let input = TestTensor::<4>::from([[
+            [[-0.60253906, -0.035308838], [0.41357422, 0.15100098]],
+            [[-0.044677734, -0.094177246], [0.60546875, 0.2442627]],
+        ]]);
+
+        let output = rope.apply(input, 0);
+        let expected = TensorData::from([[
+            [[-0.60253906, -0.035308838], [0.09643555, 0.42944336]],
+            [[-0.044677734, -0.094177246], [0.12194824, 0.64160156]],
+        ]]);
+
+        output.into_data().assert_approx_eq(&expected, 3);
+    }
 }

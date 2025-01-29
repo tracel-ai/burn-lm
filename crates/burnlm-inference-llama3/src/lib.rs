@@ -18,6 +18,10 @@ pub enum LlamaVersion {
     /// Llama-3.1-8B-Instruct.
     #[default]
     V31Instruct,
+    /// Llama-3.2-3B-Instruct.
+    V323bInstruct,
+    /// Llama-3.2-1B-Instruct.
+    V321bInstruct,
 }
 
 #[inference_server_config]
@@ -109,6 +113,76 @@ impl InferenceServer for LlamaV31Params8BInstructServer<InferenceBackend> {
     }
 }
 
+#[derive(InferenceServer, Debug)]
+#[inference_server(
+    model_name = "Llama 3.2 (1B Instruct)",
+    model_cli_param_name = "llama32",
+    model_creation_date = "05/01/2024",
+    owned_by = "Tracel Technologies Inc."
+)]
+pub struct LlamaV32Params1BInstructServer<B: Backend> {
+    server: Llama3BaseServer<B>,
+}
+
+impl<B: Backend> Default for LlamaV32Params1BInstructServer<B> {
+    fn default() -> Self {
+        Self {
+            server: Llama3BaseServer::<B>::new(LlamaVersion::V321bInstruct),
+        }
+    }
+}
+
+impl InferenceServer for LlamaV32Params1BInstructServer<InferenceBackend> {
+    type Config = Llama3ServerConfig;
+
+    fn set_config(&mut self, config: Box<dyn Any>) {
+        self.server.set_config(config);
+    }
+
+    fn unload(&mut self) -> InferenceResult<()> {
+        self.server.unload()
+    }
+
+    fn complete(&mut self, messages: Vec<Message>) -> InferenceResult<Completion> {
+        self.server.complete(messages)
+    }
+}
+
+#[derive(InferenceServer, Debug)]
+#[inference_server(
+    model_name = "Llama 3.2 (3B Instruct)",
+    model_cli_param_name = "llama32-3b",
+    model_creation_date = "05/01/2024",
+    owned_by = "Tracel Technologies Inc."
+)]
+pub struct LlamaV32Params3BInstructServer<B: Backend> {
+    server: Llama3BaseServer<B>,
+}
+
+impl<B: Backend> Default for LlamaV32Params3BInstructServer<B> {
+    fn default() -> Self {
+        Self {
+            server: Llama3BaseServer::<B>::new(LlamaVersion::V323bInstruct),
+        }
+    }
+}
+
+impl InferenceServer for LlamaV32Params3BInstructServer<InferenceBackend> {
+    type Config = Llama3ServerConfig;
+
+    fn set_config(&mut self, config: Box<dyn Any>) {
+        self.server.set_config(config);
+    }
+
+    fn unload(&mut self) -> InferenceResult<()> {
+        self.server.unload()
+    }
+
+    fn complete(&mut self, messages: Vec<Message>) -> InferenceResult<Completion> {
+        self.server.complete(messages)
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct Llama3BaseServer<B: Backend> {
     config: Llama3ServerConfig,
@@ -185,6 +259,20 @@ impl Llama3BaseServer<InferenceBackend> {
                     )
                     .unwrap(),
                 ),
+                LlamaVersion::V323bInstruct => Some(
+                    llama::LlamaConfig::llama3_2_3b_pretrained::<InferenceBackend>(
+                        self.config.max_seq_len,
+                        &INFERENCE_DEVICE,
+                    )
+                    .unwrap(),
+                ),
+                LlamaVersion::V321bInstruct => Some(
+                    llama::LlamaConfig::llama3_2_1b_pretrained::<InferenceBackend>(
+                        self.config.max_seq_len,
+                        &INFERENCE_DEVICE,
+                    )
+                    .unwrap(),
+                ),
             };
         }
         Ok(())
@@ -198,11 +286,12 @@ impl Llama3BaseServer<InferenceBackend> {
         for message in messages {
             prompt.push(format!(
                 "<|start_header_id|>{}<|end_header_id|>\n\n{}<|eot_id|>",
-                message.role, message.content
+                message.role.to_string().to_lowercase(),
+                message.content
             ));
         }
-        let mut prompt = prompt.join("\n");
-        prompt.push_str("<|assistant|>\n");
+        let mut prompt = prompt.join("");
+        prompt.push_str("<|start_header_id|>assistant<|end_header_id|>\n\n");
         Ok(prompt)
     }
 }

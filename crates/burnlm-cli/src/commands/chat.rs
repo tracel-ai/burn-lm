@@ -1,5 +1,13 @@
 use std::process::Command as StdCommand;
 
+pub(crate) fn create() -> clap::Command {
+    let mut root = clap::Command::new("web").about("Inference in an Open WebUI client");
+    let start = clap::Command::new("start").about("Start web client");
+    let stop = clap::Command::new("stop").about("Stop web client");
+    root.subcommand
+    root
+}
+
 use tracel_xtask::prelude::*;
 
 const DOCKER_COMPOSE_CONFIG: &str = "xtask/config/docker-compose.chat.yml";

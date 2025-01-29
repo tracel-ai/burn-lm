@@ -28,13 +28,13 @@ pub struct ParrotServerConfig {
 // of `burnlm-registry` crate. For instance for this dummy model:
 //
 //     server(
-//             server_name = "Burn LM Parrot Example",
-//             server_type = "ParrotServer<InferenceBackend>"
-//         ),
+//         crate_namespace = "burnlm_inference_template",
+//         server_type = "ParrotServer<InferenceBackend>",
+//     ),
 //
 #[derive(InferenceServer, Default, Debug)]
 #[inference_server(
-    model_name = "Burn LM Parrot",
+    model_name = "Parrot",
     model_creation_date = "01/28/2025",
     owned_by = "Tracel Technologies Inc."
 )]

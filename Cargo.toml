@@ -8,10 +8,8 @@ members = [
     "crates/burnlm-cli",
     "crates/burnlm-http",
     "crates/burnlm-inference",
+    "crates/burnlm-inference-*",
     "crates/burnlm-macros",
-    "crates/burnlm-inference-llama3",
-    "crates/burnlm-inference-template",
-    "crates/burnlm-inference-tinyllama",
     "crates/burnlm-registry",
     "models/llama-burn",
     "xtask",
@@ -41,11 +39,12 @@ once_cell = "1.20.2"
 proc-macro2 = "1.0.93"
 quote = "1.0.38"
 rand = "0.8.5"
-rstest = "0.2.1"
+rstest = "0.24.0"
 serde = { version = "1.0.215", features = ["derive"] }
 serde_json = "1.0.133"
 strum = { version = "0.26.3", features = ["derive"] }
 syn = { version = "2.0.96", features = ["full"] }
+tempfile = "3.16.0"
 thiserror = "2"
 tokio = { version = "1.42.0", features = ["full"] }
 tokio-stream = "0.1.17"

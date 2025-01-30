@@ -13,7 +13,7 @@ pub(crate) fn handle() -> anyhow::Result<()> {
         .set_content_arrangement(comfy_table::ContentArrangement::Dynamic)
         .set_width(80)
         .set_header(vec![
-            Cell::new("Model")
+            Cell::new("Available Models")
                 .add_attribute(comfy_table::Attribute::Bold)
                 .set_alignment(comfy_table::CellAlignment::Center),
             Cell::new("Installed")
@@ -23,7 +23,9 @@ pub(crate) fn handle() -> anyhow::Result<()> {
                 .add_attribute(comfy_table::Attribute::Bold)
                 .set_alignment(comfy_table::CellAlignment::Center),
         ]);
-    for (name, plugin) in registry.get().iter() {
+    let mut reg_entries: Vec<_> = registry.get().iter().collect();
+    reg_entries.sort_by_key(|(key, ..)| *key);
+    for (name, plugin) in reg_entries {
         let installation_status = if  plugin.is_downloaded() {
             "✅"
         } else {
@@ -42,6 +44,5 @@ pub(crate) fn handle() -> anyhow::Result<()> {
         ]);
     }
     println!("{table}");
-    println!("\nTo insall model use 'download' command.");
     Ok(())
 }

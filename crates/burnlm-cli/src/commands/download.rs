@@ -8,12 +8,14 @@ pub(crate) fn create() -> clap::Command {
     let subcommand = clap::Command::new("all").about("Download all downloadable models");
     root = root.subcommand(subcommand);
     // Create a a subcommand for each registered model
-    for (_name, plugin) in registry.get().iter() {
+    let mut reg_entries: Vec<_> = registry.get().iter().collect();
+    reg_entries.sort_by_key(|(key, ..)| *key);
+    for (_name, plugin) in reg_entries {
         let about = if plugin.downloader().is_some() {
             if  plugin.is_downloaded() {
                 "✅ Downloaded"
             } else {
-                "👍 Downloadable"
+                "🔽 Downloadable"
             }
         } else {
             "🚫 Not downloadable"
@@ -27,12 +29,14 @@ pub(crate) fn create() -> clap::Command {
 
 pub(crate) fn handle(args: &clap::ArgMatches) -> anyhow::Result<()> {
     let registry = Registry::new();
-    let downloaders: Vec<(String, fn() -> InferenceResult<()>)> = match args.subcommand_name().unwrap() {
+    let downloaders = match args.subcommand_name().unwrap() {
         "all" => {
-            registry.get().iter()
+            let mut candidates: Vec<(String, fn() -> InferenceResult<()>)> = registry.get().iter()
                 .filter(|(_, plugin)| plugin.downloader().is_some())
                 .map(|(name, plugin)| (name.to_string(), plugin.downloader().unwrap()))
-                .collect()
+                .collect();
+            candidates.sort_by(|(name1, ..), (name2, ..)| name1.cmp(name2));
+            candidates
         },
         model => {
             let (name, plugin) = registry.get().iter()

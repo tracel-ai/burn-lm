@@ -5,7 +5,9 @@ pub(crate) fn create() -> clap::Command {
     let mut root = clap::Command::new("run").about("Run inference on chosen model in the terminal");
     let registry = Registry::new();
     // Create a a subcommand for each registered model with its associated  flags
-    for (_name, plugin) in registry.get().iter() {
+    let mut installed: Vec<_> = registry.get().iter().filter(|(_name, plugin)| plugin.is_downloaded()).collect();
+    installed.sort_by_key(|(key, ..)| *key);
+    for (_name, plugin) in installed {
         let mut subcommand = clap::Command::new(plugin.model_cli_param_name())
             .about(format!("Use {} model", plugin.model_name()));
         subcommand = subcommand

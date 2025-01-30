@@ -30,6 +30,16 @@ impl<Server: InferenceServer> InferenceChannel<Server> for MutexChannel<Server> 
         server.set_config(config);
     }
 
+    fn downloader(&self) -> Option<fn() -> InferenceResult<()>> {
+        let mut server = self.server.lock().unwrap();
+        server.downloader()
+    }
+
+    fn is_downloaded(&self) -> bool {
+        let mut server = self.server.lock().unwrap();
+        server.is_downloaded()
+    }
+
     fn unload(&self) -> InferenceResult<()> {
         let mut server = self.server.lock().unwrap();
         server.unload()

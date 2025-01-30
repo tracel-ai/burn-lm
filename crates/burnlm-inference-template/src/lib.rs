@@ -56,6 +56,20 @@ impl InferenceServer for ParrotServer<InferenceBackend> {
         self.config = *config.downcast::<ParrotServerConfig>().unwrap();
     }
 
+    fn is_downloaded(&mut self) -> bool {
+        // this server example does not require downloading
+        // thus is can be considered always installed.
+        // Update accordingly.
+        true
+    }
+
+    fn downloader(&mut self) -> Option<fn() -> InferenceResult<()>> {
+        // Return a closure with code to download the model if available.
+        // Return none if there is no possiblity to download the model or if
+        // this model does not need to be downloaded.
+        None
+    }
+
     fn unload(&mut self) -> InferenceResult<()> {
         // Drop the model here
         Ok(())

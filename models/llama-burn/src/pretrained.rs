@@ -14,26 +14,35 @@ mod downloader {
     use std::path::PathBuf;
 
     impl Pretrained {
-        /// Download the file to the local cache directory.
-        fn download(&self, url: &str) -> Result<PathBuf, std::io::Error> {
-            // Model cache directory
-            let model_dir = dirs::home_dir()
+        fn model_dir(&self) -> PathBuf {
+            dirs::home_dir()
                 .expect("Should be able to get home directory")
                 .join(".cache")
                 .join("llama-burn")
-                .join(self.name);
+                .join(self.name)
+        }
+
+        fn model_file_name(&self, url: &str) -> String {
+            url.rsplit_once('/').unwrap().1.replace("?download=true", "")
+        }
+
+        pub fn is_downloaded(&self) -> bool {
+            let file_name = self.model_dir().join(&self.model_file_name(self.model));
+            file_name.exists()
+        }
+
+        /// Download the file to the local cache directory.
+        fn download(&self, url: &str) -> Result<PathBuf, std::io::Error> {
+            // Model cache directory
+            let model_dir = self.model_dir();
 
             if !model_dir.exists() {
                 create_dir_all(&model_dir)?;
             }
 
-            let file_base_name = url
-                .rsplit_once('/')
-                .unwrap()
-                .1
-                .replace("?download=true", "");
+            let file_base_name = self.model_file_name(url);
             let file_name = model_dir.join(&file_base_name);
-            if !file_name.exists() {
+            if !self.is_downloaded() {
                 // Download file content
                 let bytes = downloader::download_file_as_bytes(url, &file_base_name);
 

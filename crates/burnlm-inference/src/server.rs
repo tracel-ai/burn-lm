@@ -18,6 +18,17 @@ pub trait InferenceServer: Default + Send + Sync + Debug {
     /// Set configuration for inference.
     fn set_config(&mut self, config: Box<dyn Any>);
 
+    /// Return closure of a function to donwload the model
+    fn downloader(&mut self) -> Option<fn() -> InferenceResult<()>>  {
+        None
+    }
+
+    /// Return true is the model has been downloaded.
+    /// Return false if the model is not downloaded or there is no downloader.
+    fn is_downloaded(&mut self) -> bool {
+        false
+    }
+
     /// Unload the model.
     fn unload(&mut self) -> InferenceResult<()>;
 

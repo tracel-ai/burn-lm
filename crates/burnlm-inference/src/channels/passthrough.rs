@@ -32,6 +32,14 @@ impl<Server: InferenceServer> InferenceChannel<Server> for SingleThreadedChannel
         self.server.borrow_mut().set_config(config);
     }
 
+    fn downloader(&self) -> Option<fn() -> InferenceResult<()>> {
+        self.server.borrow_mut().downloader()
+    }
+
+    fn is_downloaded(&self) -> bool {
+        self.server.borrow_mut().is_downloaded()
+    }
+
     fn unload(&self) -> InferenceResult<()> {
         self.server.borrow_mut().unload()
     }

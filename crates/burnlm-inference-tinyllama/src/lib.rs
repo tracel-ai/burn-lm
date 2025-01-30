@@ -5,9 +5,7 @@ use std::{any::Any, borrow::BorrowMut};
 use burn::prelude::Backend;
 use burnlm_inference::*;
 use llama_burn::{
-    llama::{self, Llama},
-    sampling::{Sampler, TopP},
-    tokenizer::SentiencePieceTokenizer,
+    llama::{self, Llama}, pretrained::{self, ModelMeta}, sampling::{Sampler, TopP}, tokenizer::SentiencePieceTokenizer
 };
 
 #[inference_server_config]
@@ -22,7 +20,7 @@ pub struct TinyLlamaServerConfig {
     #[config(default = 1024)]
     pub max_seq_len: usize,
     /// The number of new tokens to generate (i.e., the number of generation steps to take).
-    #[config(default = 128)]
+    #[config(default = 128, openwebui_param = "max_tokens")]
     pub sample_len: usize,
     /// The seed to use when generating random samples. If it is 0 then a random seed is used for each inference.
     #[config(default = 0)]
@@ -45,6 +43,22 @@ impl InferenceServer for TinyLlamaServer<InferenceBackend> {
 
     fn set_config(&mut self, config: Box<dyn Any>) {
         self.config = *config.downcast::<TinyLlamaServerConfig>().unwrap();
+    }
+
+    fn downloader(&mut self) -> Option<fn() -> InferenceResult<()>> {
+        Some(|| {
+            let model = pretrained::Llama::TinyLlama.pretrained();
+            model.download_weights()
+                .map_err(|err| InferenceError::DownloadWeightError(Self::model_name().to_string(), err.to_string()))?;
+            model.download_tokenizer()
+                .map_err(|err| InferenceError::DownloadTokenizerError(Self::model_name().to_string(), err.to_string()))?;
+            Ok(())
+        })
+    }
+
+    fn is_downloaded(&mut self) -> bool {
+        let model = pretrained::Llama::TinyLlama.pretrained();
+        model.is_downloaded()
     }
 
     fn unload(&mut self) -> InferenceResult<()> {

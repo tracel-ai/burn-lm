@@ -16,6 +16,8 @@ pub trait InferencePlugin: Send + Sync + Debug {
     fn parse_cli_flags_fn(&self) -> ParseCliFlagsFn;
     fn parse_json_config_fn(&self) -> ParseJSONConfigFn;
     fn set_config(&self, config: Box<dyn Any>);
+    fn downloader(&self) -> Option<fn() -> InferenceResult<()>>;
+    fn is_downloaded(&self) -> bool;
     fn unload(&self) -> InferenceResult<()>;
     fn complete(&self, messages: Vec<Message>) -> InferenceResult<Completion>;
 }

@@ -32,7 +32,12 @@ impl ModelStore {
 impl ModelController for ModelStore {
     async fn list_models(&self) -> ServerResult<Vec<ModelSchema>> {
         let mut models = vec![];
-        let mut installed: Vec<_> = self.registry.get().iter().filter(|(_name, plugin)| plugin.is_downloaded()).collect();
+        let mut installed: Vec<_> = self
+            .registry
+            .get()
+            .iter()
+            .filter(|(_name, plugin)| plugin.is_downloaded())
+            .collect();
         installed.sort_by_key(|(key, ..)| *key);
         for (_name, plugin) in installed {
             models.push(ModelSchema::from(plugin));

@@ -1,4 +1,3 @@
-
 pub type InferenceResult<T> = Result<T, InferenceError>;
 pub type InferenceOptionalResult<T> = Result<Option<T>, InferenceError>;
 

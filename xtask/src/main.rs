@@ -13,9 +13,7 @@ async fn main() -> anyhow::Result<()> {
     let args = init_xtask::<Command>()?;
     // keep this match with only a catch-all arm in case we need to add a new
     // custom command in Command enum above.
-    match args.command {
-        _ => dispatch_base_commands(args)?,
-    };
+    dispatch_base_commands(args)?;
     let duration = start.elapsed();
     info!(
         "\x1B[32;1mTime elapsed for the current execution: {}\x1B[0m",

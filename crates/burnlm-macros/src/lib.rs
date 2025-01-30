@@ -304,8 +304,8 @@ pub fn inference_server_registry(attr: TokenStream, item: TokenStream) -> TokenS
                     )),
                     msg,
                 )
-                    .to_compile_error()
-                    .into();
+                .to_compile_error()
+                .into();
             }
         };
         let registry_entry = quote! {
@@ -332,12 +332,13 @@ pub fn inference_server_registry(attr: TokenStream, item: TokenStream) -> TokenS
     // Imports
     let mut crate_imports = Vec::new();
     for namespace in crate_namespaces {
-        let crate_path: syn::Path = syn::parse_str(&namespace).expect("crate namespace should be a valid path");
+        let crate_path: syn::Path =
+            syn::parse_str(namespace).expect("crate namespace should be a valid path");
         let use_crate = quote! {
             pub use #crate_path::*;
         };
         crate_imports.push(use_crate);
-    };
+    }
 
     // Output
     let output = quote! {

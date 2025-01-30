@@ -23,11 +23,14 @@ mod downloader {
         }
 
         fn model_file_name(&self, url: &str) -> String {
-            url.rsplit_once('/').unwrap().1.replace("?download=true", "")
+            url.rsplit_once('/')
+                .unwrap()
+                .1
+                .replace("?download=true", "")
         }
 
         pub fn is_downloaded(&self) -> bool {
-            let file_name = self.model_dir().join(&self.model_file_name(self.model));
+            let file_name = self.model_dir().join(self.model_file_name(self.model));
             file_name.exists()
         }
 

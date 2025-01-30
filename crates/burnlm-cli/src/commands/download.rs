@@ -12,7 +12,7 @@ pub(crate) fn create() -> clap::Command {
     reg_entries.sort_by_key(|(key, ..)| *key);
     for (_name, plugin) in reg_entries {
         let about = if plugin.downloader().is_some() {
-            if  plugin.is_downloaded() {
+            if plugin.is_downloaded() {
                 "✅ Downloaded"
             } else {
                 "🔽 Downloadable"
@@ -20,8 +20,7 @@ pub(crate) fn create() -> clap::Command {
         } else {
             "🚫 Not downloadable"
         };
-        let subcommand = clap::Command::new(plugin.model_cli_param_name())
-            .about(about);
+        let subcommand = clap::Command::new(plugin.model_cli_param_name()).about(about);
         root = root.subcommand(subcommand);
     }
     root
@@ -29,25 +28,35 @@ pub(crate) fn create() -> clap::Command {
 
 pub(crate) fn handle(args: &clap::ArgMatches) -> anyhow::Result<()> {
     let registry = Registry::new();
-    let downloaders = match args.subcommand_name().unwrap() {
-        "all" => {
-            let mut candidates: Vec<(String, fn() -> InferenceResult<()>)> = registry.get().iter()
+    let downloaders = match args.subcommand_name() {
+        Some("all") => {
+            let mut candidates: Vec<(String, fn() -> InferenceResult<()>)> = registry
+                .get()
+                .iter()
                 .filter(|(_, plugin)| plugin.downloader().is_some())
                 .map(|(name, plugin)| (name.to_string(), plugin.downloader().unwrap()))
                 .collect();
             candidates.sort_by(|(name1, ..), (name2, ..)| name1.cmp(name2));
             candidates
-        },
-        model => {
-            let (name, plugin) = registry.get().iter()
+        }
+        Some(model) => {
+            let (name, plugin) = registry
+                .get()
+                .iter()
                 .find(|(_, p)| p.model_cli_param_name() == model)
                 .expect("Plugin should be registered");
             let downloader = plugin.downloader();
             match downloader {
                 Some(dl) => vec![(name.to_string(), dl)],
-                None => anyhow::bail!(InferenceError::PluginDownloadUnsupportedError(model.to_string())),
+                None => anyhow::bail!(InferenceError::PluginDownloadUnsupportedError(
+                    model.to_string()
+                )),
             }
-        },
+        }
+        None => {
+            create().print_help().unwrap();
+            return Ok(());
+        }
     };
 
     // let's download each model sequentially. Doing it concurrently, while working might
@@ -55,7 +64,11 @@ pub(crate) fn handle(args: &clap::ArgMatches) -> anyhow::Result<()> {
     // models use the Burn downloader. The Burn downloader uses a progress bar that does
     // not support MultiProgress of indicatif crate.
     for (i, (name, dl)) in downloaders.iter().enumerate() {
-        println!("[{}/{}] Downloading model: {name}\nPlease wait...", i + 1, downloaders.len());
+        println!(
+            "[{}/{}] Downloading model: {name}\nPlease wait...",
+            i + 1,
+            downloaders.len()
+        );
         if let Err(err) = dl() {
             eprintln!("Download error: {}", err);
         }

@@ -5,7 +5,10 @@ use std::{any::Any, borrow::BorrowMut};
 use burn::prelude::Backend;
 use burnlm_inference::*;
 use llama_burn::{
-    llama::{self, Llama}, pretrained::{self, ModelMeta}, sampling::{Sampler, TopP}, tokenizer::SentiencePieceTokenizer
+    llama::{self, Llama},
+    pretrained::{self, ModelMeta},
+    sampling::{Sampler, TopP},
+    tokenizer::SentiencePieceTokenizer,
 };
 
 #[inference_server_config]
@@ -48,10 +51,15 @@ impl InferenceServer for TinyLlamaServer<InferenceBackend> {
     fn downloader(&mut self) -> Option<fn() -> InferenceResult<()>> {
         Some(|| {
             let model = pretrained::Llama::TinyLlama.pretrained();
-            model.download_weights()
-                .map_err(|err| InferenceError::DownloadWeightError(Self::model_name().to_string(), err.to_string()))?;
-            model.download_tokenizer()
-                .map_err(|err| InferenceError::DownloadTokenizerError(Self::model_name().to_string(), err.to_string()))?;
+            model.download_weights().map_err(|err| {
+                InferenceError::DownloadWeightError(Self::model_name().to_string(), err.to_string())
+            })?;
+            model.download_tokenizer().map_err(|err| {
+                InferenceError::DownloadTokenizerError(
+                    Self::model_name().to_string(),
+                    err.to_string(),
+                )
+            })?;
             Ok(())
         })
     }

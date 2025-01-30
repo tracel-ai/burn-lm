@@ -68,7 +68,7 @@ where
         self.channel.set_config(config);
     }
 
-    fn downloader(&self) -> Option<fn() -> InferenceResult<()>>  {
+    fn downloader(&self) -> Option<fn() -> InferenceResult<()>> {
         self.channel.downloader()
     }
 

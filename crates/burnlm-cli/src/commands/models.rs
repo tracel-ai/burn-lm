@@ -8,7 +8,8 @@ pub(crate) fn create() -> clap::Command {
 pub(crate) fn handle() -> anyhow::Result<()> {
     let registry = Registry::new();
     let mut table = Table::new();
-    table.load_preset(comfy_table::presets::UTF8_FULL)
+    table
+        .load_preset(comfy_table::presets::UTF8_FULL)
         .apply_modifier(comfy_table::modifiers::UTF8_ROUND_CORNERS)
         .set_content_arrangement(comfy_table::ContentArrangement::Dynamic)
         .set_width(80)
@@ -26,11 +27,7 @@ pub(crate) fn handle() -> anyhow::Result<()> {
     let mut reg_entries: Vec<_> = registry.get().iter().collect();
     reg_entries.sort_by_key(|(key, ..)| *key);
     for (name, plugin) in reg_entries {
-        let installation_status = if  plugin.is_downloaded() {
-            "✅"
-        } else {
-            "❌"
-        };
+        let installation_status = if plugin.is_downloaded() { "✅" } else { "❌" };
         let install_cmd_cell = if plugin.downloader().is_some() {
             let content = format!("cargo burnlm download {}", plugin.model_cli_param_name());
             Cell::new(content).set_alignment(comfy_table::CellAlignment::Left)

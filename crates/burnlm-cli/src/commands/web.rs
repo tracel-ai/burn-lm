@@ -16,11 +16,17 @@ pub(crate) fn create() -> clap::Command {
 }
 
 pub(crate) fn handle(args: &clap::ArgMatches) -> anyhow::Result<()> {
-    let action = args.subcommand_name().unwrap();
+    let action = match args.subcommand_name() {
+        Some(cmd) => cmd,
+        None => {
+            create().print_help().unwrap();
+            return Ok(());
+        }
+    };
     match action {
         "start" => start_web(),
         "stop" => stop_web(),
-        _ => Err(anyhow::format_err!("Error: command unknown {action}"))
+        _ => Err(anyhow::format_err!("Error: command unknown {action}")),
     }
 }
 

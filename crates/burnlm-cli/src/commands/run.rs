@@ -5,7 +5,11 @@ pub(crate) fn create() -> clap::Command {
     let mut root = clap::Command::new("run").about("Run inference on chosen model in the terminal");
     let registry = Registry::new();
     // Create a a subcommand for each registered model with its associated  flags
-    let mut installed: Vec<_> = registry.get().iter().filter(|(_name, plugin)| plugin.is_downloaded()).collect();
+    let mut installed: Vec<_> = registry
+        .get()
+        .iter()
+        .filter(|(_name, plugin)| plugin.is_downloaded())
+        .collect();
     installed.sort_by_key(|(key, ..)| *key);
     for (_name, plugin) in installed {
         let mut subcommand = clap::Command::new(plugin.model_cli_param_name())
@@ -25,7 +29,13 @@ pub(crate) fn create() -> clap::Command {
 
 pub(crate) fn handle(args: &clap::ArgMatches) -> anyhow::Result<()> {
     let registry = Registry::new();
-    let plugin_name = args.subcommand_name().unwrap();
+    let plugin_name = match args.subcommand_name() {
+        Some(cmd) => cmd,
+        None => {
+            create().print_help().unwrap();
+            return Ok(());
+        }
+    };
     let plugin = registry
         .get()
         .iter()
@@ -40,7 +50,6 @@ pub(crate) fn handle(args: &clap::ArgMatches) -> anyhow::Result<()> {
     let prompt = config_flags
         .get_one::<String>("prompt")
         .expect("The prompt argument should be set.");
-    println!("Prompt: {prompt}");
     println!("Running inference...");
     let message = Message {
         role: MessageRole::User,
@@ -48,6 +57,11 @@ pub(crate) fn handle(args: &clap::ArgMatches) -> anyhow::Result<()> {
         refusal: None,
     };
     let result = plugin.complete(vec![message]);
-    println!("Result: {result:?}");
-    Ok(())
+    match result {
+        Ok(answer) => {
+            println!("{answer}");
+            Ok(())
+        }
+        Err(err) => anyhow::bail!("An error occured: {err}"),
+    }
 }

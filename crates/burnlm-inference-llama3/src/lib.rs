@@ -5,7 +5,10 @@ use std::{any::Any, borrow::BorrowMut};
 use burn::prelude::Backend;
 use burnlm_inference::*;
 use llama_burn::{
-    llama::{self, Llama}, pretrained::{self, ModelMeta}, sampling::{Sampler, TopP}, tokenizer::Tiktoken
+    llama::{self, Llama},
+    pretrained::{self, ModelMeta},
+    sampling::{Sampler, TopP},
+    tokenizer::Tiktoken,
 };
 
 #[derive(Clone, Debug, Default)]
@@ -70,10 +73,15 @@ impl InferenceServer for LlamaV3Params8BInstructServer<InferenceBackend> {
     fn downloader(&mut self) -> Option<fn() -> InferenceResult<()>> {
         Some(|| {
             let model = pretrained::Llama::Llama3.pretrained();
-            model.download_weights()
-                .map_err(|err| InferenceError::DownloadWeightError(Self::model_name().to_string(), err.to_string()))?;
-            model.download_tokenizer()
-                .map_err(|err| InferenceError::DownloadTokenizerError(Self::model_name().to_string(), err.to_string()))?;
+            model.download_weights().map_err(|err| {
+                InferenceError::DownloadWeightError(Self::model_name().to_string(), err.to_string())
+            })?;
+            model.download_tokenizer().map_err(|err| {
+                InferenceError::DownloadTokenizerError(
+                    Self::model_name().to_string(),
+                    err.to_string(),
+                )
+            })?;
             Ok(())
         })
     }
@@ -121,10 +129,15 @@ impl InferenceServer for LlamaV31Params8BInstructServer<InferenceBackend> {
     fn downloader(&mut self) -> Option<fn() -> InferenceResult<()>> {
         Some(|| {
             let model = pretrained::Llama::Llama31Instruct.pretrained();
-            model.download_weights()
-                .map_err(|err| InferenceError::DownloadWeightError(Self::model_name().to_string(), err.to_string()))?;
-            model.download_tokenizer()
-                .map_err(|err| InferenceError::DownloadTokenizerError(Self::model_name().to_string(), err.to_string()))?;
+            model.download_weights().map_err(|err| {
+                InferenceError::DownloadWeightError(Self::model_name().to_string(), err.to_string())
+            })?;
+            model.download_tokenizer().map_err(|err| {
+                InferenceError::DownloadTokenizerError(
+                    Self::model_name().to_string(),
+                    err.to_string(),
+                )
+            })?;
             Ok(())
         })
     }
@@ -172,10 +185,15 @@ impl InferenceServer for LlamaV32Params1BInstructServer<InferenceBackend> {
     fn downloader(&mut self) -> Option<fn() -> InferenceResult<()>> {
         Some(|| {
             let model = pretrained::Llama::Llama321bInstruct.pretrained();
-            model.download_weights()
-                .map_err(|err| InferenceError::DownloadWeightError(Self::model_name().to_string(), err.to_string()))?;
-            model.download_tokenizer()
-                .map_err(|err| InferenceError::DownloadTokenizerError(Self::model_name().to_string(), err.to_string()))?;
+            model.download_weights().map_err(|err| {
+                InferenceError::DownloadWeightError(Self::model_name().to_string(), err.to_string())
+            })?;
+            model.download_tokenizer().map_err(|err| {
+                InferenceError::DownloadTokenizerError(
+                    Self::model_name().to_string(),
+                    err.to_string(),
+                )
+            })?;
             Ok(())
         })
     }
@@ -223,10 +241,15 @@ impl InferenceServer for LlamaV32Params3BInstructServer<InferenceBackend> {
     fn downloader(&mut self) -> Option<fn() -> InferenceResult<()>> {
         Some(|| {
             let model = pretrained::Llama::Llama323bInstruct.pretrained();
-            model.download_weights()
-                .map_err(|err| InferenceError::DownloadWeightError(Self::model_name().to_string(), err.to_string()))?;
-            model.download_tokenizer()
-                .map_err(|err| InferenceError::DownloadTokenizerError(Self::model_name().to_string(), err.to_string()))?;
+            model.download_weights().map_err(|err| {
+                InferenceError::DownloadWeightError(Self::model_name().to_string(), err.to_string())
+            })?;
+            model.download_tokenizer().map_err(|err| {
+                InferenceError::DownloadTokenizerError(
+                    Self::model_name().to_string(),
+                    err.to_string(),
+                )
+            })?;
             Ok(())
         })
     }

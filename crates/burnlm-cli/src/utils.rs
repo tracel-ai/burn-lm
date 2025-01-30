@@ -4,7 +4,13 @@ pub(crate) fn sanitize_crate_name(input: &str) -> String {
     // Replace any disallowed character with '-'
     let replaced: String = input
         .chars()
-        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '-' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '-'
+            }
+        })
         .collect();
     // Cleanup consecutinve '-'
     let merged = replaced
@@ -18,22 +24,28 @@ pub(crate) fn sanitize_crate_name(input: &str) -> String {
 }
 
 pub(crate) fn remove_and_capitalize_dashes(input: &str) -> String {
-    input.split('-').map(|s| {
-        let mut chars = s.chars();
-        match chars.next() {
-            None => String::new(),
-            // `s.chars()` is an iterator. We take the first character, uppercase it,
-            // then append the rest of the substring.
-            Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
-        }
-    }).collect()
+    input
+        .split('-')
+        .map(|s| {
+            let mut chars = s.chars();
+            match chars.next() {
+                None => String::new(),
+                // `s.chars()` is an iterator. We take the first character, uppercase it,
+                // then append the rest of the substring.
+                Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+            }
+        })
+        .collect()
 }
 
-pub(crate) fn copy_directory(src: &std::path::Path, dst: &std::path::Path) -> anyhow::Result<()>  {
+pub(crate) fn copy_directory(src: &std::path::Path, dst: &std::path::Path) -> anyhow::Result<()> {
     if !dst.exists() {
-        std::fs::create_dir_all(dst).with_context(|| format!("Failed to create directory: {}", dst.display()))?;
+        std::fs::create_dir_all(dst)
+            .with_context(|| format!("Failed to create directory: {}", dst.display()))?;
     }
-    for entry in std::fs::read_dir(src).with_context(|| format!("Failed to read directory: {}", src.display()))? {
+    for entry in std::fs::read_dir(src)
+        .with_context(|| format!("Failed to read directory: {}", src.display()))?
+    {
         let entry = entry?;
         let file_type = entry.file_type()?;
         let src_path = entry.path();
@@ -42,7 +54,11 @@ pub(crate) fn copy_directory(src: &std::path::Path, dst: &std::path::Path) -> an
             copy_directory(&src_path, &dst_path)?;
         } else if file_type.is_file() {
             std::fs::copy(&src_path, &dst_path).with_context(|| {
-                format!("Failed to copy file from {} to {}", src_path.display(), dst_path.display())
+                format!(
+                    "Failed to copy file from {} to {}",
+                    src_path.display(),
+                    dst_path.display()
+                )
             })?;
         } else {
             return Err(anyhow::anyhow!(
@@ -55,8 +71,11 @@ pub(crate) fn copy_directory(src: &std::path::Path, dst: &std::path::Path) -> an
 }
 
 /// In-place replace of all occurrences of each key in `replacements`
-//// with its corresponding value.
-pub(crate) fn replace_in_file<P: AsRef<std::path::Path>>(path: P, replacements: &std::collections::HashMap<String, String>) {
+/// with its corresponding value.
+pub(crate) fn replace_in_file<P: AsRef<std::path::Path>>(
+    path: P,
+    replacements: &std::collections::HashMap<String, String>,
+) {
     let path_ref = path.as_ref();
     let content = std::fs::read_to_string(path_ref)
         .expect("should read the entire file content successfully");
@@ -181,17 +200,27 @@ mod tests {
         let nested_subdir = src_dir.join("subdir");
         std::fs::create_dir_all(&nested_subdir).expect("should create nested source directory");
         let nested_file_path = nested_subdir.join("nested_file.txt");
-        let mut file = std::fs::File::create(&nested_file_path).expect("should create nested test file");
+        let mut file =
+            std::fs::File::create(&nested_file_path).expect("should create nested test file");
         writeln!(file, "Hello from nested file").expect("should write to file");
 
         let dst_dir = temp_dst.path().join("copied_nested_src");
         copy_directory(&src_dir, &dst_dir).unwrap();
         let copied_subdir = dst_dir.join("subdir");
         assert!(copied_subdir.exists(), "copied subdirectory should exist");
-        assert!(copied_subdir.is_dir(), "copied subdirectory should be a directory");
+        assert!(
+            copied_subdir.is_dir(),
+            "copied subdirectory should be a directory"
+        );
         let copied_nested_file = copied_subdir.join("nested_file.txt");
-        assert!(copied_nested_file.exists(), "copied nested file should exist");
-        assert!(copied_nested_file.is_file(), "copied nested file should be a file");
+        assert!(
+            copied_nested_file.exists(),
+            "copied nested file should exist"
+        );
+        assert!(
+            copied_nested_file.is_file(),
+            "copied nested file should be a file"
+        );
     }
 
     #[rstest]
@@ -202,8 +231,7 @@ mod tests {
     #[case::leading_dash("-hello", "Hello")]
     #[case::consecutive_dashes("hello--world", "HelloWorld")]
     fn test_remove_and_capitalize_dashes(#[case] input: &str, #[case] expected: &str) {
-        let result = Some(remove_and_capitalize_dashes(input))
-            .expect("should remove dashes and capitalize the string");
+        let result = remove_and_capitalize_dashes(input);
         assert_eq!(result, expected);
     }
 }

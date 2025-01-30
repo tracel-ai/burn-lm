@@ -683,7 +683,6 @@ dependencies = [
  "burnlm-macros",
  "clap",
  "llama-burn",
- "once_cell",
  "serde",
  "serde_json",
  "strum",

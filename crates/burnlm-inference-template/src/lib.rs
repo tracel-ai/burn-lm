@@ -83,4 +83,3 @@ impl InferenceServer for ParrotServer<InferenceBackend> {
         }
     }
 }
-

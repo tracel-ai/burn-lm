@@ -22,7 +22,7 @@ license = "MIT OR Apache-2.0"
 readme = "README.md"
 
 [workspace.dependencies]
-# NOTE: autotune and fusion are disabled without default features 
+# NOTE: autotune and fusion are disabled without default features
 # (and autotune is not correctly propagated to cuda if manually enabled)
 burn = { version = "0.17.0", default-features = false, features = ["std"] }
 burn-import = { version = "0.17.0" }
@@ -37,7 +37,6 @@ dirs = { version = "5.0.1" }
 dotenvy = "0.15.7"
 lazy_static = "1.5.0"
 log = "0.4.22"
-once_cell = "1.20.2"
 proc-macro2 = "1.0.93"
 quote = "1.0.38"
 rand = "0.8.5"

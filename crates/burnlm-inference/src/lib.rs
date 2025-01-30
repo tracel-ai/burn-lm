@@ -23,8 +23,8 @@ pub use burnlm_macros::inference_server_config;
 pub use burnlm_macros::InferenceServer;
 // external re-export
 pub use clap::{self, CommandFactory, FromArgMatches, Parser};
-pub use std::any::Any;
 pub use serde::Deserialize;
+pub use std::any::Any;
 // ---------------------------------------------------------------------------
 
 #[cfg(feature = "tch-cpu")]

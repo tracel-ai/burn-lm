@@ -14,17 +14,17 @@ pub(crate) fn handle() -> anyhow::Result<()> {
     for backend in BackendValues::iter() {
         let backend_string = backend.to_string();
         let key = if backend_string.starts_with("candle") {
-            "Candle"
+            "[5]Candle"
         } else if backend_string.starts_with("cuda") {
-            "Cuda"
+            "[2]Cuda"
         } else if backend_string.starts_with("hip") {
-            "ROCm HIP"
+            "[3]ROCm HIP"
         } else if backend_string.starts_with("ndarray") {
-            "ndarray"
+            "[4]ndarray"
         } else if backend_string.starts_with("tch") {
-            "LibTorch"
+            "[6]LibTorch"
         } else if backend_string.starts_with("wgpu") {
-            "WebGPU"
+            "[1]WebGPU"
         } else {
             panic!("add support for backend: {backend_string}");
         };
@@ -33,7 +33,7 @@ pub(crate) fn handle() -> anyhow::Result<()> {
 
     // display the supported backends in a nice little table
     let mut table = Table::new();
-    let header_cells: Vec<_> = backends.keys().map(|k| Cell::new(k).add_attribute(comfy_table::Attribute::Bold).set_alignment(comfy_table::CellAlignment::Center)).collect();
+    let header_cells: Vec<_> = backends.keys().map(|k| Cell::new(k.get(3..).unwrap_or("")).add_attribute(comfy_table::Attribute::Bold).set_alignment(comfy_table::CellAlignment::Center)).collect();
         table
         .load_preset(comfy_table::presets::UTF8_FULL)
         .apply_modifier(comfy_table::modifiers::UTF8_ROUND_CORNERS)

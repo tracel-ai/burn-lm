@@ -6,7 +6,12 @@ license.workspace = true
 readme.workspace = true
 
 [features]
-default = ["wgpu"]
+# Don't define a default feature ! Keep this commented
+# We use a build script to set the default feature to make sure that
+# only one backend feature is enabled.
+# using --no-default-features does not cut it here because we always need
+# at least one and only one backend feature set.
+# default = []
 
 candle-accelerate = ["burn/candle", "burn/accelerate"]
 candle-cpu = ["burn/candle"]
@@ -28,7 +33,7 @@ wgpu-spirv = ["burn/vulkan", "burn/autotune"]
 wgpu-spirv-fusion = ["wgpu-spirv", "burn/fusion"]
 
 [dependencies]
-burn = { workspace = true }
+burn = { workspace = true, features = ["wgpu", "autotune"] }
 llama-burn = { path = "../../models/llama-burn" }
 burnlm-macros = { path = "../burnlm-macros" }
 

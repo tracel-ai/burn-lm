@@ -7,7 +7,7 @@ readme.workspace = true
 
 [dependencies]
 burn = { workspace = true }
-burnlm-inference = { path = "../burnlm-inference", default-features = false }
+burnlm-inference = { path = "../burnlm-inference" }
 
 rand = { workspace = true }
 serde = { workspace = true }

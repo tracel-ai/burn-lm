@@ -86,7 +86,7 @@ pub mod burn_backend_types {
     pub const INFERENCE_DEVICE: InferenceDevice = LibTorchDevice::Cpu;
 }
 
-// WebGPU --------------------------------------------------------------------
+// WebGPU (default) ----------------------------------------------------------
 
 #[cfg(any(
     feature = "wgpu",

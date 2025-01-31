@@ -1,11 +1,9 @@
 use burnlm_inference::{message::MessageRole, Message};
 use burnlm_registry::Registry;
 
-use crate::backends::BackendValues;
+use crate::backends::{BackendValues, DEFAULT_BURN_BACKEND};
 
 const INNER_BURNLM_CLI: &'static str = "__INNER_BURNLM_CLI";
-const DEFAULT_BURN_BACKEND: &'static str = "wgpu";
-
 
 pub(crate) fn create() -> clap::Command {
     let mut root = clap::Command::new("run").about("Run inference on chosen model in the terminal");
@@ -45,9 +43,7 @@ pub(crate) fn handle(args: &clap::ArgMatches) -> anyhow::Result<()> {
             return Ok(());
         }
     };
-    let run_args = args
-        .subcommand_matches(args.subcommand_name().unwrap())
-        .unwrap();
+    let run_args = args.subcommand_matches(plugin_name).unwrap();
     if std::env::var(INNER_BURNLM_CLI).is_ok() {
         run(plugin_name, run_args)
     } else {

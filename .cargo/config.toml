@@ -1,3 +1,4 @@
 [alias]
 xtask = "run --target-dir target/xtask --package xtask --bin xtask --"
-burnlm = "run --release --bin burnlm --"
+burnlm = "run --release --bin cli-launcher --quiet --"
+burnlmd = "run --release --bin burnlm --"

@@ -11,6 +11,7 @@ members = [
     "crates/burnlm-inference-*",
     "crates/burnlm-macros",
     "crates/burnlm-registry",
+    "crates/cli-launcher",
     "models/llama-burn",
     "xtask",
 ]

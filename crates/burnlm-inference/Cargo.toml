@@ -6,13 +6,25 @@ license.workspace = true
 readme.workspace = true
 
 [features]
-default = ["tch-gpu"]
+default = ["burn/autodiff", "burn/autotune"]
 
-# Burn backends
+candle-accelerate = ["burn/candle", "burn/accelerate"]
+candle-cpu = ["burn/candle"]
+candle-cuda = ["burn/candle-cuda"]
+candle-metal = ["burn/candle", "burn/metal"]
+cuda = ["burn/cuda"]
+cuda-fusion = ["cuda", "burn/fusion"]
+hip = ["burn/hip"]
+ndarray = ["burn/ndarray"]
+ndarray-blas-accelerate = ["burn/ndarray", "burn/accelerate"]
+ndarray-blas-netlib = ["burn/ndarray", "burn/blas-netlib"]
+ndarray-blas-openblas = ["burn/ndarray", "burn/openblas"]
 tch-cpu = ["burn/tch"]
 tch-gpu = ["burn/tch"]
-cuda = ["burn/cuda"]
-wgpu = ["burn/wgpu"]
+wgpu = ["burn/wgpu", "burn/autotune"]
+wgpu-fusion = ["wgpu", "burn/fusion"]
+wgpu-spirv = ["burn/vulkan", "burn/autotune"]
+wgpu-spirv-fusion = ["wgpu-spirv", "burn/fusion"]
 
 [dependencies]
 burn = { workspace = true }

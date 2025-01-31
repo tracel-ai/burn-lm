@@ -2,16 +2,20 @@ use crate::commands;
 
 pub fn run() -> anyhow::Result<()> {
     // Define CLI
-    let cli = clap::command!()
+    let mut cli = clap::command!()
+        .subcommand(commands::backends::create())
         .subcommand(commands::download::create())
         .subcommand(commands::models::create())
-        .subcommand(commands::run::create())
         .subcommand(commands::new::create())
+        .subcommand(commands::run::create())
         .subcommand(commands::web::create());
 
     // Execute commands
-    let matches = cli.get_matches();
-    if let Some(args) = matches.subcommand_matches("download") {
+    let matches = cli.clone().get_matches();
+
+    if matches.subcommand_matches("backends").is_some() {
+        commands::backends::handle()
+    } else if let Some(args) = matches.subcommand_matches("download") {
         commands::download::handle(args)
     } else if matches.subcommand_matches("models").is_some() {
         commands::models::handle()
@@ -22,6 +26,7 @@ pub fn run() -> anyhow::Result<()> {
     } else if let Some(args) = matches.subcommand_matches("web") {
         commands::web::handle(args)
     } else {
+        cli.print_help().unwrap();
         Ok(())
     }
 }

@@ -12,6 +12,7 @@ burnlm-registry = { path = "../burnlm-registry" }
 anyhow = { workspace = true }
 clap = { workspace = true }
 comfy-table = { workspace = true }
+strum = { workspace = true }
 
 [dev-dependencies]
 rstest = { workspace = true }

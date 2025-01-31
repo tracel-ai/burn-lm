@@ -1,6 +1,8 @@
 use burnlm_inference::{message::MessageRole, Message};
 use burnlm_registry::Registry;
 
+use crate::backends::BackendValues;
+
 pub(crate) fn create() -> clap::Command {
     let mut root = clap::Command::new("run").about("Run inference on chosen model in the terminal");
     let registry = Registry::new();
@@ -16,12 +18,16 @@ pub(crate) fn create() -> clap::Command {
             .about(format!("Use {} model", plugin.model_name()));
         subcommand = subcommand
             .args((plugin.create_cli_flags_fn())().get_arguments())
-            .arg(
-                clap::Arg::new("prompt")
-                    .help("The prompt to send to the model.")
-                    .required(true)
-                    .index(1),
-            );
+            .arg(clap::Arg::new("prompt")
+                 .help("The prompt to send to the model.")
+                 .required(true)
+                 .index(1))
+            .arg(clap::Arg::new("backend")
+                 .long("backend")
+                 .value_parser(clap::value_parser!(BackendValues))
+                 .default_value("wgpu") // we pass as litteral as enum default does not work here
+                 .required(false)
+                 .help("The Burn backend for the inference"));
         root = root.subcommand(subcommand);
     }
     root

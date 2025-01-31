@@ -75,7 +75,8 @@ impl InferenceServer for TinyLlamaServer<InferenceBackend> {
     }
 
     fn complete(&mut self, messages: Vec<Message>) -> InferenceResult<Completion> {
-        println!("TinyLlama3Config: {:?}", self.config);
+        println!("{:?}", self.config);
+        println!("Burn device: {:?}", INFERENCE_DEVICE);
         self.load()?;
         let prompt = self.prompt(messages)?;
         let seed = match self.config.seed {

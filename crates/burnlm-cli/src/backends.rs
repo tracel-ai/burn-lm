@@ -2,6 +2,9 @@
 pub(crate) enum BackendValues {
 
     // candle ----------------------------------------------------------------
+    #[strum(to_string = "candle-accelerate")]
+    CandleAccelerate,
+
     #[strum(to_string = "candle-cpu")]
     CandleCpu,
 
@@ -44,12 +47,15 @@ pub(crate) enum BackendValues {
     #[strum(to_string = "tch-cpu")]
     TchCpu,
 
-    #[strum(to_string = "tch-gpu")]
-    TchGpu,
+    #[strum(to_string = "tch")]
+    Tch,
 
     // wgpu ------------------------------------------------------------------
     #[strum(to_string = "wgpu")]
     Wgpu,
+
+    #[strum(to_string = "wgpu-cpu")]
+    WgpuCpu,
 
     #[strum(to_string = "wgpu-fusion")]
     WgpuFusion,

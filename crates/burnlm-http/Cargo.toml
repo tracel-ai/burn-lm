@@ -5,26 +5,10 @@ version.workspace = true
 license.workspace = true
 readme.workspace = true
 
-[features]
-default = [
-  "tch-gpu",
-  "tinyllama",
-]
-
-llama3 = ["llama-burn/llama3"]
-llama31 = ["llama-burn/llama3"]
-tinyllama = ["llama-burn/tiny"]
-
-# Burn backends
-tch-cpu = ["burn/tch"]
-tch-gpu = ["burn/tch"]
-cuda = ["burn/cuda"]
-wgpu = ["burn/wgpu"]
-
 [dependencies]
 burn = { workspace = true }
 llama-burn = { path = "../../models/llama-burn" }
-burnlm-inference = { path = "../burnlm-inference" }
+burnlm-inference = { path = "../burnlm-inference", default-features = false }
 burnlm-registry = { path = "../burnlm-registry" }
 
 axum = { workspace = true }

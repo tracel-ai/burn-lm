@@ -5,14 +5,9 @@ version.workspace = true
 license.workspace = true
 readme.workspace = true
 
-[features]
-default = ["tch-gpu"]
-
-tch-gpu = ["burn/tch", "burnlm-inference/tch-gpu"]
-
 [dependencies]
 burn = { workspace = true }
-burnlm-inference = { path = "../burnlm-inference" }
+burnlm-inference = { path = "../burnlm-inference", default-features = false }
 
 rand = { workspace = true }
 serde = { workspace = true }

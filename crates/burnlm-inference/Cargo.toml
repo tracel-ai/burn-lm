@@ -6,7 +6,7 @@ license.workspace = true
 readme.workspace = true
 
 [features]
-default = ["burn/autodiff", "burn/autotune"]
+default = ["wgpu"]
 
 candle-accelerate = ["burn/candle", "burn/accelerate"]
 candle-cpu = ["burn/candle"]
@@ -19,9 +19,10 @@ ndarray = ["burn/ndarray"]
 ndarray-blas-accelerate = ["burn/ndarray", "burn/accelerate"]
 ndarray-blas-netlib = ["burn/ndarray", "burn/blas-netlib"]
 ndarray-blas-openblas = ["burn/ndarray", "burn/openblas"]
+tch = ["burn/tch"]
 tch-cpu = ["burn/tch"]
-tch-gpu = ["burn/tch"]
 wgpu = ["burn/wgpu", "burn/autotune"]
+wgpu-cpu = ["burn/wgpu", "burn/autotune"]
 wgpu-fusion = ["wgpu", "burn/fusion"]
 wgpu-spirv = ["burn/vulkan", "burn/autotune"]
 wgpu-spirv-fusion = ["wgpu-spirv", "burn/fusion"]

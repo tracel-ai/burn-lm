@@ -6,7 +6,7 @@ license.workspace = true
 readme.workspace = true
 
 [dependencies]
-burnlm-inference = { path = "../burnlm-inference" }
+burnlm-inference = { path = "../burnlm-inference", default-features = false }
 burnlm-macros = { path = "../burnlm-macros" }
 
 # plugins

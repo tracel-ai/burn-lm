@@ -1,6 +1,7 @@
 use crate::commands;
 
 pub fn run() -> anyhow::Result<()> {
+    println!("");
     // Define CLI
     let mut cli = clap::command!()
         .subcommand(commands::backends::create())

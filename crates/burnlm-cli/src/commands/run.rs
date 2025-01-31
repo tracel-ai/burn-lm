@@ -3,6 +3,10 @@ use burnlm_registry::Registry;
 
 use crate::backends::BackendValues;
 
+const INNER_BURNLM_CLI: &'static str = "__INNER_BURNLM_CLI";
+const DEFAULT_BURN_BACKEND: &'static str = "wgpu";
+
+
 pub(crate) fn create() -> clap::Command {
     let mut root = clap::Command::new("run").about("Run inference on chosen model in the terminal");
     let registry = Registry::new();
@@ -25,7 +29,7 @@ pub(crate) fn create() -> clap::Command {
             .arg(clap::Arg::new("backend")
                  .long("backend")
                  .value_parser(clap::value_parser!(BackendValues))
-                 .default_value("wgpu") // we pass as litteral as enum default does not work here
+                 .default_value(DEFAULT_BURN_BACKEND) // we pass as litteral as enum default does not work here
                  .required(false)
                  .help("The Burn backend for the inference"));
         root = root.subcommand(subcommand);
@@ -34,7 +38,6 @@ pub(crate) fn create() -> clap::Command {
 }
 
 pub(crate) fn handle(args: &clap::ArgMatches) -> anyhow::Result<()> {
-    let registry = Registry::new();
     let plugin_name = match args.subcommand_name() {
         Some(cmd) => cmd,
         None => {
@@ -42,21 +45,50 @@ pub(crate) fn handle(args: &clap::ArgMatches) -> anyhow::Result<()> {
             return Ok(());
         }
     };
+    let run_args = args
+        .subcommand_matches(args.subcommand_name().unwrap())
+        .unwrap();
+    if std::env::var(INNER_BURNLM_CLI).is_ok() {
+        run(plugin_name, run_args)
+    } else {
+        let backend = run_args.get_one::<BackendValues>("backend").unwrap();
+        println!("Running inference...");
+        println!("Compiling for requested Burn backend {backend}...");
+        let inference_feature = format!("burnlm-inference/{}", backend.to_string());
+        let mut args = vec![
+            "run",
+            "--release",
+            "--bin",
+            "burnlm",
+            "--no-default-features",
+            "--features",
+            &inference_feature,
+            "--quiet",
+            "--"];
+        let passed_args: Vec<String> = std::env::args().skip(1).collect();
+        args.extend(passed_args.iter().map(|s| s.as_str()));
+        std::process::Command::new("cargo")
+            .env(INNER_BURNLM_CLI, "1")
+            .args(&args)
+            .status()
+            .expect("burnlm command should execute successfully");
+        Ok(())
+    }
+}
+
+fn run(plugin_name: &str, run_args: &clap::ArgMatches) -> anyhow::Result<()> {
+    let registry = Registry::new();
     let plugin = registry
         .get()
         .iter()
         .find(|(_, p)| p.model_cli_param_name() == plugin_name.to_lowercase())
         .map(|(_, plugin)| plugin);
     let plugin = plugin.unwrap_or_else(|| panic!("Plugin should be registered: {plugin_name}"));
-    let config_flags = args
-        .subcommand_matches(args.subcommand_name().unwrap())
-        .unwrap();
-    let config = (plugin.parse_cli_flags_fn())(config_flags);
+    let config = (plugin.parse_cli_flags_fn())(run_args);
     plugin.set_config(config);
-    let prompt = config_flags
+    let prompt = run_args
         .get_one::<String>("prompt")
         .expect("The prompt argument should be set.");
-    println!("Running inference...");
     let message = Message {
         role: MessageRole::User,
         content: prompt.clone(),
@@ -65,7 +97,9 @@ pub(crate) fn handle(args: &clap::ArgMatches) -> anyhow::Result<()> {
     let result = plugin.complete(vec![message]);
     match result {
         Ok(answer) => {
-            println!("{answer}");
+            let bold_orange = "\x1b[1;38;5;214m";
+            let reset = "\x1b[0m";
+            println!("\n{bold_orange}{answer}{reset}");
             Ok(())
         }
         Err(err) => anyhow::bail!("An error occured: {err}"),

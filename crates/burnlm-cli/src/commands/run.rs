@@ -20,16 +20,20 @@ pub(crate) fn create() -> clap::Command {
             .about(format!("Use {} model", plugin.model_name()));
         subcommand = subcommand
             .args((plugin.create_cli_flags_fn())().get_arguments())
-            .arg(clap::Arg::new("prompt")
-                 .help("The prompt to send to the model.")
-                 .required(true)
-                 .index(1))
-            .arg(clap::Arg::new("backend")
-                 .long("backend")
-                 .value_parser(clap::value_parser!(BackendValues))
-                 .default_value(DEFAULT_BURN_BACKEND) // we pass as litteral as enum default does not work here
-                 .required(false)
-                 .help("The Burn backend for the inference"));
+            .arg(
+                clap::Arg::new("prompt")
+                    .help("The prompt to send to the model.")
+                    .required(true)
+                    .index(1),
+            )
+            .arg(
+                clap::Arg::new("backend")
+                    .long("backend")
+                    .value_parser(clap::value_parser!(BackendValues))
+                    .default_value(DEFAULT_BURN_BACKEND) // we pass as litteral as enum default does not work here
+                    .required(false)
+                    .help("The Burn backend for the inference"),
+            );
         root = root.subcommand(subcommand);
     }
     root
@@ -60,7 +64,8 @@ pub(crate) fn handle(args: &clap::ArgMatches) -> anyhow::Result<()> {
             "--features",
             &inference_feature,
             "--quiet",
-            "--"];
+            "--",
+        ];
         let passed_args: Vec<String> = std::env::args().skip(1).collect();
         args.extend(passed_args.iter().map(|s| s.as_str()));
         std::process::Command::new("cargo")

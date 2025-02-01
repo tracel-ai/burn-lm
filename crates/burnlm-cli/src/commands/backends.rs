@@ -28,19 +28,34 @@ pub(crate) fn handle() -> anyhow::Result<()> {
         } else {
             panic!("add support for backend: {backend_string}");
         };
-        backends.entry(key.to_string()).or_default().push(backend_string);
+        backends
+            .entry(key.to_string())
+            .or_default()
+            .push(backend_string);
     }
 
     // display the supported backends in a nice little table
     let mut table = Table::new();
-    let header_cells: Vec<_> = backends.keys().map(|k| Cell::new(k.get(3..).unwrap_or("")).add_attribute(comfy_table::Attribute::Bold).set_alignment(comfy_table::CellAlignment::Center)).collect();
-        table
+    let header_cells: Vec<_> = backends
+        .keys()
+        .map(|k| {
+            Cell::new(k.get(3..).unwrap_or(""))
+                .add_attribute(comfy_table::Attribute::Bold)
+                .set_alignment(comfy_table::CellAlignment::Center)
+        })
+        .collect();
+    table
         .load_preset(comfy_table::presets::UTF8_FULL)
         .apply_modifier(comfy_table::modifiers::UTF8_ROUND_CORNERS)
         .set_content_arrangement(comfy_table::ContentArrangement::Dynamic)
         .set_width(80)
         .set_header(header_cells);
-    table.add_row(backends.values().map(|v| Cell::new(v.join("\n")).set_alignment(comfy_table::CellAlignment::Left)).collect::<Vec<_>>());
+    table.add_row(
+        backends
+            .values()
+            .map(|v| Cell::new(v.join("\n")).set_alignment(comfy_table::CellAlignment::Left))
+            .collect::<Vec<_>>(),
+    );
     println!("{table}");
     Ok(())
 }

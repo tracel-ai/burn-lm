@@ -11,14 +11,14 @@ const MPROC_WEB_CONFIG: &str = "./tmp/mprocs_web.yml";
 
 pub(crate) fn create() -> clap::Command {
     let mut root = clap::Command::new("web").about("Run inference in an Open WebUI client");
-    let start = clap::Command::new("start")
-        .about("Start web client")
-        .arg(clap::Arg::new("backend")
-             .long("backend")
-             .value_parser(clap::value_parser!(BackendValues))
-             .default_value(DEFAULT_BURN_BACKEND)
-             .required(false)
-             .help("The Burn backend used for inference"));
+    let start = clap::Command::new("start").about("Start web client").arg(
+        clap::Arg::new("backend")
+            .long("backend")
+            .value_parser(clap::value_parser!(BackendValues))
+            .default_value(DEFAULT_BURN_BACKEND)
+            .required(false)
+            .help("The Burn backend used for inference"),
+    );
     root = root.subcommand(start);
     let stop = clap::Command::new("stop").about("Stop web client");
     root = root.subcommand(stop);
@@ -37,13 +37,13 @@ pub(crate) fn handle(args: &clap::ArgMatches) -> anyhow::Result<()> {
         "start" => {
             let start_args = args.subcommand_matches(action).unwrap();
             start_web(start_args)
-        },
+        }
         "stop" => stop_web(),
         _ => Err(anyhow::format_err!("Error: command unknown {action}")),
     }
 }
 
-pub(crate) fn start_web(args: &clap::ArgMatches) -> anyhow::Result<()> {
+fn start_web(args: &clap::ArgMatches) -> anyhow::Result<()> {
     println!("Starting containerized services...",);
     up_docker_compose()?;
     // write mprocs file from template
@@ -62,7 +62,7 @@ pub(crate) fn start_web(args: &clap::ArgMatches) -> anyhow::Result<()> {
     Ok(())
 }
 
-pub(crate) fn stop_web() -> anyhow::Result<()> {
+fn stop_web() -> anyhow::Result<()> {
     println!("Stopping containerized services...",);
     down_docker_compose()?;
     Ok(())

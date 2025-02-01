@@ -2,7 +2,6 @@ pub(crate) const DEFAULT_BURN_BACKEND: &'static str = "wgpu";
 
 #[derive(Debug, Clone, PartialEq, Eq, clap::ValueEnum, strum::Display, strum::EnumIter)]
 pub(crate) enum BackendValues {
-
     // candle ----------------------------------------------------------------
     #[strum(to_string = "candle-accelerate")]
     CandleAccelerate,

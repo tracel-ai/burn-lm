@@ -1,9 +1,6 @@
 // Candle --------------------------------------------------------------------
 
-#[cfg(any(
-    feature = "candle-accelerate",
-    feature = "candle-cpu",
-))]
+#[cfg(any(feature = "candle-accelerate", feature = "candle-cpu",))]
 pub mod burn_backend_types {
     use burn::backend::candle::{Candle, CandleDevice};
     pub type InferenceBackend = Candle;
@@ -29,12 +26,9 @@ pub mod burn_backend_types {
 
 // Cuda ----------------------------------------------------------------------
 
-#[cfg(any(
-    feature = "cuda",
-    feature = "cuda-fusion",
-))]
+#[cfg(any(feature = "cuda", feature = "cuda-fusion",))]
 pub mod burn_backend_types {
-    use burn::backend::cuda::{CudaDevice, Cuda};
+    use burn::backend::cuda::{Cuda, CudaDevice};
     pub type InferenceBackend = Cuda;
     pub type InferenceDevice = CudaDevice;
     pub const INFERENCE_DEVICE: InferenceDevice = CudaDevice::new(0);
@@ -108,4 +102,3 @@ pub mod burn_backend_types {
     pub type InferenceDevice = WgpuDevice;
     pub const INFERENCE_DEVICE: InferenceDevice = WgpuDevice::Cpu;
 }
-

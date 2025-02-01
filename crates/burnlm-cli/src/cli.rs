@@ -9,6 +9,7 @@ pub fn run() -> anyhow::Result<()> {
         .subcommand(commands::models::create())
         .subcommand(commands::new::create())
         .subcommand(commands::run::create())
+        .subcommand(commands::server::create())
         .subcommand(commands::web::create());
 
     // Execute commands
@@ -24,6 +25,8 @@ pub fn run() -> anyhow::Result<()> {
         commands::new::handle(args)
     } else if let Some(args) = matches.subcommand_matches("run") {
         commands::run::handle(args)
+    } else if let Some(args) = matches.subcommand_matches("server") {
+        commands::server::handle(args)
     } else if let Some(args) = matches.subcommand_matches("web") {
         commands::web::handle(args)
     } else {

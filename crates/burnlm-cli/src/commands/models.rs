@@ -2,7 +2,7 @@ use burnlm_registry::Registry;
 use comfy_table::{Cell, Table};
 
 pub(crate) fn create() -> clap::Command {
-    clap::Command::new("models").about("List all available models and their installation status.")
+    clap::Command::new("models").about("List all available models and their installation status")
 }
 
 pub(crate) fn handle() -> anyhow::Result<()> {

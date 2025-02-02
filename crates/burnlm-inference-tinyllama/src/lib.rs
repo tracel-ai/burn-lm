@@ -1,6 +1,6 @@
 use rand::Rng;
 use serde::Deserialize;
-use std::{any::Any, borrow::BorrowMut};
+use std::borrow::BorrowMut;
 
 use burn::prelude::Backend;
 use burnlm_inference::*;
@@ -42,12 +42,6 @@ pub struct TinyLlamaServer<B: Backend> {
 }
 
 impl InferenceServer for TinyLlamaServer<InferenceBackend> {
-    type Config = TinyLlamaServerConfig;
-
-    fn set_config(&mut self, config: Box<dyn Any>) {
-        self.config = *config.downcast::<TinyLlamaServerConfig>().unwrap();
-    }
-
     fn downloader(&mut self) -> Option<fn() -> InferenceResult<()>> {
         Some(|| {
             let model = pretrained::Llama::TinyLlama.pretrained();

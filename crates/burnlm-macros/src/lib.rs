@@ -168,13 +168,20 @@ impl InferenceServerConfigReceiver {
 
 // InferenceServer -----------------------------------------------------------
 
-#[derive(FromDeriveInput, Default)]
-#[darling(default, attributes(inference_server))]
-struct InferenceServerAttributes {
+#[derive(FromDeriveInput)]
+#[darling(attributes(inference_server))]
+struct InferenceServerData {
     model_name: Option<String>,
     model_cli_param_name: Option<String>,
     model_creation_date: Option<String>,
     owned_by: Option<String>,
+    data: darling::ast::Data<darling::util::Ignored, InferenceServerField>,
+}
+
+#[derive(FromField)]
+struct InferenceServerField {
+    ident: Option<syn::Ident>,
+    ty: syn::Type,
 }
 
 #[proc_macro_derive(InferenceServer, attributes(inference_server))]
@@ -183,11 +190,37 @@ pub fn inference_server(input: TokenStream) -> TokenStream {
     let input_ident = &input.ident;
     let (input_generics_impl, input_generics_type, input_generics_where_clause) =
         &input.generics.split_for_impl();
+    let receiver = match InferenceServerData::from_derive_input(&input) {
+        Ok(r) => r,
+        Err(e) => return e.write_errors().into(),
+    };
+
+    // Verify that the struct has a 'config' field and retrieve its type
+    let config_ty = match receiver.data {
+        ast::Data::Struct(fields) => {
+            let config = fields
+                .fields
+                .iter()
+                .find(|f| f.ident.as_ref().is_some_and(|i| i.to_string() == "config"));
+            match config {
+                Some(field) => field.ty.clone(),
+                None => {
+                    let err_msg = "The server struct must have a field named 'config'.";
+                    return TokenStream::from(quote! { compile_error!(#err_msg) });
+                }
+            }
+        }
+        _ => {
+            let err_msg = "The server type must be a struct and not an enum.";
+            return TokenStream::from(quote! { compile_error!(#err_msg) });
+        }
+    };
+
+    // Retrieve the config type
+
     // retrieve plugin info
-    let attributes = InferenceServerAttributes::from_derive_input(&input)
-        .expect("Should successfuly parse inference_server attributes");
     // handle model_name
-    let model_name = match attributes.model_name {
+    let model_name = match receiver.model_name {
         Some(value) => value,
         None => {
             let err_msg = "You must provide a 'model_name' using '#[inference_server(model_name=\"MyModel\")]'";
@@ -195,7 +228,7 @@ pub fn inference_server(input: TokenStream) -> TokenStream {
         }
     };
     // handle model CLI param name
-    let model_cli_param_name = match attributes.model_cli_param_name {
+    let model_cli_param_name = match receiver.model_cli_param_name {
         Some(ref param_name) => {
             let param_name = param_name.to_lowercase().replace(" ", "-");
             quote! { #param_name }
@@ -206,7 +239,7 @@ pub fn inference_server(input: TokenStream) -> TokenStream {
         }
     };
     // handle model_creation_date
-    let model_creation_date = match attributes.model_creation_date {
+    let model_creation_date = match receiver.model_creation_date {
         Some(ref date_str) => {
             if NaiveDate::parse_from_str(date_str, "%m/%d/%Y").is_err() {
                 let err_msg = format!(
@@ -223,7 +256,7 @@ pub fn inference_server(input: TokenStream) -> TokenStream {
         }
     };
     // handle owned_by
-    let owned_by = match attributes.owned_by {
+    let owned_by = match receiver.owned_by {
         Some(ref owner) => quote! { #owner },
         None => {
             let err_msg = "You must provide an 'owned_by' attribute using '#[inference_server(owned_by=\"OwnerName\")]'";
@@ -241,6 +274,20 @@ pub fn inference_server(input: TokenStream) -> TokenStream {
             pub const fn model_cli_param_name() -> &'static str { #model_cli_param_name }
             pub const fn model_creation_date() -> &'static str { #model_creation_date }
             pub const fn owned_by() -> &'static str { #owned_by }
+        }
+
+        impl #input_generics_impl ServerConfigParsing for #input_ident #input_generics_type #input_generics_where_clause {
+            type Config = #config_ty;
+
+            fn parse_cli_config(&mut self, args: &clap::ArgMatches) {
+                self.config = Self::Config::from_arg_matches(args)
+                    .expect("Should be able to parse arguments from CLI");
+            }
+
+            fn parse_json_config(&mut self, json: &str) {
+                self.config = serde_json::from_str(json)
+                    .expect("Should be able to parse JSON");
+            }
         }
         // Sync marker
         #sync_marker_trait
@@ -319,9 +366,7 @@ pub fn inference_server_registry(attr: TokenStream, item: TokenStream) -> TokenS
                         S::model_cli_param_name(),
                         S::model_creation_date(),
                         S::owned_by(),
-                        <S as InferenceServer>::Config::command,
-                        S::parse_cli_config,
-                        S::parse_json_config,
+                        <S as ServerConfigParsing>::Config::command,
                         Channel::<S>::new(),
                     )),
                 );

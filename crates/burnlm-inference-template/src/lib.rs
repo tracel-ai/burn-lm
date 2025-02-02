@@ -49,13 +49,6 @@ pub struct ParrotServer<B: Backend> {
 // inference in the `complete` function. This can be achieved by wrapping the `model`
 // field in an Option<T>.
 impl InferenceServer for ParrotServer<InferenceBackend> {
-    type Config = ParrotServerConfig;
-
-    fn set_config(&mut self, config: Box<dyn Any>) {
-        // Downcast to the type of Self::Config
-        self.config = *config.downcast::<ParrotServerConfig>().unwrap();
-    }
-
     fn is_downloaded(&mut self) -> bool {
         // this server example does not require downloading
         // thus is can be considered always installed.

@@ -51,8 +51,7 @@ async fn handle_non_streaming_response(
     let json_params = serde_json::to_string(&payload.params)
         .expect("ChatCompletionParams should serialize to a JSON string");
     info!("PARAMS JSON: {}", json_params);
-    let config = (plugin.parse_json_config_fn())(&json_params);
-    plugin.set_config(config);
+    plugin.parse_json_config(&json_params);
     let content = plugin.complete(messages).unwrap();
     tracing::debug!("Answer: {content}");
     let response = ChatCompletionSchema {
@@ -89,8 +88,7 @@ async fn handle_streaming_response(
             let json_params = serde_json::to_string(&payload.params)
                 .expect("ChatCompletionParams should serialize to a JSON string");
             info!("PARAMS JSON: {}", json_params);
-            let config = (plugin.parse_json_config_fn())(&json_params);
-            plugin.set_config(config);
+            plugin.parse_json_config(&json_params);
             let messages: Vec<burnlm_inference::Message> =
                 payload.messages.iter().cloned().map(Into::into).collect();
             let content = plugin.complete(messages).unwrap();

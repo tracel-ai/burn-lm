@@ -1,6 +1,6 @@
 use rand::Rng;
 use serde::Deserialize;
-use std::{any::Any, borrow::BorrowMut};
+use std::borrow::BorrowMut;
 
 use burn::prelude::Backend;
 use burnlm_inference::*;
@@ -52,24 +52,20 @@ pub struct Llama3ServerConfig {
     owned_by = "Tracel Technologies Inc."
 )]
 pub struct LlamaV3Params8BInstructServer<B: Backend> {
+    config: Llama3ServerConfig,
     server: Llama3BaseServer<B>,
 }
 
 impl<B: Backend> Default for LlamaV3Params8BInstructServer<B> {
     fn default() -> Self {
         Self {
+            config: Llama3ServerConfig::default(),
             server: Llama3BaseServer::<B>::new(LlamaVersion::V3Instruct),
         }
     }
 }
 
 impl InferenceServer for LlamaV3Params8BInstructServer<InferenceBackend> {
-    type Config = Llama3ServerConfig;
-
-    fn set_config(&mut self, config: Box<dyn Any>) {
-        self.server.set_config(config);
-    }
-
     fn downloader(&mut self) -> Option<fn() -> InferenceResult<()>> {
         Some(|| {
             let model = pretrained::Llama::Llama3.pretrained();
@@ -96,7 +92,7 @@ impl InferenceServer for LlamaV3Params8BInstructServer<InferenceBackend> {
     }
 
     fn complete(&mut self, messages: Vec<Message>) -> InferenceResult<Completion> {
-        self.server.complete(messages)
+        self.server.complete(messages, &self.config)
     }
 }
 
@@ -108,24 +104,20 @@ impl InferenceServer for LlamaV3Params8BInstructServer<InferenceBackend> {
     owned_by = "Tracel Technologies Inc."
 )]
 pub struct LlamaV31Params8BInstructServer<B: Backend> {
+    config: Llama3ServerConfig,
     server: Llama3BaseServer<B>,
 }
 
 impl<B: Backend> Default for LlamaV31Params8BInstructServer<B> {
     fn default() -> Self {
         Self {
+            config: Llama3ServerConfig::default(),
             server: Llama3BaseServer::<B>::new(LlamaVersion::V31Instruct),
         }
     }
 }
 
 impl InferenceServer for LlamaV31Params8BInstructServer<InferenceBackend> {
-    type Config = Llama3ServerConfig;
-
-    fn set_config(&mut self, config: Box<dyn Any>) {
-        self.server.set_config(config);
-    }
-
     fn downloader(&mut self) -> Option<fn() -> InferenceResult<()>> {
         Some(|| {
             let model = pretrained::Llama::Llama31Instruct.pretrained();
@@ -152,7 +144,7 @@ impl InferenceServer for LlamaV31Params8BInstructServer<InferenceBackend> {
     }
 
     fn complete(&mut self, messages: Vec<Message>) -> InferenceResult<Completion> {
-        self.server.complete(messages)
+        self.server.complete(messages, &self.config)
     }
 }
 
@@ -164,24 +156,20 @@ impl InferenceServer for LlamaV31Params8BInstructServer<InferenceBackend> {
     owned_by = "Tracel Technologies Inc."
 )]
 pub struct LlamaV32Params1BInstructServer<B: Backend> {
+    config: Llama3ServerConfig,
     server: Llama3BaseServer<B>,
 }
 
 impl<B: Backend> Default for LlamaV32Params1BInstructServer<B> {
     fn default() -> Self {
         Self {
+            config: Llama3ServerConfig::default(),
             server: Llama3BaseServer::<B>::new(LlamaVersion::V321bInstruct),
         }
     }
 }
 
 impl InferenceServer for LlamaV32Params1BInstructServer<InferenceBackend> {
-    type Config = Llama3ServerConfig;
-
-    fn set_config(&mut self, config: Box<dyn Any>) {
-        self.server.set_config(config);
-    }
-
     fn downloader(&mut self) -> Option<fn() -> InferenceResult<()>> {
         Some(|| {
             let model = pretrained::Llama::Llama321bInstruct.pretrained();
@@ -208,7 +196,7 @@ impl InferenceServer for LlamaV32Params1BInstructServer<InferenceBackend> {
     }
 
     fn complete(&mut self, messages: Vec<Message>) -> InferenceResult<Completion> {
-        self.server.complete(messages)
+        self.server.complete(messages, &self.config)
     }
 }
 
@@ -220,24 +208,20 @@ impl InferenceServer for LlamaV32Params1BInstructServer<InferenceBackend> {
     owned_by = "Tracel Technologies Inc."
 )]
 pub struct LlamaV32Params3BInstructServer<B: Backend> {
+    config: Llama3ServerConfig,
     server: Llama3BaseServer<B>,
 }
 
 impl<B: Backend> Default for LlamaV32Params3BInstructServer<B> {
     fn default() -> Self {
         Self {
+            config: Llama3ServerConfig::default(),
             server: Llama3BaseServer::<B>::new(LlamaVersion::V323bInstruct),
         }
     }
 }
 
 impl InferenceServer for LlamaV32Params3BInstructServer<InferenceBackend> {
-    type Config = Llama3ServerConfig;
-
-    fn set_config(&mut self, config: Box<dyn Any>) {
-        self.server.set_config(config);
-    }
-
     fn downloader(&mut self) -> Option<fn() -> InferenceResult<()>> {
         Some(|| {
             let model = pretrained::Llama::Llama323bInstruct.pretrained();
@@ -264,13 +248,12 @@ impl InferenceServer for LlamaV32Params3BInstructServer<InferenceBackend> {
     }
 
     fn complete(&mut self, messages: Vec<Message>) -> InferenceResult<Completion> {
-        self.server.complete(messages)
+        self.server.complete(messages, &self.config)
     }
 }
 
 #[derive(Debug, Default)]
 pub struct Llama3BaseServer<B: Backend> {
-    config: Llama3ServerConfig,
     model: Option<Llama<B, Tiktoken>>,
     version: LlamaVersion,
 }
@@ -280,81 +263,76 @@ unsafe impl<B: Backend> Sync for Llama3BaseServer<B> {}
 impl<B: Backend> Llama3BaseServer<B> {
     pub fn new(version: LlamaVersion) -> Self {
         Self {
-            config: Llama3ServerConfig::default(),
             model: None,
             version,
         }
     }
 }
 
-impl InferenceServer for Llama3BaseServer<InferenceBackend> {
-    type Config = Llama3ServerConfig;
-
-    fn set_config(&mut self, config: Box<dyn Any>) {
-        self.config = *config.downcast::<Llama3ServerConfig>().unwrap();
-    }
-
+impl Llama3BaseServer<InferenceBackend> {
     fn unload(&mut self) -> InferenceResult<()> {
         self.model = None;
         Ok(())
     }
 
-    fn complete(&mut self, messages: Vec<Message>) -> InferenceResult<Completion> {
-        println!("{:?}", self.config);
+    fn complete(
+        &mut self,
+        messages: Vec<Message>,
+        config: &Llama3ServerConfig,
+    ) -> InferenceResult<Completion> {
+        println!("{:?}", config);
         println!("Burn device: {:?}", INFERENCE_DEVICE);
-        self.load()?;
+        self.load(config)?;
         let prompt = self.prompt(messages)?;
-        let seed = match self.config.seed {
+        let seed = match config.seed {
             0 => rand::thread_rng().gen::<u64>(),
             s => s,
         };
-        let mut sampler = if self.config.temperature > 0.0 {
-            Sampler::TopP(TopP::new(self.config.top_p, seed))
+        let mut sampler = if config.temperature > 0.0 {
+            Sampler::TopP(TopP::new(config.top_p, seed))
         } else {
             Sampler::Argmax
         };
         println!("Generating...");
         let generated = match self.model.borrow_mut() {
-            Some(model) => model.generate(
-                &prompt,
-                self.config.sample_len,
-                self.config.temperature,
-                &mut sampler,
-            ),
+            Some(model) => {
+                model.generate(&prompt, config.sample_len, config.temperature, &mut sampler)
+            }
             _ => return Err(InferenceError::ModelNotLoaded),
         };
         Ok(generated.text)
     }
-}
 
-impl Llama3BaseServer<InferenceBackend> {
-    fn load(&mut self) -> burnlm_inference::errors::InferenceResult<()> {
+    fn load(
+        &mut self,
+        config: &Llama3ServerConfig,
+    ) -> burnlm_inference::errors::InferenceResult<()> {
         if self.model.is_none() {
             self.model = match self.version {
                 LlamaVersion::V3Instruct => Some(
                     llama::LlamaConfig::llama3_8b_pretrained::<InferenceBackend>(
-                        self.config.max_seq_len,
+                        config.max_seq_len,
                         &INFERENCE_DEVICE,
                     )
                     .unwrap(),
                 ),
                 LlamaVersion::V31Instruct => Some(
                     llama::LlamaConfig::llama3_1_8b_pretrained::<InferenceBackend>(
-                        self.config.max_seq_len,
+                        config.max_seq_len,
                         &INFERENCE_DEVICE,
                     )
                     .unwrap(),
                 ),
                 LlamaVersion::V323bInstruct => Some(
                     llama::LlamaConfig::llama3_2_3b_pretrained::<InferenceBackend>(
-                        self.config.max_seq_len,
+                        config.max_seq_len,
                         &INFERENCE_DEVICE,
                     )
                     .unwrap(),
                 ),
                 LlamaVersion::V321bInstruct => Some(
                     llama::LlamaConfig::llama3_2_1b_pretrained::<InferenceBackend>(
-                        self.config.max_seq_len,
+                        config.max_seq_len,
                         &INFERENCE_DEVICE,
                     )
                     .unwrap(),

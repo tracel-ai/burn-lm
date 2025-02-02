@@ -17,14 +17,14 @@ pub use crate::client::InferenceClient;
 pub use crate::errors::*;
 pub use crate::message::{Message, MessageRole};
 pub use crate::plugin::InferencePlugin;
-pub use crate::server::{InferenceServer, InferenceServerConfig};
-pub use burn::prelude::Backend;
+pub use crate::server::{InferenceServer, InferenceServerConfig, ServerConfigParsing};
 pub use backends::burn_backend_types::*;
+pub use burn::prelude::Backend;
 pub use burnlm_macros::inference_server_config;
 pub use burnlm_macros::InferenceServer;
 // external re-export
 pub use clap::{self, CommandFactory, FromArgMatches, Parser};
 pub use serde::Deserialize;
+pub use serde_json;
 pub use std::any::Any;
 // ---------------------------------------------------------------------------
-

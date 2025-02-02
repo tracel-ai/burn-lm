@@ -85,8 +85,7 @@ fn run(plugin_name: &str, run_args: &clap::ArgMatches) -> anyhow::Result<()> {
         .find(|(_, p)| p.model_cli_param_name() == plugin_name.to_lowercase())
         .map(|(_, plugin)| plugin);
     let plugin = plugin.unwrap_or_else(|| panic!("Plugin should be registered: {plugin_name}"));
-    let config = (plugin.parse_cli_flags_fn())(run_args);
-    plugin.set_config(config);
+    plugin.parse_cli_config(run_args);
     let prompt = run_args
         .get_one::<String>("prompt")
         .expect("The prompt argument should be set.");

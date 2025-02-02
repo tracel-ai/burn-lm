@@ -31,7 +31,7 @@ pub type DynClients = HashMap<&'static str, Box<dyn InferencePlugin>>;
     server(
         crate_namespace = "burnlm_inference_tinyllama",
         server_type = "TinyLlamaServer<InferenceBackend>",
-    ),
+    )
 )]
 #[derive(Debug)]
 pub struct Registry {

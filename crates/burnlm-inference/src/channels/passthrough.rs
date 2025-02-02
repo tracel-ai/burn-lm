@@ -28,16 +28,20 @@ impl<Server: InferenceServer> SingleThreadedChannel<Server> {
 }
 
 impl<Server: InferenceServer> InferenceChannel<Server> for SingleThreadedChannel<Server> {
-    fn set_config(&self, config: Box<dyn std::any::Any>) {
-        self.server.borrow_mut().set_config(config);
-    }
-
     fn downloader(&self) -> Option<fn() -> InferenceResult<()>> {
         self.server.borrow_mut().downloader()
     }
 
     fn is_downloaded(&self) -> bool {
         self.server.borrow_mut().is_downloaded()
+    }
+
+    fn parse_cli_config(&self, args: &clap::ArgMatches) {
+        self.server.borrow_mut().parse_cli_config(args);
+    }
+
+    fn parse_json_config(&self, json: &str) {
+        self.server.borrow_mut().parse_json_config(json);
     }
 
     fn unload(&self) -> InferenceResult<()> {

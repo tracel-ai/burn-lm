@@ -25,11 +25,6 @@ impl<Server: InferenceServer> MutexChannel<Server> {
 }
 
 impl<Server: InferenceServer> InferenceChannel<Server> for MutexChannel<Server> {
-    fn set_config(&self, config: Box<dyn std::any::Any>) {
-        let mut server = self.server.lock().unwrap();
-        server.set_config(config);
-    }
-
     fn downloader(&self) -> Option<fn() -> InferenceResult<()>> {
         let mut server = self.server.lock().unwrap();
         server.downloader()
@@ -38,6 +33,16 @@ impl<Server: InferenceServer> InferenceChannel<Server> for MutexChannel<Server> 
     fn is_downloaded(&self) -> bool {
         let mut server = self.server.lock().unwrap();
         server.is_downloaded()
+    }
+
+    fn parse_cli_config(&self, args: &clap::ArgMatches) {
+        let mut server = self.server.lock().unwrap();
+        server.parse_cli_config(args);
+    }
+
+    fn parse_json_config(&self, json: &str) {
+        let mut server = self.server.lock().unwrap();
+        server.parse_json_config(json);
     }
 
     fn unload(&self) -> InferenceResult<()> {

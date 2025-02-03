@@ -30,8 +30,9 @@ mod downloader {
         }
 
         pub fn is_downloaded(&self) -> bool {
-            let file_name = self.model_dir().join(self.model_file_name(self.model));
-            file_name.exists()
+            let model_name = self.model_dir().join(self.model_file_name(self.model));
+            let tokenizer_name = self.model_dir().join(self.model_file_name(&self.tokenizer));
+            model_name.exists() && tokenizer_name.exists()
         }
 
         /// Download the file to the local cache directory.
@@ -45,7 +46,7 @@ mod downloader {
 
             let file_base_name = self.model_file_name(url);
             let file_name = model_dir.join(&file_base_name);
-            if !self.is_downloaded() {
+            if !file_name.exists() {
                 // Download file content
                 let bytes = downloader::download_file_as_bytes(url, &file_base_name);
 

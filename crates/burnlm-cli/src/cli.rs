@@ -10,6 +10,7 @@ pub fn run() -> anyhow::Result<()> {
         .subcommand(commands::new::create())
         .subcommand(commands::run::create())
         .subcommand(commands::server::create())
+        .subcommand(commands::shell::create())
         .subcommand(commands::web::create());
 
     // Execute commands
@@ -27,6 +28,17 @@ pub fn run() -> anyhow::Result<()> {
         commands::run::handle(args)
     } else if let Some(args) = matches.subcommand_matches("server") {
         commands::server::handle(args)
+    } else if let Some(args) = matches.subcommand_matches("shell") {
+        // selection the subcommand that can executed from a burnlm shell
+        let cli = clap::Command::default()
+            .subcommand(commands::backends::create())
+            .subcommand(commands::download::create())
+            .subcommand(commands::models::create())
+            .subcommand(commands::new::create())
+            .subcommand(commands::run::create())
+            .subcommand(commands::server::create())
+            .subcommand(commands::web::create());
+        commands::shell::handle(cli.clone(), args)
     } else if let Some(args) = matches.subcommand_matches("web") {
         commands::web::handle(args)
     } else {

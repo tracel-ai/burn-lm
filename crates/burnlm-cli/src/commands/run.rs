@@ -3,8 +3,6 @@ use burnlm_registry::Registry;
 
 use crate::backends::{BackendValues, DEFAULT_BURN_BACKEND};
 
-const INNER_BURNLM_CLI: &'static str = "__INNER_BURNLM_CLI";
-
 pub(crate) fn create() -> clap::Command {
     let mut root = clap::Command::new("run").about("Run inference on chosen model in the terminal");
     let registry = Registry::new();
@@ -48,7 +46,7 @@ pub(crate) fn handle(args: &clap::ArgMatches) -> anyhow::Result<()> {
         }
     };
     let run_args = args.subcommand_matches(plugin_name).unwrap();
-    if std::env::var(INNER_BURNLM_CLI).is_ok() {
+    if std::env::var(super::INNER_BURNLM_CLI).is_ok() {
         run(plugin_name, run_args)
     } else {
         let backend = run_args.get_one::<BackendValues>("backend").unwrap();
@@ -69,7 +67,7 @@ pub(crate) fn handle(args: &clap::ArgMatches) -> anyhow::Result<()> {
         let passed_args: Vec<String> = std::env::args().skip(1).collect();
         args.extend(passed_args.iter().map(|s| s.as_str()));
         std::process::Command::new("cargo")
-            .env(INNER_BURNLM_CLI, "1")
+            .env(super::INNER_BURNLM_CLI, "1")
             .args(&args)
             .status()
             .expect("burnlm command should execute successfully");

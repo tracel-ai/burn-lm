@@ -4,4 +4,7 @@ pub(crate) mod models;
 pub(crate) mod new;
 pub(crate) mod run;
 pub(crate) mod server;
+pub(crate) mod shell;
 pub(crate) mod web;
+
+const INNER_BURNLM_CLI: &'static str = "__INNER_BURNLM_CLI";

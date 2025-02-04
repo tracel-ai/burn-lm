@@ -15,14 +15,14 @@ use llama_burn::{
 /// Llama-3 model variants to load.
 pub enum LlamaVersion {
     /// Llama-3-8B-Instruct.
-    V3Instruct,
+    Llama3Instruct,
     /// Llama-3.1-8B-Instruct.
-    #[default]
-    V31Instruct,
+    Llama31Instruct,
     /// Llama-3.2-3B-Instruct.
-    V323bInstruct,
+    Llama323bInstruct,
+    #[default]
     /// Llama-3.2-1B-Instruct.
-    V321bInstruct,
+    Llama321bInstruct,
 }
 
 #[inference_server_config]
@@ -51,16 +51,16 @@ pub struct Llama3ServerConfig {
     model_creation_date = "05/01/2024",
     owned_by = "Tracel Technologies Inc."
 )]
-pub struct LlamaV3Params8BInstructServer<B: Backend> {
+pub struct Llama3InstructServer<B: Backend> {
     config: Llama3ServerConfig,
     server: Llama3BaseServer<B>,
 }
 
-impl<B: Backend> Default for LlamaV3Params8BInstructServer<B> {
+impl<B: Backend> Default for Llama3InstructServer<B> {
     fn default() -> Self {
         Self {
             config: Llama3ServerConfig::default(),
-            server: Llama3BaseServer::<B>::new(LlamaVersion::V3Instruct),
+            server: Llama3BaseServer::<B>::new(LlamaVersion::Llama3Instruct),
         }
     }
 }
@@ -77,11 +77,11 @@ fn llama_downloader(version: pretrained::Llama, name: &'static str) -> Inference
     Ok(())
 }
 
-impl InferenceServer for LlamaV3Params8BInstructServer<InferenceBackend> {
+impl InferenceServer for Llama3InstructServer<InferenceBackend> {
     fn downloader(&mut self) -> Option<fn() -> InferenceResult<()>> {
         fn downloader() -> InferenceResult<()> {
             llama_downloader(pretrained::Llama::Llama3,
-                             LlamaV3Params8BInstructServer::<InferenceBackend>::model_name())
+                             Llama3InstructServer::<InferenceBackend>::model_name())
         }
         Some(downloader)
     }
@@ -107,25 +107,25 @@ impl InferenceServer for LlamaV3Params8BInstructServer<InferenceBackend> {
     model_creation_date = "05/01/2024",
     owned_by = "Tracel Technologies Inc."
 )]
-pub struct LlamaV31Params8BInstructServer<B: Backend> {
+pub struct Llama31InstructServer<B: Backend> {
     config: Llama3ServerConfig,
     server: Llama3BaseServer<B>,
 }
 
-impl<B: Backend> Default for LlamaV31Params8BInstructServer<B> {
+impl<B: Backend> Default for Llama31InstructServer<B> {
     fn default() -> Self {
         Self {
             config: Llama3ServerConfig::default(),
-            server: Llama3BaseServer::<B>::new(LlamaVersion::V31Instruct),
+            server: Llama3BaseServer::<B>::new(LlamaVersion::Llama31Instruct),
         }
     }
 }
 
-impl InferenceServer for LlamaV31Params8BInstructServer<InferenceBackend> {
+impl InferenceServer for Llama31InstructServer<InferenceBackend> {
     fn downloader(&mut self) -> Option<fn() -> InferenceResult<()>> {
         fn downloader() -> InferenceResult<()> {
             llama_downloader(pretrained::Llama::Llama31Instruct,
-                             LlamaV31Params8BInstructServer::<InferenceBackend>::model_name())
+                             Llama31InstructServer::<InferenceBackend>::model_name())
         }
         Some(downloader)
     }
@@ -151,25 +151,25 @@ impl InferenceServer for LlamaV31Params8BInstructServer<InferenceBackend> {
     model_creation_date = "05/01/2024",
     owned_by = "Tracel Technologies Inc."
 )]
-pub struct LlamaV32Params1BInstructServer<B: Backend> {
+pub struct Llama321bInstructServer<B: Backend> {
     config: Llama3ServerConfig,
     server: Llama3BaseServer<B>,
 }
 
-impl<B: Backend> Default for LlamaV32Params1BInstructServer<B> {
+impl<B: Backend> Default for Llama321bInstructServer<B> {
     fn default() -> Self {
         Self {
             config: Llama3ServerConfig::default(),
-            server: Llama3BaseServer::<B>::new(LlamaVersion::V321bInstruct),
+            server: Llama3BaseServer::<B>::new(LlamaVersion::Llama321bInstruct),
         }
     }
 }
 
-impl InferenceServer for LlamaV32Params1BInstructServer<InferenceBackend> {
+impl InferenceServer for Llama321bInstructServer<InferenceBackend> {
     fn downloader(&mut self) -> Option<fn() -> InferenceResult<()>> {
         fn downloader() -> InferenceResult<()> {
             llama_downloader(pretrained::Llama::Llama321bInstruct,
-                             LlamaV32Params1BInstructServer::<InferenceBackend>::model_name())
+                             Llama321bInstructServer::<InferenceBackend>::model_name())
         }
         Some(downloader)
     }
@@ -195,25 +195,25 @@ impl InferenceServer for LlamaV32Params1BInstructServer<InferenceBackend> {
     model_creation_date = "05/01/2024",
     owned_by = "Tracel Technologies Inc."
 )]
-pub struct LlamaV32Params3BInstructServer<B: Backend> {
+pub struct Llama323bInstructServer<B: Backend> {
     config: Llama3ServerConfig,
     server: Llama3BaseServer<B>,
 }
 
-impl<B: Backend> Default for LlamaV32Params3BInstructServer<B> {
+impl<B: Backend> Default for Llama323bInstructServer<B> {
     fn default() -> Self {
         Self {
             config: Llama3ServerConfig::default(),
-            server: Llama3BaseServer::<B>::new(LlamaVersion::V323bInstruct),
+            server: Llama3BaseServer::<B>::new(LlamaVersion::Llama323bInstruct),
         }
     }
 }
 
-impl InferenceServer for LlamaV32Params3BInstructServer<InferenceBackend> {
+impl InferenceServer for Llama323bInstructServer<InferenceBackend> {
     fn downloader(&mut self) -> Option<fn() -> InferenceResult<()>> {
         fn downloader() -> InferenceResult<()> {
             llama_downloader(pretrained::Llama::Llama323bInstruct,
-                             LlamaV32Params3BInstructServer::<InferenceBackend>::model_name())
+                             Llama323bInstructServer::<InferenceBackend>::model_name())
         }
         Some(downloader)
     }
@@ -289,28 +289,28 @@ impl Llama3BaseServer<InferenceBackend> {
     ) -> burnlm_inference::errors::InferenceResult<()> {
         if self.model.is_none() {
             self.model = match self.version {
-                LlamaVersion::V3Instruct => Some(
+                LlamaVersion::Llama3Instruct => Some(
                     llama::LlamaConfig::llama3_8b_pretrained::<InferenceBackend>(
                         config.max_seq_len,
                         &INFERENCE_DEVICE,
                     )
                     .unwrap(),
                 ),
-                LlamaVersion::V31Instruct => Some(
+                LlamaVersion::Llama31Instruct => Some(
                     llama::LlamaConfig::llama3_1_8b_pretrained::<InferenceBackend>(
                         config.max_seq_len,
                         &INFERENCE_DEVICE,
                     )
                     .unwrap(),
                 ),
-                LlamaVersion::V323bInstruct => Some(
+                LlamaVersion::Llama323bInstruct => Some(
                     llama::LlamaConfig::llama3_2_3b_pretrained::<InferenceBackend>(
                         config.max_seq_len,
                         &INFERENCE_DEVICE,
                     )
                     .unwrap(),
                 ),
-                LlamaVersion::V321bInstruct => Some(
+                LlamaVersion::Llama321bInstruct => Some(
                     llama::LlamaConfig::llama3_2_1b_pretrained::<InferenceBackend>(
                         config.max_seq_len,
                         &INFERENCE_DEVICE,

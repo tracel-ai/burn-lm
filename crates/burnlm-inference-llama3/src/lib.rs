@@ -65,21 +65,25 @@ impl<B: Backend> Default for LlamaV3Params8BInstructServer<B> {
     }
 }
 
+fn llama_downloader(version: pretrained::Llama, name: &'static str) -> InferenceResult<()>
+{
+    let model = pretrained::Llama::pretrained(&version);
+    model.download_weights().map_err(|err| {
+        InferenceError::DownloadWeightError(name.to_string(), err.to_string())
+    })?;
+    model.download_tokenizer().map_err(|err| {
+        InferenceError::DownloadTokenizerError(name.to_string(), err.to_string())
+    })?;
+    Ok(())
+}
+
 impl InferenceServer for LlamaV3Params8BInstructServer<InferenceBackend> {
     fn downloader(&mut self) -> Option<fn() -> InferenceResult<()>> {
-        Some(|| {
-            let model = pretrained::Llama::Llama3.pretrained();
-            model.download_weights().map_err(|err| {
-                InferenceError::DownloadWeightError(Self::model_name().to_string(), err.to_string())
-            })?;
-            model.download_tokenizer().map_err(|err| {
-                InferenceError::DownloadTokenizerError(
-                    Self::model_name().to_string(),
-                    err.to_string(),
-                )
-            })?;
-            Ok(())
-        })
+        fn downloader() -> InferenceResult<()> {
+            llama_downloader(pretrained::Llama::Llama3,
+                             LlamaV3Params8BInstructServer::<InferenceBackend>::model_name())
+        }
+        Some(downloader)
     }
 
     fn is_downloaded(&mut self) -> bool {
@@ -119,19 +123,11 @@ impl<B: Backend> Default for LlamaV31Params8BInstructServer<B> {
 
 impl InferenceServer for LlamaV31Params8BInstructServer<InferenceBackend> {
     fn downloader(&mut self) -> Option<fn() -> InferenceResult<()>> {
-        Some(|| {
-            let model = pretrained::Llama::Llama31Instruct.pretrained();
-            model.download_weights().map_err(|err| {
-                InferenceError::DownloadWeightError(Self::model_name().to_string(), err.to_string())
-            })?;
-            model.download_tokenizer().map_err(|err| {
-                InferenceError::DownloadTokenizerError(
-                    Self::model_name().to_string(),
-                    err.to_string(),
-                )
-            })?;
-            Ok(())
-        })
+        fn downloader() -> InferenceResult<()> {
+            llama_downloader(pretrained::Llama::Llama31Instruct,
+                             LlamaV31Params8BInstructServer::<InferenceBackend>::model_name())
+        }
+        Some(downloader)
     }
 
     fn is_downloaded(&mut self) -> bool {
@@ -171,19 +167,11 @@ impl<B: Backend> Default for LlamaV32Params1BInstructServer<B> {
 
 impl InferenceServer for LlamaV32Params1BInstructServer<InferenceBackend> {
     fn downloader(&mut self) -> Option<fn() -> InferenceResult<()>> {
-        Some(|| {
-            let model = pretrained::Llama::Llama321bInstruct.pretrained();
-            model.download_weights().map_err(|err| {
-                InferenceError::DownloadWeightError(Self::model_name().to_string(), err.to_string())
-            })?;
-            model.download_tokenizer().map_err(|err| {
-                InferenceError::DownloadTokenizerError(
-                    Self::model_name().to_string(),
-                    err.to_string(),
-                )
-            })?;
-            Ok(())
-        })
+        fn downloader() -> InferenceResult<()> {
+            llama_downloader(pretrained::Llama::Llama321bInstruct,
+                             LlamaV32Params1BInstructServer::<InferenceBackend>::model_name())
+        }
+        Some(downloader)
     }
 
     fn is_downloaded(&mut self) -> bool {
@@ -223,19 +211,11 @@ impl<B: Backend> Default for LlamaV32Params3BInstructServer<B> {
 
 impl InferenceServer for LlamaV32Params3BInstructServer<InferenceBackend> {
     fn downloader(&mut self) -> Option<fn() -> InferenceResult<()>> {
-        Some(|| {
-            let model = pretrained::Llama::Llama323bInstruct.pretrained();
-            model.download_weights().map_err(|err| {
-                InferenceError::DownloadWeightError(Self::model_name().to_string(), err.to_string())
-            })?;
-            model.download_tokenizer().map_err(|err| {
-                InferenceError::DownloadTokenizerError(
-                    Self::model_name().to_string(),
-                    err.to_string(),
-                )
-            })?;
-            Ok(())
-        })
+        fn downloader() -> InferenceResult<()> {
+            llama_downloader(pretrained::Llama::Llama323bInstruct,
+                             LlamaV32Params3BInstructServer::<InferenceBackend>::model_name())
+        }
+        Some(downloader)
     }
 
     fn is_downloaded(&mut self) -> bool {

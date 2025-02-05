@@ -1,11 +1,13 @@
 use burnlm_inference::{Message, MessageRole};
 use burnlm_registry::Registry;
 
-use crate::backends::{BackendValues, DEFAULT_BURN_BACKEND};
+use crate::{backends::BackendValues, utils};
 
 #[derive(clap::Subcommand)]
 pub enum MessageCommand {
     Msg { message: String },
+    // slash commands
+    Exit,
 }
 
 // Define our own Rustyline to automatically insert the 'msg' command
@@ -26,7 +28,12 @@ impl cloop::InputReader for ChatEditor {
     fn read(&mut self, prompt: &str) -> std::io::Result<cloop::InputResult> {
         match self.editor.read(prompt) {
             Ok(cloop::InputResult::Input(s)) => {
-                Ok(cloop::InputResult::Input(format!("msg \"{s}\"")))
+                if let (Some(cmd), rest) = utils::parse_command(&s) {
+                    Ok(cloop::InputResult::Input(format!("{cmd} {rest}")))
+                } else {
+                    // consider any freefrom input a message
+                    Ok(cloop::InputResult::Input(format!("msg \"{s}\"")))
+                }
             }
             other => other,
         }
@@ -47,13 +54,12 @@ pub(crate) fn create() -> clap::Command {
         let mut subcommand = clap::Command::new(plugin.model_cli_param_name())
             .about(format!("Chat with {} model", plugin.model_name()))
             .args((plugin.create_cli_flags_fn())().get_arguments());
-        if std::env::var(super::INNER_BURNLM_CLI).is_err() {
+        if std::env::var(super::BURNLM_SHELL).is_err() {
             subcommand = subcommand.arg(
                 clap::Arg::new("backend")
                     .long("backend")
                     .value_parser(clap::value_parser!(BackendValues))
-                    .default_value(DEFAULT_BURN_BACKEND)
-                    .required(false)
+                    .required(true)
                     .help("The Burn backend used for chat inference"),
             );
         }
@@ -92,7 +98,10 @@ pub(crate) fn handle(
         // create chat shell
         let bold_orange = "\x1b[1;38;5;214m";
         let reset = "\x1b[0m";
-        let app_name = format!("{bold_orange}({backend}) chat|{}{reset}", plugin.model_name());
+        let app_name = format!(
+            "{bold_orange}({backend}) chat|{}{reset}",
+            plugin.model_name()
+        );
         let delim = "> ";
         let handler = |args: MessageCommand, _: &mut ()| -> cloop::ShellResult {
             match args {
@@ -111,9 +120,10 @@ pub(crate) fn handle(
                         }
                         Err(err) => anyhow::bail!("An error occured: {err}"),
                     }
+                    Ok(cloop::ShellAction::Continue)
                 }
+                MessageCommand::Exit => Ok(cloop::ShellAction::Exit),
             }
-            Ok(cloop::ShellAction::Continue)
         };
 
         let mut shell = cloop::Shell::new(
@@ -140,8 +150,8 @@ pub(crate) fn handle(
             "--quiet",
             "--",
         ];
-        let passed_args: Vec<String> = std::env::args().skip(1).collect();
-        chat_args.extend(passed_args.iter().map(|s| s.as_str()));
+        let cli_args: Vec<String> = std::env::args().skip(1).collect();
+        chat_args.extend(cli_args.iter().map(|s| s.as_str()));
         std::process::Command::new("cargo")
             .env(super::INNER_BURNLM_CLI, "1")
             .args(&chat_args)

@@ -9,3 +9,4 @@ pub(crate) mod shell;
 pub(crate) mod web;
 
 const INNER_BURNLM_CLI: &str = "__INNER_BURNLM_CLI";
+const BURNLM_SHELL: &str = "__BURNLM_SHELL";

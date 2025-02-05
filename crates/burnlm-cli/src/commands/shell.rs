@@ -41,6 +41,7 @@ impl cloop::InputReader for ShellEditor {
 pub(crate) fn handle(cli: clap::Command, args: &clap::ArgMatches) -> anyhow::Result<()> {
     let backend = args.get_one::<BackendValues>("backend").unwrap();
     if std::env::var(super::INNER_BURNLM_CLI).is_ok() {
+        println!("Welcome to Burn LM shell! (press CTRL+D to exit)");
         let app_name = format!("({backend}) burnlm");
         let delim = "> ";
 
@@ -85,6 +86,7 @@ pub(crate) fn handle(cli: clap::Command, args: &clap::ArgMatches) -> anyhow::Res
         );
 
         shell.run().unwrap();
+        println!("Bye!");
     } else {
         println!("Running burnlm shell...");
         println!("Compiling for requested Burn backend {backend}...");
@@ -106,6 +108,7 @@ pub(crate) fn handle(cli: clap::Command, args: &clap::ArgMatches) -> anyhow::Res
         ];
         std::process::Command::new("cargo")
             .env(super::INNER_BURNLM_CLI, "1")
+            .env(super::BURNLM_SHELL, "1")
             .args(&args)
             .status()
             .expect("burnlm command should execute successfully");

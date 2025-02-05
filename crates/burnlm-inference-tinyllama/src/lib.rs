@@ -69,8 +69,8 @@ impl InferenceServer for TinyLlamaServer<InferenceBackend> {
     }
 
     fn complete(&mut self, messages: Vec<Message>) -> InferenceResult<Completion> {
-        println!("{:?}", self.config);
-        println!("Burn device: {:?}", INFERENCE_DEVICE);
+        // println!("{:?}", self.config);
+        // println!("Burn device: {:?}", INFERENCE_DEVICE);
         self.load()?;
         let prompt = self.prompt(messages)?;
         let seed = match self.config.seed {
@@ -82,7 +82,7 @@ impl InferenceServer for TinyLlamaServer<InferenceBackend> {
         } else {
             Sampler::Argmax
         };
-        println!("Generating...");
+        // println!("Generating...");
         let generated = match self.model.borrow_mut() {
             Some(model) => model.generate(
                 &prompt,

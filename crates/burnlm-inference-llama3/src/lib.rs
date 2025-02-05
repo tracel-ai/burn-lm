@@ -267,8 +267,8 @@ impl Llama3BaseServer<InferenceBackend> {
         messages: Vec<Message>,
         config: &Llama3ServerConfig,
     ) -> InferenceResult<Completion> {
-        println!("{:?}", config);
-        println!("Burn device: {:?}", INFERENCE_DEVICE);
+        // println!("{:?}", config);
+        // println!("Burn device: {:?}", INFERENCE_DEVICE);
         self.load(config)?;
         let prompt = self.prompt(messages)?;
         let seed = match config.seed {
@@ -280,7 +280,7 @@ impl Llama3BaseServer<InferenceBackend> {
         } else {
             Sampler::Argmax
         };
-        println!("Generating...");
+        // println!("Generating...");
         let generated = match self.model.borrow_mut() {
             Some(model) => {
                 model.generate(&prompt, config.sample_len, config.temperature, &mut sampler)

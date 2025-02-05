@@ -69,8 +69,6 @@ impl InferenceServer for ParrotServer<InferenceBackend> {
     }
 
     fn complete(&mut self, messages: Vec<Message>) -> InferenceResult<Completion> {
-        println!("{:?}", self.config);
-        println!("Burn device: {:?}", INFERENCE_DEVICE);
         // This where the inference actually happens
         match messages.last() {
             Some(msg) => Ok(msg.content.clone()),

@@ -136,7 +136,7 @@ pub(crate) fn handle(
 
         shell.run().unwrap();
     } else {
-        println!("Starting burnlm chat session...");
+        println!("(Starting) burnlm chat session...");
         println!("Compiling for requested Burn backend {backend}...");
         let inference_feature = format!("burnlm-inference/{}", backend);
         let mut chat_args = vec![

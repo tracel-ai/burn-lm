@@ -42,7 +42,7 @@ pub fn run() -> anyhow::Result<()> {
             .subcommand(commands::run::create())
             .subcommand(commands::server::create())
             .subcommand(commands::web::create());
-        commands::shell::handle(cli.clone(), args)
+        commands::shell::handle(&cli, args)
     } else if let Some(args) = matches.subcommand_matches("web") {
         commands::web::handle(args)
     } else {

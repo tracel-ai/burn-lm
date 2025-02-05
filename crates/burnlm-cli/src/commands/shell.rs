@@ -13,32 +13,7 @@ pub(crate) fn create() -> clap::Command {
         )
 }
 
-// Define our own Rustyline because we need all commands to start with 'burnlm'
-// so that the passed cli can parse the line just fine.
-pub struct ShellEditor {
-    editor: rustyline::DefaultEditor,
-}
-
-impl ShellEditor {
-    fn new() -> Self {
-        Self {
-            editor: rustyline::DefaultEditor::new().unwrap(),
-        }
-    }
-}
-
-impl cloop::InputReader for ShellEditor {
-    fn read(&mut self, prompt: &str) -> std::io::Result<cloop::InputResult> {
-        match self.editor.read(prompt) {
-            Ok(cloop::InputResult::Input(s)) => {
-                Ok(cloop::InputResult::Input(format!("burnlm {s}")))
-            }
-            other => other,
-        }
-    }
-}
-
-pub(crate) fn handle(cli: clap::Command, args: &clap::ArgMatches) -> anyhow::Result<()> {
+pub(crate) fn handle(cli: &clap::Command, args: &clap::ArgMatches) -> anyhow::Result<()> {
     let backend = args.get_one::<BackendValues>("backend").unwrap();
     if std::env::var(super::INNER_BURNLM_CLI).is_ok() {
         println!("Welcome to Burn LM shell! (press CTRL+D to exit)");
@@ -80,8 +55,8 @@ pub(crate) fn handle(cli: clap::Command, args: &clap::ArgMatches) -> anyhow::Res
         let mut shell = cloop::Shell::new(
             format!("{bold_green}{app_name}{delim}{reset}"),
             (),
-            ShellEditor::new(),
-            cli,
+            rustyline::DefaultEditor::new().unwrap(),
+            cli.clone().multicall(true),
             handler,
         );
 

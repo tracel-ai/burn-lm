@@ -1,10 +1,11 @@
 use crate::commands;
 
 pub fn run() -> anyhow::Result<()> {
-    println!("");
+    println!();
     // Define CLI
     let mut cli = clap::command!()
         .subcommand(commands::backends::create())
+        .subcommand(commands::chat::create())
         .subcommand(commands::download::create())
         .subcommand(commands::models::create())
         .subcommand(commands::new::create())
@@ -18,6 +19,8 @@ pub fn run() -> anyhow::Result<()> {
 
     if matches.subcommand_matches("backends").is_some() {
         commands::backends::handle()
+    } else if let Some(args) = matches.subcommand_matches("chat") {
+        commands::chat::handle(args, None)
     } else if let Some(args) = matches.subcommand_matches("download") {
         commands::download::handle(args)
     } else if matches.subcommand_matches("models").is_some() {
@@ -32,6 +35,7 @@ pub fn run() -> anyhow::Result<()> {
         // selection the subcommand that can executed from a burnlm shell
         let cli = clap::Command::default()
             .subcommand(commands::backends::create())
+            .subcommand(commands::chat::create())
             .subcommand(commands::download::create())
             .subcommand(commands::models::create())
             .subcommand(commands::new::create())

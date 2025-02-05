@@ -15,21 +15,24 @@ pub(crate) fn create() -> clap::Command {
 
 // Define our own Rustyline because we need all commands to start with 'burnlm'
 // so that the passed cli can parse the line just fine.
-pub struct BurnLMEditor {
+pub struct ShellEditor {
     editor: rustyline::DefaultEditor,
 }
 
-impl BurnLMEditor {
-   fn new() -> Self {
-       Self { editor: rustyline::DefaultEditor::new().unwrap() }
-   }
+impl ShellEditor {
+    fn new() -> Self {
+        Self {
+            editor: rustyline::DefaultEditor::new().unwrap(),
+        }
+    }
 }
 
-impl cloop::InputReader for BurnLMEditor
-{
+impl cloop::InputReader for ShellEditor {
     fn read(&mut self, prompt: &str) -> std::io::Result<cloop::InputResult> {
         match self.editor.read(prompt) {
-            Ok(cloop::InputResult::Input(s)) => Ok(cloop::InputResult::Input(format!("burnlm {s}"))),
+            Ok(cloop::InputResult::Input(s)) => {
+                Ok(cloop::InputResult::Input(format!("burnlm {s}")))
+            }
             other => other,
         }
     }
@@ -38,12 +41,15 @@ impl cloop::InputReader for BurnLMEditor
 pub(crate) fn handle(cli: clap::Command, args: &clap::ArgMatches) -> anyhow::Result<()> {
     let backend = args.get_one::<BackendValues>("backend").unwrap();
     if std::env::var(super::INNER_BURNLM_CLI).is_ok() {
-        let app_name = format!("burnlm({backend})");
+        let app_name = format!("({backend}) burnlm");
         let delim = "> ";
 
         let handler = |args: clap::ArgMatches, _: &mut ()| -> cloop::ShellResult {
             if args.subcommand_matches("backends").is_some() {
                 super::backends::handle()?;
+                Ok(cloop::ShellAction::Continue)
+            } else if let Some(args) = args.subcommand_matches("chat") {
+                super::chat::handle(args, Some(backend))?;
                 Ok(cloop::ShellAction::Continue)
             } else if let Some(args) = args.subcommand_matches("download") {
                 super::download::handle(args)?;
@@ -71,7 +77,7 @@ pub(crate) fn handle(cli: clap::Command, args: &clap::ArgMatches) -> anyhow::Res
         let mut shell = cloop::Shell::new(
             format!("{app_name}{delim}"),
             (),
-            BurnLMEditor::new(),
+            ShellEditor::new(),
             cli,
             handler,
         );
@@ -80,7 +86,7 @@ pub(crate) fn handle(cli: clap::Command, args: &clap::ArgMatches) -> anyhow::Res
     } else {
         println!("Running burnlm shell...");
         println!("Compiling for requested Burn backend {backend}...");
-        let inference_feature = format!("burnlm-inference/{}", backend.to_string());
+        let inference_feature = format!("burnlm-inference/{}", backend);
         let backend_str = &backend.to_string();
         let args = vec![
             "run",
@@ -102,7 +108,6 @@ pub(crate) fn handle(cli: clap::Command, args: &clap::ArgMatches) -> anyhow::Res
             .status()
             .expect("burnlm command should execute successfully");
     }
-
 
     Ok(())
 }

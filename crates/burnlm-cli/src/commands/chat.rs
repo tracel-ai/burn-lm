@@ -1,91 +1,151 @@
-use std::process::Command as StdCommand;
+use burnlm_inference::{Message, MessageRole};
+use burnlm_registry::Registry;
 
-pub(crate) fn create() -> clap::Command {
-    let mut root = clap::Command::new("web").about("Inference in an Open WebUI client");
-    let start = clap::Command::new("start").about("Start web client");
-    let stop = clap::Command::new("stop").about("Stop web client");
-    root.subcommand
-    root
-}
-
-use tracel_xtask::prelude::*;
-
-const DOCKER_COMPOSE_CONFIG: &str = "xtask/config/docker-compose.chat.yml";
-const DOCKER_COMPOSE_PROJECT: &str = "burn-lm-chat";
-
-#[derive(clap::Args)]
-pub struct ChatCmdArgs {
-    #[command(subcommand)]
-    command: ChatSubCommand,
-}
+use crate::backends::{BackendValues, DEFAULT_BURN_BACKEND};
 
 #[derive(clap::Subcommand)]
-enum ChatSubCommand {
-    /// Start chat stack.
-    Start,
-    /// Ensure that all containerized services are down.
-    Stop,
+pub enum MessageCommand {
+    Msg { message: String },
 }
 
-pub(crate) async fn handle_command(args: ChatCmdArgs) -> anyhow::Result<()> {
-    match args.command {
-        ChatSubCommand::Start => start_chat().await,
-        ChatSubCommand::Stop => stop_chat().await,
+// Define our own Rustyline to automatically insert the 'msg' command
+// in front of the message.
+pub struct ChatEditor {
+    editor: rustyline::DefaultEditor,
+}
+
+impl ChatEditor {
+    fn new() -> Self {
+        Self {
+            editor: rustyline::DefaultEditor::new().unwrap(),
+        }
     }
 }
 
-pub(crate) async fn start_chat() -> anyhow::Result<()> {
-    let mproc_config = "xtask/config/mprocs_chat.yml";
-    info!("Starting containerized services...",);
-    up_docker_compose()?;
-    info!("Launching chat stack...",);
-    StdCommand::new("mprocs")
-        .args(["--config", mproc_config])
-        .status()
-        .map_err(|e| anyhow::anyhow!("Failed to start chat: {e}"))?;
-    info!("Chat shutdown!",);
+impl cloop::InputReader for ChatEditor {
+    fn read(&mut self, prompt: &str) -> std::io::Result<cloop::InputResult> {
+        match self.editor.read(prompt) {
+            Ok(cloop::InputResult::Input(s)) => {
+                Ok(cloop::InputResult::Input(format!("msg \"{s}\"")))
+            }
+            other => other,
+        }
+    }
+}
+
+pub(crate) fn create() -> clap::Command {
+    let mut root = clap::Command::new("chat").about("Start a chat session with the choosen model.");
+    let registry = Registry::new();
+    // Create a a subcommand for each registered model with its associated  flags
+    let mut installed: Vec<_> = registry
+        .get()
+        .iter()
+        .filter(|(_name, plugin)| plugin.is_downloaded())
+        .collect();
+    installed.sort_by_key(|(key, ..)| *key);
+    for (_name, plugin) in installed {
+        let mut subcommand = clap::Command::new(plugin.model_cli_param_name())
+            .about(format!("Chat with {} model", plugin.model_name()))
+            .args((plugin.create_cli_flags_fn())().get_arguments());
+        if std::env::var(super::INNER_BURNLM_CLI).is_err() {
+            subcommand = subcommand.arg(
+                clap::Arg::new("backend")
+                    .long("backend")
+                    .value_parser(clap::value_parser!(BackendValues))
+                    .default_value(DEFAULT_BURN_BACKEND)
+                    .required(false)
+                    .help("The Burn backend used for chat inference."),
+            );
+        }
+        root = root.subcommand(subcommand);
+    }
+    root
+}
+
+pub(crate) fn handle(
+    args: &clap::ArgMatches,
+    backend: Option<&BackendValues>,
+) -> anyhow::Result<()> {
+    let plugin_name = match args.subcommand_name() {
+        Some(cmd) => cmd,
+        None => {
+            create().print_help().unwrap();
+            return Ok(());
+        }
+    };
+    let plugin_args = args.subcommand_matches(plugin_name).unwrap();
+    let backend = match backend {
+        Some(b) => b,
+        None => plugin_args.get_one::<BackendValues>("backend").unwrap(),
+    };
+    if std::env::var(super::INNER_BURNLM_CLI).is_ok() {
+        // retrieve registered plugin
+        let registry = Registry::new();
+        let plugin = registry
+            .get()
+            .iter()
+            .find(|(_, p)| p.model_cli_param_name() == plugin_name.to_lowercase())
+            .map(|(_, plugin)| plugin);
+        let plugin = plugin.unwrap_or_else(|| panic!("Plugin should be registered: {plugin_name}"));
+        plugin.parse_cli_config(plugin_args);
+
+        // create chat shell
+        let app_name = format!("({backend}) chat|{}", plugin.model_name());
+        let delim = "> ";
+        let handler = |args: MessageCommand, _: &mut ()| -> cloop::ShellResult {
+            match args {
+                MessageCommand::Msg { message } => {
+                    let prompt = Message {
+                        role: MessageRole::User,
+                        content: message,
+                        refusal: None,
+                    };
+                    let result = plugin.complete(vec![prompt]);
+                    match result {
+                        Ok(answer) => {
+                            let bold_orange = "\x1b[1;38;5;214m";
+                            let reset = "\x1b[0m";
+                            println!("\n{bold_orange}{answer}{reset}");
+                        }
+                        Err(err) => anyhow::bail!("An error occured: {err}"),
+                    }
+                }
+            }
+            Ok(cloop::ShellAction::Continue)
+        };
+
+        let mut shell = cloop::Shell::new(
+            format!("{app_name}{delim}"),
+            (),
+            ChatEditor::new(),
+            cloop::ClapSubcommandParser::default(),
+            handler,
+        );
+
+        shell.run().unwrap();
+    } else {
+        println!("Starting burnlm chat session...");
+        println!("Compiling for requested Burn backend {backend}...");
+        let inference_feature = format!("burnlm-inference/{}", backend);
+        let mut chat_args = vec![
+            "run",
+            "--release",
+            "--bin",
+            "burnlm",
+            "--no-default-features",
+            "--features",
+            &inference_feature,
+            "--quiet",
+            "--",
+        ];
+        let passed_args: Vec<String> = std::env::args().skip(1).collect();
+        chat_args.extend(passed_args.iter().map(|s| s.as_str()));
+        std::process::Command::new("cargo")
+            .env(super::INNER_BURNLM_CLI, "1")
+            .args(&chat_args)
+            .status()
+            .expect("burnlm command should execute successfully");
+    }
+
     Ok(())
-}
-
-pub(crate) async fn stop_chat() -> anyhow::Result<()> {
-    info!("Stopping containerized services...",);
-    down_docker_compose()?;
-    Ok(())
-}
-
-pub fn up_docker_compose() -> anyhow::Result<()> {
-    let args = vec![
-        "compose",
-        "-f",
-        DOCKER_COMPOSE_CONFIG,
-        "-p",
-        DOCKER_COMPOSE_PROJECT,
-        "up",
-        "-d",
-    ];
-    run_process(
-        "docker",
-        &args,
-        None,
-        None,
-        "Failed to execute 'docker compose' to start the container!",
-    )
-}
-
-pub fn down_docker_compose() -> anyhow::Result<()> {
-    let args = vec![
-        "compose",
-        "-f",
-        DOCKER_COMPOSE_CONFIG,
-        "-p",
-        DOCKER_COMPOSE_PROJECT,
-        "down",
-    ];
-    run_process(
-        "docker",
-        &args,
-        None,
-        None,
-        "Failed to execute 'docker compose' to stop the container!",
-    )
 }

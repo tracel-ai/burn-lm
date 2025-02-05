@@ -201,7 +201,7 @@ pub fn inference_server(input: TokenStream) -> TokenStream {
             let config = fields
                 .fields
                 .iter()
-                .find(|f| f.ident.as_ref().is_some_and(|i| i.to_string() == "config"));
+                .find(|f| f.ident.as_ref().is_some_and(|i| *i == "config"));
             match config {
                 Some(field) => field.ty.clone(),
                 None => {

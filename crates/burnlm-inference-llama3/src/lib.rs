@@ -65,23 +65,24 @@ impl<B: Backend> Default for Llama3InstructServer<B> {
     }
 }
 
-fn llama_downloader(version: pretrained::Llama, name: &'static str) -> InferenceResult<()>
-{
+fn llama_downloader(version: pretrained::Llama, name: &'static str) -> InferenceResult<()> {
     let model = pretrained::Llama::pretrained(&version);
-    model.download_weights().map_err(|err| {
-        InferenceError::DownloadWeightError(name.to_string(), err.to_string())
-    })?;
-    model.download_tokenizer().map_err(|err| {
-        InferenceError::DownloadTokenizerError(name.to_string(), err.to_string())
-    })?;
+    model
+        .download_weights()
+        .map_err(|err| InferenceError::DownloadWeightError(name.to_string(), err.to_string()))?;
+    model
+        .download_tokenizer()
+        .map_err(|err| InferenceError::DownloadTokenizerError(name.to_string(), err.to_string()))?;
     Ok(())
 }
 
 impl InferenceServer for Llama3InstructServer<InferenceBackend> {
     fn downloader(&mut self) -> Option<fn() -> InferenceResult<()>> {
         fn downloader() -> InferenceResult<()> {
-            llama_downloader(pretrained::Llama::Llama3,
-                             Llama3InstructServer::<InferenceBackend>::model_name())
+            llama_downloader(
+                pretrained::Llama::Llama3,
+                Llama3InstructServer::<InferenceBackend>::model_name(),
+            )
         }
         Some(downloader)
     }
@@ -124,8 +125,10 @@ impl<B: Backend> Default for Llama31InstructServer<B> {
 impl InferenceServer for Llama31InstructServer<InferenceBackend> {
     fn downloader(&mut self) -> Option<fn() -> InferenceResult<()>> {
         fn downloader() -> InferenceResult<()> {
-            llama_downloader(pretrained::Llama::Llama31Instruct,
-                             Llama31InstructServer::<InferenceBackend>::model_name())
+            llama_downloader(
+                pretrained::Llama::Llama31Instruct,
+                Llama31InstructServer::<InferenceBackend>::model_name(),
+            )
         }
         Some(downloader)
     }
@@ -168,8 +171,10 @@ impl<B: Backend> Default for Llama321bInstructServer<B> {
 impl InferenceServer for Llama321bInstructServer<InferenceBackend> {
     fn downloader(&mut self) -> Option<fn() -> InferenceResult<()>> {
         fn downloader() -> InferenceResult<()> {
-            llama_downloader(pretrained::Llama::Llama321bInstruct,
-                             Llama321bInstructServer::<InferenceBackend>::model_name())
+            llama_downloader(
+                pretrained::Llama::Llama321bInstruct,
+                Llama321bInstructServer::<InferenceBackend>::model_name(),
+            )
         }
         Some(downloader)
     }
@@ -212,8 +217,10 @@ impl<B: Backend> Default for Llama323bInstructServer<B> {
 impl InferenceServer for Llama323bInstructServer<InferenceBackend> {
     fn downloader(&mut self) -> Option<fn() -> InferenceResult<()>> {
         fn downloader() -> InferenceResult<()> {
-            llama_downloader(pretrained::Llama::Llama323bInstruct,
-                             Llama323bInstructServer::<InferenceBackend>::model_name())
+            llama_downloader(
+                pretrained::Llama::Llama323bInstruct,
+                Llama323bInstructServer::<InferenceBackend>::model_name(),
+            )
         }
         Some(downloader)
     }

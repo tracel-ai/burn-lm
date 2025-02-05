@@ -52,7 +52,7 @@ pub(crate) fn handle(args: &clap::ArgMatches) -> anyhow::Result<()> {
         let backend = run_args.get_one::<BackendValues>("backend").unwrap();
         println!("Running inference...");
         println!("Compiling for requested Burn backend {backend}...");
-        let inference_feature = format!("burnlm-inference/{}", backend.to_string());
+        let inference_feature = format!("burnlm-inference/{}", backend);
         let mut args = vec![
             "run",
             "--release",

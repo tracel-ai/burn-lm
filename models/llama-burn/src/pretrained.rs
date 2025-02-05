@@ -31,7 +31,7 @@ mod downloader {
 
         pub fn is_downloaded(&self) -> bool {
             let model_name = self.model_dir().join(self.model_file_name(self.model));
-            let tokenizer_name = self.model_dir().join(self.model_file_name(&self.tokenizer));
+            let tokenizer_name = self.model_dir().join(self.model_file_name(self.tokenizer));
             model_name.exists() && tokenizer_name.exists()
         }
 

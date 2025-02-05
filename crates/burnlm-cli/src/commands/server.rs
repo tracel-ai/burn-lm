@@ -43,7 +43,7 @@ fn run(args: &clap::ArgMatches) -> anyhow::Result<()> {
     let port_string = port.to_string();
     println!("Starting server listening on port {port_string}...");
     println!("Compiling burnlm server with Burn backend {backend}, please wait...");
-    let inference_feature = format!("burnlm-inference/{}", backend.to_string());
+    let inference_feature = format!("burnlm-inference/{}", backend);
     let args = vec![
         "run",
         "--release",

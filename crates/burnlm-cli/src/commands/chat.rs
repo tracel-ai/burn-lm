@@ -34,7 +34,7 @@ impl cloop::InputReader for ChatEditor {
 }
 
 pub(crate) fn create() -> clap::Command {
-    let mut root = clap::Command::new("chat").about("Start a chat session with the choosen model.");
+    let mut root = clap::Command::new("chat").about("Start a chat session with the choosen model");
     let registry = Registry::new();
     // Create a a subcommand for each registered model with its associated  flags
     let mut installed: Vec<_> = registry
@@ -54,7 +54,7 @@ pub(crate) fn create() -> clap::Command {
                     .value_parser(clap::value_parser!(BackendValues))
                     .default_value(DEFAULT_BURN_BACKEND)
                     .required(false)
-                    .help("The Burn backend used for chat inference."),
+                    .help("The Burn backend used for chat inference"),
             );
         }
         root = root.subcommand(subcommand);
@@ -90,7 +90,9 @@ pub(crate) fn handle(
         plugin.parse_cli_config(plugin_args);
 
         // create chat shell
-        let app_name = format!("({backend}) chat|{}", plugin.model_name());
+        let bold_orange = "\x1b[1;38;5;214m";
+        let reset = "\x1b[0m";
+        let app_name = format!("{bold_orange}({backend}) chat|{}{reset}", plugin.model_name());
         let delim = "> ";
         let handler = |args: MessageCommand, _: &mut ()| -> cloop::ShellResult {
             match args {
@@ -103,9 +105,9 @@ pub(crate) fn handle(
                     let result = plugin.complete(vec![prompt]);
                     match result {
                         Ok(answer) => {
-                            let bold_orange = "\x1b[1;38;5;214m";
+                            let bold_grey = "\x1b[1;37m";
                             let reset = "\x1b[0m";
-                            println!("\n{bold_orange}{answer}{reset}");
+                            println!("\n{bold_grey}{answer}{reset}");
                         }
                         Err(err) => anyhow::bail!("An error occured: {err}"),
                     }

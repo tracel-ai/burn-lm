@@ -20,7 +20,7 @@ pub(crate) fn create() -> clap::Command {
             .args((plugin.create_cli_flags_fn())().get_arguments())
             .arg(
                 clap::Arg::new("prompt")
-                    .help("The prompt to send to the model.")
+                    .help("The prompt to send to the model")
                     .required(true)
                     .index(1),
             )

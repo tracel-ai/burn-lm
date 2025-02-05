@@ -10,7 +10,7 @@ pub(crate) fn create() -> clap::Command {
         .about("Create a new inference server crate")
         .arg(
             clap::Arg::new("name")
-                .help("The name of the crate without the prefx 'burnlm-inference-'.")
+                .help("The name of the crate without the prefx 'burnlm-inference-'")
                 .required(true),
         )
 }

@@ -6,7 +6,7 @@ use strum::IntoEnumIterator;
 use crate::backends::BackendValues;
 
 pub(crate) fn create() -> clap::Command {
-    clap::Command::new("backends").about("List all available Burn backends.")
+    clap::Command::new("backends").about("List all available Burn backends")
 }
 
 pub(crate) fn handle() -> anyhow::Result<()> {

@@ -2,7 +2,7 @@ use crate::backends::{BackendValues, DEFAULT_BURN_BACKEND};
 
 pub(crate) fn create() -> clap::Command {
     clap::Command::new("shell")
-        .about("Start a burnlm shell session.")
+        .about("Start a burnlm shell session")
         .arg(
             clap::Arg::new("backend")
                 .long("backend")
@@ -74,8 +74,10 @@ pub(crate) fn handle(cli: clap::Command, args: &clap::ArgMatches) -> anyhow::Res
             }
         };
 
+        let bold_green = "\x1b[1;32m";
+        let reset = "\x1b[0m";
         let mut shell = cloop::Shell::new(
-            format!("{app_name}{delim}"),
+            format!("{bold_green}{app_name}{delim}{reset}"),
             (),
             ShellEditor::new(),
             cli,

@@ -40,6 +40,18 @@ impl cloop::InputReader for ChatEditor {
     }
 }
 
+#[derive(Default)]
+struct ChatContext {
+    messages: Vec<Message>,
+}
+
+impl ChatContext {
+   pub fn new() -> Self {
+       Self::default()
+   }
+}
+
+
 pub(crate) fn create() -> clap::Command {
     let mut root = clap::Command::new("chat").about("Start a chat session with the choosen model");
     let registry = Registry::new();
@@ -103,17 +115,24 @@ pub(crate) fn handle(
             plugin.model_name()
         );
         let delim = "> ";
-        let handler = |args: MessageCommand, _: &mut ()| -> cloop::ShellResult {
+        let handler = |args: MessageCommand, ctx: &mut ChatContext| -> cloop::ShellResult {
             match args {
                 MessageCommand::Msg { message } => {
-                    let prompt = Message {
+                    let formatted_msg = Message {
                         role: MessageRole::User,
                         content: message,
                         refusal: None,
                     };
-                    let result = plugin.complete(vec![prompt]);
+                    ctx.messages.push(formatted_msg);
+                    let result = plugin.complete(ctx.messages.clone());
                     match result {
                         Ok(answer) => {
+                            let formatted_ans = Message {
+                                role: MessageRole::Assistant,
+                                content: answer.clone(),
+                                refusal: None,
+                            };
+                            ctx.messages.push(formatted_ans);
                             let bold_grey = "\x1b[1;37m";
                             let reset = "\x1b[0m";
                             println!("\n{bold_grey}{answer}{reset}");
@@ -128,7 +147,7 @@ pub(crate) fn handle(
 
         let mut shell = cloop::Shell::new(
             format!("{app_name}{delim}"),
-            (),
+            ChatContext::new(),
             ChatEditor::new(),
             cloop::ClapSubcommandParser::default(),
             handler,

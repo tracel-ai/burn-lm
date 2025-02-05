@@ -53,6 +53,7 @@ pub(crate) fn handle(args: &clap::ArgMatches) -> anyhow::Result<()> {
         println!("Running inference...");
         println!("Compiling for requested Burn backend {backend}...");
         let inference_feature = format!("burnlm-inference/{}", backend);
+        let target_dir = format!("{}/run/{backend}", super::INNER_BURNLM_CLI_TARGET_DIR);
         let mut args = vec![
             "run",
             "--release",
@@ -61,6 +62,8 @@ pub(crate) fn handle(args: &clap::ArgMatches) -> anyhow::Result<()> {
             "--no-default-features",
             "--features",
             &inference_feature,
+            "--target-dir",
+            &target_dir,
             "--quiet",
             "--",
         ];

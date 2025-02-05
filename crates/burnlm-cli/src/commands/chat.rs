@@ -157,7 +157,8 @@ pub(crate) fn handle(
     } else {
         println!("(Starting) burnlm chat session...");
         println!("Compiling for requested Burn backend {backend}...");
-        let inference_feature = format!("burnlm-inference/{}", backend);
+        let inference_feature = format!("burnlm-inference/{backend}");
+        let target_dir = format!("{}/chat/{backend}", super::INNER_BURNLM_CLI_TARGET_DIR);
         let mut chat_args = vec![
             "run",
             "--release",
@@ -166,6 +167,8 @@ pub(crate) fn handle(
             "--no-default-features",
             "--features",
             &inference_feature,
+            "--target-dir",
+            &target_dir,
             "--quiet",
             "--",
         ];

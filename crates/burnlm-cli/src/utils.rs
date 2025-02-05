@@ -1,5 +1,7 @@
 use anyhow::Context;
 
+/// Sanitizes a given crate name by replacing invalid characters, merging consecutive
+/// hyphens, and ensuring it adheres to common crate naming conventions.
 pub(crate) fn sanitize_crate_name(input: &str) -> String {
     // Replace any disallowed character with '-'
     let replaced: String = input
@@ -38,6 +40,7 @@ pub(crate) fn remove_and_capitalize_dashes(input: &str) -> String {
         .collect()
 }
 
+/// Recursively copies a directory and its contents from a source path to a destination path.
 pub(crate) fn copy_directory(src: &std::path::Path, dst: &std::path::Path) -> anyhow::Result<()> {
     if !dst.exists() {
         std::fs::create_dir_all(dst)

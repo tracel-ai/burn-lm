@@ -1,5 +1,6 @@
 use burnlm_inference::{message::MessageRole, Message};
 use burnlm_registry::Registry;
+use yansi::Paint;
 
 use crate::backends::{BackendValues, DEFAULT_BURN_BACKEND};
 
@@ -98,9 +99,8 @@ fn run(plugin_name: &str, run_args: &clap::ArgMatches) -> anyhow::Result<()> {
     let result = plugin.complete(vec![message]);
     match result {
         Ok(answer) => {
-            let bold_orange = "\x1b[1;38;5;214m";
-            let reset = "\x1b[0m";
-            println!("\n{bold_orange}{answer}{reset}");
+            let fmt_answer = answer.bright_black().bold();
+            println!("{fmt_answer}");
             Ok(())
         }
         Err(err) => anyhow::bail!("An error occured: {err}"),

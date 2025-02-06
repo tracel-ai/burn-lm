@@ -11,3 +11,33 @@ pub(crate) mod web;
 const INNER_BURNLM_CLI_TARGET_DIR: &str = "target/inner";
 const INNER_BURNLM_CLI: &str = "__INNER_BURNLM_CLI";
 const BURNLM_SHELL: &str = "__BURNLM_SHELL";
+
+use yansi::Paint;
+/// Rustyline custom line editor helper
+/// Principal aim for this is to provide a way to stylize the prompt.
+#[derive(
+    Default, rustyline::Completer, rustyline::Helper, rustyline::Hinter, rustyline::Validator,
+)]
+pub(crate) struct BurnLMPromptHelper {
+    style: yansi::Style,
+}
+
+impl BurnLMPromptHelper {
+    pub fn new(style: yansi::Style) -> Self {
+        Self { style }
+    }
+}
+
+impl rustyline::highlight::Highlighter for BurnLMPromptHelper {
+    fn highlight_prompt<'b, 's: 'b, 'p: 'b>(
+        &'s self,
+        prompt: &'p str,
+        default: bool,
+    ) -> std::borrow::Cow<'b, str> {
+        if default {
+            std::borrow::Cow::Owned(format!("{}", prompt.paint(self.style)))
+        } else {
+            std::borrow::Cow::Borrowed(prompt)
+        }
+    }
+}

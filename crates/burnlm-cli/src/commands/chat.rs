@@ -1,6 +1,9 @@
 use burnlm_inference::{Message, MessageRole};
 use burnlm_registry::Registry;
+use rustyline::{history::DefaultHistory, Editor};
+use yansi::Paint;
 
+use super::BurnLMPromptHelper;
 use crate::{backends::BackendValues, utils};
 
 #[derive(clap::Subcommand)]
@@ -10,21 +13,22 @@ pub enum MessageCommand {
     Exit,
 }
 
-// Define our own Rustyline to automatically insert the 'msg' command
-// in front of the message.
-pub struct ChatEditor {
-    editor: rustyline::DefaultEditor,
+// custom rustyline editor to automatically insert the 'msg' command
+// in front of the message and parse slash commands (for instance /exit).
+struct ChatEditor<H: rustyline::Helper> {
+    editor: Editor<H, DefaultHistory>,
 }
 
-impl ChatEditor {
+impl ChatEditor<BurnLMPromptHelper> {
     fn new() -> Self {
-        Self {
-            editor: rustyline::DefaultEditor::new().unwrap(),
-        }
+        let mut editor = Editor::<BurnLMPromptHelper, DefaultHistory>::new().unwrap();
+        let helper = BurnLMPromptHelper::new(yansi::Color::Yellow.bold());
+        editor.set_helper(Some(helper));
+        Self { editor }
     }
 }
 
-impl cloop::InputReader for ChatEditor {
+impl cloop::InputReader for ChatEditor<BurnLMPromptHelper> {
     fn read(&mut self, prompt: &str) -> std::io::Result<cloop::InputResult> {
         match self.editor.read(prompt) {
             Ok(cloop::InputResult::Input(s)) => {
@@ -46,11 +50,10 @@ struct ChatContext {
 }
 
 impl ChatContext {
-   pub fn new() -> Self {
-       Self::default()
-   }
+    pub fn new() -> Self {
+        Self::default()
+    }
 }
-
 
 pub(crate) fn create() -> clap::Command {
     let mut root = clap::Command::new("chat").about("Start a chat session with the choosen model");
@@ -108,12 +111,7 @@ pub(crate) fn handle(
         plugin.parse_cli_config(plugin_args);
 
         // create chat shell
-        let bold_orange = "\x1b[1;38;5;214m";
-        let reset = "\x1b[0m";
-        let app_name = format!(
-            "{bold_orange}({backend}) chat|{}{reset}",
-            plugin.model_name()
-        );
+        let app_name = format!("({backend}) chat|{}", plugin.model_name());
         let delim = "> ";
         let handler = |args: MessageCommand, ctx: &mut ChatContext| -> cloop::ShellResult {
             match args {
@@ -133,9 +131,8 @@ pub(crate) fn handle(
                                 refusal: None,
                             };
                             ctx.messages.push(formatted_ans);
-                            let bold_grey = "\x1b[1;37m";
-                            let reset = "\x1b[0m";
-                            println!("\n{bold_grey}{answer}{reset}");
+                            let fmt_answer = answer.bright_black().bold();
+                            println!("{fmt_answer}");
                         }
                         Err(err) => anyhow::bail!("An error occured: {err}"),
                     }
@@ -153,9 +150,11 @@ pub(crate) fn handle(
             handler,
         );
 
+        println!("Chat session started! (press CTRL+D or type /exit to close session)");
         shell.run().unwrap();
+        println!("Chat session closed!");
     } else {
-        println!("(Starting) burnlm chat session...");
+        println!("Starting burnlm chat session...");
         println!("Compiling for requested Burn backend {backend}...");
         let inference_feature = format!("burnlm-inference/{backend}");
         let target_dir = format!("{}/chat/{backend}", super::INNER_BURNLM_CLI_TARGET_DIR);

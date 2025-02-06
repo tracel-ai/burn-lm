@@ -1,4 +1,27 @@
+use rustyline::{history::DefaultHistory, Editor};
+
+use super::BurnLMPromptHelper;
 use crate::backends::{BackendValues, DEFAULT_BURN_BACKEND};
+
+// custom rustyline editor to stylize the prompt
+struct ShellEditor<H: rustyline::Helper> {
+    editor: Editor<H, DefaultHistory>,
+}
+
+impl ShellEditor<BurnLMPromptHelper> {
+    fn new() -> Self {
+        let mut editor = Editor::<BurnLMPromptHelper, DefaultHistory>::new().unwrap();
+        let helper = BurnLMPromptHelper::new(yansi::Color::Green.bold());
+        editor.set_helper(Some(helper));
+        Self { editor }
+    }
+}
+
+impl cloop::InputReader for ShellEditor<BurnLMPromptHelper> {
+    fn read(&mut self, prompt: &str) -> std::io::Result<cloop::InputResult> {
+        self.editor.read(prompt)
+    }
+}
 
 pub(crate) fn create() -> clap::Command {
     clap::Command::new("shell")
@@ -13,6 +36,8 @@ pub(crate) fn create() -> clap::Command {
         )
 }
 
+type ShellContext = ();
+
 pub(crate) fn handle(cli: &clap::Command, args: &clap::ArgMatches) -> anyhow::Result<()> {
     let backend = args.get_one::<BackendValues>("backend").unwrap();
     if std::env::var(super::INNER_BURNLM_CLI).is_ok() {
@@ -20,7 +45,7 @@ pub(crate) fn handle(cli: &clap::Command, args: &clap::ArgMatches) -> anyhow::Re
         let app_name = format!("({backend}) burnlm");
         let delim = "> ";
 
-        let handler = |args: clap::ArgMatches, _: &mut ()| -> cloop::ShellResult {
+        let handler = |args: clap::ArgMatches, _: &mut ShellContext| -> cloop::ShellResult {
             if args.subcommand_matches("backends").is_some() {
                 super::backends::handle()?;
                 Ok(cloop::ShellAction::Continue)
@@ -50,12 +75,10 @@ pub(crate) fn handle(cli: &clap::Command, args: &clap::ArgMatches) -> anyhow::Re
             }
         };
 
-        let bold_green = "\x1b[1;32m";
-        let reset = "\x1b[0m";
         let mut shell = cloop::Shell::new(
-            format!("{bold_green}{app_name}{delim}{reset}"),
-            (),
-            rustyline::DefaultEditor::new().unwrap(),
+            format!("{app_name}{delim}"),
+            ShellContext::default(),
+            ShellEditor::new(),
             cli.clone().multicall(true),
             handler,
         );

@@ -15,6 +15,7 @@ cloop = { workspace = true }
 comfy-table = { workspace = true }
 rustyline = { workspace = true }
 strum = { workspace = true }
+yansi = "1.0.1"
 
 [dev-dependencies]
 rstest = { workspace = true }

@@ -38,12 +38,12 @@ pub(crate) fn create() -> clap::Command {
     root
 }
 
-pub(crate) fn handle(args: &clap::ArgMatches) -> anyhow::Result<()> {
+pub(crate) fn handle(args: &clap::ArgMatches) -> super::HandleCommandResult {
     let plugin_name = match args.subcommand_name() {
         Some(cmd) => cmd,
         None => {
             create().print_help().unwrap();
-            return Ok(());
+            return Ok(None);
         }
     };
     let run_args = args.subcommand_matches(plugin_name).unwrap();
@@ -75,11 +75,11 @@ pub(crate) fn handle(args: &clap::ArgMatches) -> anyhow::Result<()> {
             .args(&args)
             .status()
             .expect("burnlm command should execute successfully");
-        Ok(())
+        Ok(None)
     }
 }
 
-fn run(plugin_name: &str, run_args: &clap::ArgMatches) -> anyhow::Result<()> {
+fn run(plugin_name: &str, run_args: &clap::ArgMatches) -> super::HandleCommandResult {
     let registry = Registry::new();
     let plugin = registry
         .get()
@@ -101,7 +101,7 @@ fn run(plugin_name: &str, run_args: &clap::ArgMatches) -> anyhow::Result<()> {
         Ok(answer) => {
             let fmt_answer = answer.bright_black().bold();
             println!("{fmt_answer}");
-            Ok(())
+            Ok(None)
         }
         Err(err) => anyhow::bail!("An error occured: {err}"),
     }

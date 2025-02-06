@@ -26,7 +26,7 @@ pub(crate) fn create() -> clap::Command {
     root
 }
 
-pub(crate) fn handle(args: &clap::ArgMatches) -> anyhow::Result<()> {
+pub(crate) fn handle(args: &clap::ArgMatches) -> super::HandleCommandResult {
     let registry = Registry::new();
     let downloaders = match args.subcommand_name() {
         Some("all") => {
@@ -55,7 +55,7 @@ pub(crate) fn handle(args: &clap::ArgMatches) -> anyhow::Result<()> {
         }
         None => {
             create().print_help().unwrap();
-            return Ok(());
+            return Ok(None);
         }
     };
 
@@ -74,5 +74,5 @@ pub(crate) fn handle(args: &clap::ArgMatches) -> anyhow::Result<()> {
         }
         println!("✅ Download complete!");
     }
-    Ok(())
+    Ok(Some(super::ShellMetaAction::RefreshParser))
 }

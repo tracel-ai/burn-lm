@@ -86,12 +86,12 @@ pub(crate) fn create() -> clap::Command {
 pub(crate) fn handle(
     args: &clap::ArgMatches,
     backend: Option<&BackendValues>,
-) -> anyhow::Result<()> {
+) -> super::HandleCommandResult {
     let plugin_name = match args.subcommand_name() {
         Some(cmd) => cmd,
         None => {
             create().print_help().unwrap();
-            return Ok(());
+            return Ok(None);
         }
     };
     let plugin_args = args.subcommand_matches(plugin_name).unwrap();
@@ -180,5 +180,5 @@ pub(crate) fn handle(
             .expect("burnlm command should execute successfully");
     }
 
-    Ok(())
+    Ok(None)
 }

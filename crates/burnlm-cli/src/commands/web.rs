@@ -25,12 +25,12 @@ pub(crate) fn create() -> clap::Command {
     root
 }
 
-pub(crate) fn handle(args: &clap::ArgMatches) -> anyhow::Result<()> {
+pub(crate) fn handle(args: &clap::ArgMatches) -> super::HandleCommandResult {
     let action = match args.subcommand_name() {
         Some(cmd) => cmd,
         None => {
             create().print_help().unwrap();
-            return Ok(());
+            return Ok(None);
         }
     };
     match action {
@@ -43,7 +43,7 @@ pub(crate) fn handle(args: &clap::ArgMatches) -> anyhow::Result<()> {
     }
 }
 
-fn start_web(args: &clap::ArgMatches) -> anyhow::Result<()> {
+fn start_web(args: &clap::ArgMatches) -> super::HandleCommandResult {
     println!("Starting containerized services...",);
     up_docker_compose()?;
     // write mprocs file from template
@@ -59,13 +59,13 @@ fn start_web(args: &clap::ArgMatches) -> anyhow::Result<()> {
         .status()
         .map_err(|e| anyhow::anyhow!("Failed to start web stack: {e}"))?;
     println!("Web stack shutdown!",);
-    Ok(())
+    Ok(None)
 }
 
-fn stop_web() -> anyhow::Result<()> {
+fn stop_web() -> super::HandleCommandResult {
     println!("Stopping containerized services...",);
     down_docker_compose()?;
-    Ok(())
+    Ok(None)
 }
 
 pub fn up_docker_compose() -> anyhow::Result<()> {

@@ -5,7 +5,7 @@ pub(crate) fn create() -> clap::Command {
     clap::Command::new("models").about("List all available models and their installation status")
 }
 
-pub(crate) fn handle() -> anyhow::Result<()> {
+pub(crate) fn handle() -> super::HandleCommandResult {
     let registry = Registry::new();
     let mut table = Table::new();
     table
@@ -49,5 +49,5 @@ pub(crate) fn handle() -> anyhow::Result<()> {
         ]);
     }
     println!("{table}");
-    Ok(())
+    Ok(None)
 }

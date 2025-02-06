@@ -15,7 +15,7 @@ pub(crate) fn create() -> clap::Command {
         )
 }
 
-pub(crate) fn handle(args: &clap::ArgMatches) -> anyhow::Result<()> {
+pub(crate) fn handle(args: &clap::ArgMatches) -> super::HandleCommandResult {
     // sanitize the desired crate name
     let crate_name = args
         .get_one::<String>("name")
@@ -74,7 +74,7 @@ pub(crate) fn handle(args: &clap::ArgMatches) -> anyhow::Result<()> {
         .open(registry_cargo_path)?;
     writeln!(registry_cargo_file, "{dependency}")?;
 
-    Ok(())
+    Ok(Some(super::ShellMetaAction::RefreshParser))
 }
 
 /// Inserts a new server(...) entry into the #[inference_server_registry(...)]

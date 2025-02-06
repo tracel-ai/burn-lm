@@ -24,7 +24,7 @@ pub(crate) fn create() -> clap::Command {
     root
 }
 
-pub(crate) fn handle(args: &clap::ArgMatches) -> anyhow::Result<()> {
+pub(crate) fn handle(args: &clap::ArgMatches) -> super::HandleCommandResult {
     match args.subcommand_name() {
         Some("run") => {
             let run_args = args.subcommand_matches("run").unwrap();
@@ -32,12 +32,12 @@ pub(crate) fn handle(args: &clap::ArgMatches) -> anyhow::Result<()> {
         }
         _ => {
             create().print_help().unwrap();
-            Ok(())
+            Ok(None)
         }
     }
 }
 
-fn run(args: &clap::ArgMatches) -> anyhow::Result<()> {
+fn run(args: &clap::ArgMatches) -> super::HandleCommandResult {
     let backend = args.get_one::<BackendValues>("backend").unwrap();
     let port = args.get_one::<u16>("port").unwrap();
     let port_string = port.to_string();

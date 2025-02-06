@@ -9,7 +9,7 @@ pub(crate) fn create() -> clap::Command {
     clap::Command::new("backends").about("List all available Burn backends")
 }
 
-pub(crate) fn handle() -> anyhow::Result<()> {
+pub(crate) fn handle() -> super::HandleCommandResult {
     let mut backends: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for backend in BackendValues::iter() {
         let backend_string = backend.to_string();
@@ -57,5 +57,5 @@ pub(crate) fn handle() -> anyhow::Result<()> {
             .collect::<Vec<_>>(),
     );
     println!("{table}");
-    Ok(())
+    Ok(None)
 }

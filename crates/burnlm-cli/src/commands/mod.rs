@@ -12,13 +12,22 @@ const INNER_BURNLM_CLI_TARGET_DIR: &str = "target/inner";
 const INNER_BURNLM_CLI: &str = "__INNER_BURNLM_CLI";
 const BURNLM_SHELL: &str = "__BURNLM_SHELL";
 
+/// Meta action used in shell mode.
+/// It is returned by the handle function of each command.
+pub(crate) enum ShellMetaAction {
+    Initialize,
+    RefreshParser,
+}
+
+type HandleCommandResult = anyhow::Result<Option<ShellMetaAction>>;
+
 use yansi::Paint;
 /// Rustyline custom line editor helper
 /// Principal aim for this is to provide a way to stylize the prompt.
 #[derive(
     Default, rustyline::Completer, rustyline::Helper, rustyline::Hinter, rustyline::Validator,
 )]
-pub(crate) struct BurnLMPromptHelper {
+struct BurnLMPromptHelper {
     style: yansi::Style,
 }
 

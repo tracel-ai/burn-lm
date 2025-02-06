@@ -29,7 +29,14 @@ pub(crate) fn handle() -> anyhow::Result<()> {
     for (name, plugin) in reg_entries {
         let installation_status = if plugin.is_downloaded() { "✅" } else { "❌" };
         let install_cmd_cell = if plugin.downloader().is_some() {
-            let content = format!("cargo burnlm download {}", plugin.model_cli_param_name());
+            let content = format!(
+                "{}download {}",
+                if std::env::var(super::BURNLM_SHELL).is_ok() {
+                    ""
+                } else {
+                    "cargo burnlm "
+                },
+                plugin.model_cli_param_name());
             Cell::new(content).set_alignment(comfy_table::CellAlignment::Left)
         } else {
             Cell::new("─").set_alignment(comfy_table::CellAlignment::Center)

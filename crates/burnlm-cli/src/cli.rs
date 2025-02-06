@@ -1,9 +1,14 @@
-use crate::commands;
+use clap::ValueEnum;
+use yansi::Paint;
+
+use crate::{backends::BackendValues, commands};
+
+const BURNLM_DEFAULT_BACKEND_ENVVAR: &str = "BURNLM_DEFAULT_BACKEND";
 
 pub fn run() -> anyhow::Result<()> {
     println!();
     // Define CLI
-    let mut cli = clap::command!()
+    let cli = clap::command!()
         .subcommand(commands::backends::create())
         .subcommand(commands::chat::create())
         .subcommand(commands::download::create())
@@ -32,11 +37,25 @@ pub fn run() -> anyhow::Result<()> {
     } else if let Some(args) = matches.subcommand_matches("server") {
         commands::server::handle(args).map(|_| ())
     } else if let Some(args) = matches.subcommand_matches("shell") {
-        commands::shell::handle(args).map(|_| ())
+        commands::shell::handle(Some(args), None).map(|_| ())
     } else if let Some(args) = matches.subcommand_matches("web") {
         commands::web::handle(args).map(|_| ())
     } else {
-        cli.print_help().unwrap();
-        Ok(())
+        // default command is to launch a shell
+        let backend = match std::env::var(BURNLM_DEFAULT_BACKEND_ENVVAR) {
+            Ok(backend) => BackendValues::from_str(&backend, true).unwrap(),
+            Err(_) => {
+                let mut table = comfy_table::Table::new();
+                table.load_preset(comfy_table::presets::UTF8_FULL)
+                    .apply_modifier(comfy_table::modifiers::UTF8_ROUND_CORNERS)
+                    .set_content_arrangement(comfy_table::ContentArrangement::Dynamic)
+                    .set_width(80)
+                    .add_row(
+                        vec![comfy_table::Cell::new(format!("💡 Hint: No environment variable '{BURNLM_DEFAULT_BACKEND_ENVVAR}' defined. Using default Burn backend which is 'wgpu'."))]);
+                println!("{}\n", table.bright_yellow().bold().italic());
+                BackendValues::Wgpu
+            }
+        };
+        commands::shell::handle(None, Some(&backend)).map(|_| ())
     }
 }

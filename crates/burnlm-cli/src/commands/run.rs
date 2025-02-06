@@ -47,14 +47,14 @@ pub(crate) fn handle(args: &clap::ArgMatches) -> super::HandleCommandResult {
         }
     };
     let run_args = args.subcommand_matches(plugin_name).unwrap();
-    if std::env::var(super::INNER_BURNLM_CLI).is_ok() {
+    if std::env::var(super::INNER_BURNLM_CLI_ENVVAR).is_ok() {
         run(plugin_name, run_args)
     } else {
         let backend = run_args.get_one::<BackendValues>("backend").unwrap();
         println!("Running inference...");
         println!("Compiling for requested Burn backend {backend}...");
         let inference_feature = format!("burnlm-inference/{}", backend);
-        let target_dir = format!("{}/run/{backend}", super::INNER_BURNLM_CLI_TARGET_DIR);
+        let target_dir = format!("{}/{backend}", super::INNER_BURNLM_CLI_TARGET_DIR);
         let mut args = vec![
             "run",
             "--release",
@@ -71,7 +71,7 @@ pub(crate) fn handle(args: &clap::ArgMatches) -> super::HandleCommandResult {
         let passed_args: Vec<String> = std::env::args().skip(1).collect();
         args.extend(passed_args.iter().map(|s| s.as_str()));
         std::process::Command::new("cargo")
-            .env(super::INNER_BURNLM_CLI, "1")
+            .env(super::INNER_BURNLM_CLI_ENVVAR, "1")
             .args(&args)
             .status()
             .expect("burnlm command should execute successfully");

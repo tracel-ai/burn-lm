@@ -50,7 +50,10 @@ fn create_parser() -> clap::Command {
         .multicall(true)
 }
 
-pub(crate) fn handle(args: &clap::ArgMatches) -> anyhow::Result<()> {
+pub(crate) fn handle(
+    args: Option<&clap::ArgMatches>,
+    backend: Option<&BackendValues>,
+) -> anyhow::Result<()> {
     // meta action used to control the outer loop
     // we need interior mutability here because the shell handler
     // is bound to the Fn trait
@@ -69,9 +72,15 @@ pub(crate) fn handle(args: &clap::ArgMatches) -> anyhow::Result<()> {
     editor.borrow_mut().set_helper(Some(helper));
 
     // Burn backend for this shell session
-    let backend = args.get_one::<BackendValues>("backend").unwrap();
+    let backend = match backend {
+        Some(b) => b,
+        None => args
+            .expect("should have parsed args when no backend function argument has been provided")
+            .get_one::<BackendValues>("backend")
+            .unwrap(),
+    };
 
-    if std::env::var(super::INNER_BURNLM_CLI).is_ok() {
+    if std::env::var(super::INNER_BURNLM_CLI_ENVVAR).is_ok() {
         println!("Welcome to Burn LM shell! (press CTRL+D to exit)");
         let app_name = format!("({backend}) burnlm");
         let delim = "> ";
@@ -129,7 +138,7 @@ pub(crate) fn handle(args: &clap::ArgMatches) -> anyhow::Result<()> {
         println!("Compiling for requested Burn backend {backend}...");
         let inference_feature = format!("burnlm-inference/{}", backend);
         let backend_str = &backend.to_string();
-        let target_dir = format!("{}/shell/{backend}", super::INNER_BURNLM_CLI_TARGET_DIR);
+        let target_dir = format!("{}/{backend}", super::INNER_BURNLM_CLI_TARGET_DIR);
         let args = vec![
             "run",
             "--release",
@@ -147,8 +156,8 @@ pub(crate) fn handle(args: &clap::ArgMatches) -> anyhow::Result<()> {
             &backend_str,
         ];
         std::process::Command::new("cargo")
-            .env(super::INNER_BURNLM_CLI, "1")
-            .env(super::BURNLM_SHELL, "1")
+            .env(super::INNER_BURNLM_CLI_ENVVAR, "1")
+            .env(super::BURNLM_SHELL_ENVVAR, "1")
             .args(&args)
             .status()
             .expect("burnlm command should execute successfully");

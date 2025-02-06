@@ -69,7 +69,7 @@ pub(crate) fn create() -> clap::Command {
         let mut subcommand = clap::Command::new(plugin.model_cli_param_name())
             .about(format!("Chat with {} model", plugin.model_name()))
             .args((plugin.create_cli_flags_fn())().get_arguments());
-        if std::env::var(super::BURNLM_SHELL).is_err() {
+        if std::env::var(super::BURNLM_SHELL_ENVVAR).is_err() {
             subcommand = subcommand.arg(
                 clap::Arg::new("backend")
                     .long("backend")
@@ -99,7 +99,7 @@ pub(crate) fn handle(
         Some(b) => b,
         None => plugin_args.get_one::<BackendValues>("backend").unwrap(),
     };
-    if std::env::var(super::INNER_BURNLM_CLI).is_ok() {
+    if std::env::var(super::INNER_BURNLM_CLI_ENVVAR).is_ok() {
         // retrieve registered plugin
         let registry = Registry::new();
         let plugin = registry
@@ -157,7 +157,7 @@ pub(crate) fn handle(
         println!("Starting burnlm chat session...");
         println!("Compiling for requested Burn backend {backend}...");
         let inference_feature = format!("burnlm-inference/{backend}");
-        let target_dir = format!("{}/chat/{backend}", super::INNER_BURNLM_CLI_TARGET_DIR);
+        let target_dir = format!("{}/{backend}", super::INNER_BURNLM_CLI_TARGET_DIR);
         let mut chat_args = vec![
             "run",
             "--release",
@@ -174,7 +174,7 @@ pub(crate) fn handle(
         let cli_args: Vec<String> = std::env::args().skip(1).collect();
         chat_args.extend(cli_args.iter().map(|s| s.as_str()));
         std::process::Command::new("cargo")
-            .env(super::INNER_BURNLM_CLI, "1")
+            .env(super::INNER_BURNLM_CLI_ENVVAR, "1")
             .args(&chat_args)
             .status()
             .expect("burnlm command should execute successfully");

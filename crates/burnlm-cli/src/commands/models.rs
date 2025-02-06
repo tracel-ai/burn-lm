@@ -31,7 +31,7 @@ pub(crate) fn handle() -> super::HandleCommandResult {
         let install_cmd_cell = if plugin.downloader().is_some() {
             let content = format!(
                 "{}download {}",
-                if std::env::var(super::BURNLM_SHELL).is_ok() {
+                if std::env::var(super::BURNLM_SHELL_ENVVAR).is_ok() {
                     ""
                 } else {
                     "cargo burnlm "

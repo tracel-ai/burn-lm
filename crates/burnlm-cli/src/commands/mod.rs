@@ -9,8 +9,8 @@ pub(crate) mod shell;
 pub(crate) mod web;
 
 const INNER_BURNLM_CLI_TARGET_DIR: &str = "target/inner";
-const INNER_BURNLM_CLI: &str = "__INNER_BURNLM_CLI";
-const BURNLM_SHELL: &str = "__BURNLM_SHELL";
+const INNER_BURNLM_CLI_ENVVAR: &str = "__INNER_BURNLM_CLI";
+const BURNLM_SHELL_ENVVAR: &str = "__BURNLM_SHELL";
 
 /// Meta action used in shell mode.
 /// It is returned by the handle function of each command.

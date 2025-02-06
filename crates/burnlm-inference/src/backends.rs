@@ -5,7 +5,8 @@ pub mod burn_backend_types {
     use burn::backend::candle::{Candle, CandleDevice};
     pub type InferenceBackend = Candle;
     pub type InferenceDevice = CandleDevice;
-    pub const INFERENCE_DEVICE: InferenceDevice = CandleDevice::Cpu;
+    pub const INFERENCE_DEVICE: std::sync::LazyLock<CandleDevice> =
+        std::sync::LazyLock::new(|| CandleDevice::Cpu);
 }
 
 #[cfg(feature = "candle-cuda")]
@@ -13,7 +14,8 @@ pub mod burn_backend_types {
     use burn::backend::candle::{Candle, CandleDevice};
     pub type InferenceBackend = Candle;
     pub type InferenceDevice = CandleDevice;
-    pub const INFERENCE_DEVICE: InferenceDevice = CandleDevice::cuda(0);
+    pub const INFERENCE_DEVICE: std::sync::LazyLock<CandleDevice> =
+        std::sync::LazyLock::new(|| CandleDevice::cuda(0));
 }
 
 #[cfg(feature = "candle-metal")]
@@ -21,7 +23,8 @@ pub mod burn_backend_types {
     use burn::backend::candle::{Candle, CandleDevice};
     pub type InferenceBackend = Candle;
     pub type InferenceDevice = CandleDevice;
-    pub const INFERENCE_DEVICE: InferenceDevice = CandleDevice::metal(0);
+    pub const INFERENCE_DEVICE: std::sync::LazyLock<CandleDevice> =
+        std::sync::LazyLock::new(|| CandleDevice::metal(0));
 }
 
 // Cuda ----------------------------------------------------------------------
@@ -31,7 +34,8 @@ pub mod burn_backend_types {
     use burn::backend::cuda::{Cuda, CudaDevice};
     pub type InferenceBackend = Cuda;
     pub type InferenceDevice = CudaDevice;
-    pub const INFERENCE_DEVICE: InferenceDevice = CudaDevice::new(0);
+    pub const INFERENCE_DEVICE: std::sync::LazyLock<CudaDevice> =
+        std::sync::LazyLock::new(|| CudaDevice::default());
 }
 
 // Hip -----------------------------------------------------------------------
@@ -41,7 +45,8 @@ pub mod burn_backend_types {
     use burn::backend::hip::{Hip, HipDevice};
     pub type InferenceBackend = Hip;
     pub type InferenceDevice = HipDevice;
-    pub const INFERENCE_DEVICE: InferenceDevice = HipDevice::new(0);
+    pub const INFERENCE_DEVICE: std::sync::LazyLock<HipDevice> =
+        std::sync::LazyLock::new(|| HipDevice::default());
 }
 
 // ndarray -------------------------------------------------------------------
@@ -67,7 +72,8 @@ pub mod burn_backend_types {
     pub type InferenceBackend = LibTorch<burn::tensor::f16>;
     pub type InferenceDevice = LibTorchDevice;
     #[cfg(not(target_os = "macos"))]
-    pub const INFERENCE_DEVICE: InferenceDevice = LibTorchDevice::Cuda(0);
+    pub const INFERENCE_DEVICE: std::sync::LazyLock<LibTorchDevice> =
+        std::sync::LazyLock::new(|| LibTorchDevice::Cuda(0));
     #[cfg(target_os = "macos")]
     pub const INFERENCE_DEVICE: InferenceDevice = LibTorchDevice::Mps;
 }

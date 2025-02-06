@@ -36,7 +36,8 @@ pub(crate) fn handle() -> anyhow::Result<()> {
                 } else {
                     "cargo burnlm "
                 },
-                plugin.model_cli_param_name());
+                plugin.model_cli_param_name()
+            );
             Cell::new(content).set_alignment(comfy_table::CellAlignment::Left)
         } else {
             Cell::new("─").set_alignment(comfy_table::CellAlignment::Center)

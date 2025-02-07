@@ -2,7 +2,7 @@ use burnlm_registry::Registry;
 use comfy_table::{Cell, Table};
 
 pub(crate) fn create() -> clap::Command {
-    clap::Command::new("models").about("List all available models and their installation status")
+    clap::Command::new("models").about("List all available models and their download status")
 }
 
 pub(crate) fn handle() -> super::HandleCommandResult {
@@ -12,15 +12,14 @@ pub(crate) fn handle() -> super::HandleCommandResult {
         .load_preset(comfy_table::presets::UTF8_FULL)
         .apply_modifier(comfy_table::modifiers::UTF8_ROUND_CORNERS)
         .set_content_arrangement(comfy_table::ContentArrangement::Dynamic)
-        .set_width(80)
         .set_header(vec![
             Cell::new("Available Models")
                 .add_attribute(comfy_table::Attribute::Bold)
                 .set_alignment(comfy_table::CellAlignment::Center),
-            Cell::new("Installed")
+            Cell::new("Downloaded")
                 .add_attribute(comfy_table::Attribute::Bold)
                 .set_alignment(comfy_table::CellAlignment::Center),
-            Cell::new("Install Command")
+            Cell::new("Download Command")
                 .add_attribute(comfy_table::Attribute::Bold)
                 .set_alignment(comfy_table::CellAlignment::Center),
         ]);

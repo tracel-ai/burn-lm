@@ -1,7 +1,7 @@
 use clap::ValueEnum;
 use yansi::Paint;
 
-use crate::{backends::BackendValues, commands};
+use crate::{backends::{BackendValues, DEFAULT_BURN_BACKEND}, commands};
 
 const BURNLM_DEFAULT_BACKEND_ENVVAR: &str = "BURNLM_DEFAULT_BACKEND";
 
@@ -51,9 +51,9 @@ pub fn run() -> anyhow::Result<()> {
                     .set_content_arrangement(comfy_table::ContentArrangement::Dynamic)
                     .set_width(80)
                     .add_row(
-                        vec![comfy_table::Cell::new(format!("💡 Hint: No environment variable '{BURNLM_DEFAULT_BACKEND_ENVVAR}' defined. Using default Burn backend which is 'wgpu'."))]);
-                println!("{}\n", table.bright_yellow().bold().italic());
-                BackendValues::Wgpu
+                        vec![comfy_table::Cell::new(format!("💡 Hint: No environment variable '{BURNLM_DEFAULT_BACKEND_ENVVAR}' defined. Using default Burn backend which is 'wgpu'. To get a list of all supported backends on this platform use 'cargo burnlm backends'."))]);
+                println!("{}\n", table.bright_yellow().bold());
+                BackendValues::from_str(DEFAULT_BURN_BACKEND, true).unwrap()
             }
         };
         commands::shell::handle(None, Some(&backend)).map(|_| ())

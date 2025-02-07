@@ -4,3 +4,9 @@ edition.workspace = true
 version.workspace = true
 license.workspace = true
 readme.workspace = true
+
+[dependencies]
+# Let's keep the dependencies here to a minimum, we want this crate
+# to compile fast.
+spinners = { workspace = true }
+yansi = { workspace = true }

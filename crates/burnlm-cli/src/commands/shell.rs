@@ -1,6 +1,7 @@
-use std::{cell::RefCell, rc::Rc};
+use std::{cell::RefCell, io::{stdout, Write}, process::exit, rc::Rc};
 
 use rustyline::{history::DefaultHistory, Editor};
+use yansi::Paint;
 
 use super::{BurnLMPromptHelper, ShellMetaAction};
 use crate::backends::{BackendValues, DEFAULT_BURN_BACKEND};
@@ -81,10 +82,11 @@ pub(crate) fn handle(
     };
 
     if std::env::var(super::INNER_BURNLM_CLI_ENVVAR).is_ok() {
-        println!("Welcome to Burn LM shell! (press CTRL+D to exit)");
+        println!("Welcome to Burn LM shell 🔥 (press CTRL+D to exit)");
         let app_name = format!("({backend}) burnlm");
         let delim = "> ";
 
+        // toto
         while meta_action.borrow().is_some() {
             match meta_action.borrow().as_ref().unwrap() {
                 ShellMetaAction::RefreshParser => {
@@ -135,10 +137,39 @@ pub(crate) fn handle(
         println!("Bye!");
     } else {
         println!("Running burnlm shell...");
-        println!("Compiling for requested Burn backend {backend}...");
+        let comp_msg = format!("Compiling for requested Burn backend {backend}...");
+        let mut sp = spinners::Spinner::new(
+            spinners::Spinners::Bounce,
+            comp_msg.bright_black().rapid_blink().to_string().into()
+        );
         let inference_feature = format!("burnlm-inference/{}", backend);
-        let backend_str = &backend.to_string();
         let target_dir = format!("{}/{backend}", super::INNER_BURNLM_CLI_TARGET_DIR);
+        let args = vec![
+            "build",
+            "--release",
+            "--bin",
+            "burnlm",
+            "--no-default-features",
+            "--features",
+            &inference_feature,
+            "--target-dir",
+            &target_dir,
+            "--quiet",
+        ];
+        let build_status = std::process::Command::new("cargo")
+            .env(super::INNER_BURNLM_CLI_ENVVAR, "1")
+            .env(super::BURNLM_SHELL_ENVVAR, "1")
+            .args(&args)
+            .status()
+            .expect("burnlm command should build successfully");
+        sp.stop();
+        print!("\r\x1b[K");
+        stdout().flush().unwrap();
+        if !build_status.success() {
+            exit(build_status.code().unwrap_or(1));
+        }
+        // launch shell
+        let backend_str = &backend.to_string();
         let args = vec![
             "run",
             "--release",

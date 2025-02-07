@@ -694,7 +694,8 @@ dependencies = [
  "comfy-table",
  "rstest",
  "rustyline",
- "strum",
+ "spinners",
+ "strum 0.26.3",
  "tempfile",
  "yansi",
 ]
@@ -716,7 +717,7 @@ dependencies = [
  "rstest",
  "serde",
  "serde_json",
- "strum",
+ "strum 0.26.3",
  "thiserror 2.0.11",
  "tokio",
  "tokio-stream",
@@ -737,7 +738,7 @@ dependencies = [
  "llama-burn",
  "serde",
  "serde_json",
- "strum",
+ "strum 0.26.3",
  "thiserror 2.0.11",
  "tracing",
  "tracing-subscriber",
@@ -986,7 +987,7 @@ version = "4.5.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4ac6a0c7b1a9e9a5186361f67dfa1b88213572f427fb9ab038efb2bd8c582dab"
 dependencies = [
- "heck",
+ "heck 0.5.0",
  "proc-macro2",
  "quote",
  "syn 2.0.96",
@@ -1001,6 +1002,10 @@ checksum = "afb84c814227b90d6895e01398aee0d8033c00e7466aca416fb6a8e0eb19d8a7"
 [[package]]
 name = "cli-launcher"
 version = "0.0.1"
+dependencies = [
+ "spinners",
+ "yansi",
+]
 
 [[package]]
 name = "clipboard-win"
@@ -1066,8 +1071,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "24f165e7b643266ea80cb858aed492ad9280e3e05ce24d4a99d7d7b889b6a4d9"
 dependencies = [
  "crossterm",
- "strum",
- "strum_macros",
+ "strum 0.26.3",
+ "strum_macros 0.26.4",
  "unicode-width 0.2.0",
 ]
 
@@ -1756,7 +1761,7 @@ version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a1e6a265c649f3f5979b601d26f1d05ada116434c87741c9493cb56218f76cbc"
 dependencies = [
- "heck",
+ "heck 0.5.0",
  "proc-macro2",
  "quote",
  "syn 2.0.96",
@@ -2350,6 +2355,12 @@ dependencies = [
 
 [[package]]
 name = "heck"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "95505c38b4572b2d910cecb0281560f54b440a19336cbbcb27bf6ce6adc6f5a8"
+
+[[package]]
+name = "heck"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
@@ -2926,6 +2937,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "maplit"
+version = "1.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3e2e65a1a2e43cfcb47a895c4c8b10d1f4a61097f9f254f183aee60cad9c651d"
+
+[[package]]
 name = "matchers"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3099,7 +3116,7 @@ dependencies = [
  "log",
  "rustc-hash",
  "spirv 0.3.0+sdk-1.3.268.0",
- "strum",
+ "strum 0.26.3",
  "termcolor",
  "thiserror 2.0.11",
  "unicode-xid",
@@ -3404,8 +3421,8 @@ dependencies = [
  "protobuf-codegen",
  "regex",
  "serde",
- "strum",
- "strum_macros",
+ "strum 0.26.3",
+ "strum_macros 0.26.4",
 ]
 
 [[package]]
@@ -4482,6 +4499,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "spinners"
+version = "4.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a0ef947f358b9c238923f764c72a4a9d42f2d637c46e059dbd319d6e7cfb4f82"
+dependencies = [
+ "lazy_static",
+ "maplit",
+ "strum 0.24.1",
+]
+
+[[package]]
 name = "spirv"
 version = "0.3.0+sdk-1.3.268.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4539,11 +4567,33 @@ checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
 
 [[package]]
 name = "strum"
+version = "0.24.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "063e6045c0e62079840579a7e47a355ae92f60eb74daaf156fb1e84ba164e63f"
+dependencies = [
+ "strum_macros 0.24.3",
+]
+
+[[package]]
+name = "strum"
 version = "0.26.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8fec0f0aef304996cf250b31b5a10dee7980c85da9d759361292b8bca5a18f06"
 dependencies = [
- "strum_macros",
+ "strum_macros 0.26.4",
+]
+
+[[package]]
+name = "strum_macros"
+version = "0.24.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1e385be0d24f186b4ce2f9982191e7101bb737312ad61c1f2f984f34bcf85d59"
+dependencies = [
+ "heck 0.4.1",
+ "proc-macro2",
+ "quote",
+ "rustversion",
+ "syn 1.0.109",
 ]
 
 [[package]]
@@ -4552,7 +4602,7 @@ version = "0.26.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4c6bee85a5a24955dc440386795aa378cd9cf82acd5f764469152d2270e581be"
 dependencies = [
- "heck",
+ "heck 0.5.0",
  "proc-macro2",
  "quote",
  "rustversion",
@@ -5012,7 +5062,7 @@ dependencies = [
  "rand",
  "regex",
  "serde_json",
- "strum",
+ "strum 0.26.3",
  "tracel-xtask-macros",
  "tracing-subscriber",
 ]
@@ -5936,7 +5986,7 @@ name = "xtask"
 version = "1.0.0"
 dependencies = [
  "log",
- "strum",
+ "strum 0.26.3",
  "tokio",
  "tracel-xtask",
 ]

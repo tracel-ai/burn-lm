@@ -1,4 +1,5 @@
 [alias]
 xtask = "run --target-dir target/xtask --package xtask --bin xtask --"
-burnlm = "run --release --bin cli-launcher --quiet --"
+# we don't build in release because we want the cli-launcher to build as fast as possible
+burnlm = "run --bin cli-launcher --profile launcher --quiet --"
 burnlmd = "run --release --bin burnlm --"

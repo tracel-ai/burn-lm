@@ -93,8 +93,9 @@ pub fn add_inference_server_registration<P: AsRef<std::path::Path>>(
             file_path.to_str().unwrap()
         )
     });
+    let prefix = ",\n    ";
     let new_server_line = format!(
-        "    server(\n        crate_namespace = \"{crate_namespace}\",\n        server_type = \"{server_type}\",\n    ),"
+        "server(\n        crate_namespace = \"{crate_namespace}\",\n        server_type = \"{server_type}\",\n    )"
     );
     // Check if it is already in the file
     let already_present = original.contains(&new_server_line);
@@ -111,7 +112,11 @@ pub fn add_inference_server_registration<P: AsRef<std::path::Path>>(
     // Find the end of that attribute
     let end_marker = ")]";
     let end_index = match original[start_index..].find(end_marker) {
-        Some(rel_idx) => start_index + rel_idx,
+        // start on the previous line because we need to add a trailing comma
+        // to last registry entry.
+        // Indeed we cannot let a trailing command for the last entry because
+        // cargo format removes it.
+        Some(rel_idx) => start_index + rel_idx - "\n".bytes().len(),
         None => {
             return Err(anyhow::format_err!(
                 "Could not find the closing )] for the inference_server_registry attribute."
@@ -121,7 +126,7 @@ pub fn add_inference_server_registration<P: AsRef<std::path::Path>>(
     // Insert new server(...) entry
     let before = &original[..end_index];
     let after = &original[end_index..];
-    let updated = format!("{before}{new_server_line}\n{after}");
+    let updated = format!("{before}{prefix}{new_server_line}\n{after}");
     // Update the file
     std::fs::write(file_path, updated)
         .map_err(|err| anyhow::format_err!("Failed to write file: {err}"))
@@ -160,7 +165,7 @@ pub type DynClients = HashMap<&'static str, Box<dyn InferencePlugin>>;
     server(
         crate_namespace = "burnlm_inference_tinyllama",
         server_type = "TinyLlamaServer<InferenceBackend>",
-    ),
+    )
 )]
 #[derive(Debug)]
 pub struct Registry {
@@ -204,7 +209,7 @@ use burnlm_macros::inference_server_registry;
             let final_contents =
                 std::fs::read_to_string(path).expect("should read updated lib content");
             let inserted_text = format!(
-                "server(\n        crate_namespace = \"{crate_namespace}\",\n        server_type = \"{server_type}\",\n    ),"
+                "\n    ),\n    server(\n        crate_namespace = \"{crate_namespace}\",\n        server_type = \"{server_type}\",\n    )"
             );
             assert!(
                 final_contents.contains(&inserted_text),

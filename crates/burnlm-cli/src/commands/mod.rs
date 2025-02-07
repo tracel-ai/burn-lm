@@ -12,12 +12,14 @@ const INNER_BURNLM_CLI_TARGET_DIR: &str = "target/inner";
 const INNER_BURNLM_CLI_ENVVAR: &str = "__INNER_BURNLM_CLI";
 const BURNLM_SHELL_ENVVAR: &str = "__BURNLM_SHELL";
 const ANSI_CODE_DELETE_COMPILING_MESSAGES: &str = "\r\x1b[K\x1b[F\x1b[K\x1b[F";
+const RESTART_SHELL_EXIT_CODE: i32 = 8;
 
 /// Meta action used in shell mode.
 /// It is returned by the handle function of each command.
 pub(crate) enum ShellMetaAction {
     Initialize,
     RefreshParser,
+    RestartShell,
 }
 
 type HandleCommandResult = anyhow::Result<Option<ShellMetaAction>>;

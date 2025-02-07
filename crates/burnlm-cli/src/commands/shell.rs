@@ -93,11 +93,15 @@ pub(crate) fn handle(
 
         while meta_action.borrow().is_some() {
             match meta_action.borrow().as_ref().unwrap() {
+                ShellMetaAction::Initialize => (),
                 ShellMetaAction::RefreshParser => {
                     println!("Refreshing shell...");
                     parser = create_parser()
                 }
-                _ => (),
+                ShellMetaAction::RestartShell => {
+                    println!("Restarting shell...");
+                    exit(super::RESTART_SHELL_EXIT_CODE);
+                }
             }
             *meta_action.borrow_mut() = None;
 
@@ -198,12 +202,13 @@ pub(crate) fn handle(
             "--backend",
             &backend_str,
         ];
-        std::process::Command::new("cargo")
+        let run_status = std::process::Command::new("cargo")
             .env(super::INNER_BURNLM_CLI_ENVVAR, "1")
             .env(super::BURNLM_SHELL_ENVVAR, "1")
             .args(&args)
             .status()
             .expect("burnlm command should execute successfully");
+        exit(run_status.code().unwrap_or(1));
     }
 
     Ok(())

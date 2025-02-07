@@ -74,7 +74,7 @@ pub(crate) fn handle(args: &clap::ArgMatches) -> super::HandleCommandResult {
         .open(registry_cargo_path)?;
     writeln!(registry_cargo_file, "{dependency}")?;
 
-    Ok(Some(super::ShellMetaAction::RefreshParser))
+    Ok(Some(super::ShellMetaAction::RestartShell))
 }
 
 /// Inserts a new server(...) entry into the #[inference_server_registry(...)]

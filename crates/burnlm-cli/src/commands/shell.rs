@@ -1,4 +1,9 @@
-use std::{cell::RefCell, io::{stdout, Write}, process::exit, rc::Rc};
+use std::{
+    cell::RefCell,
+    io::{stdout, Write},
+    process::exit,
+    rc::Rc,
+};
 
 use rustyline::{history::DefaultHistory, Editor};
 use yansi::Paint;
@@ -86,7 +91,6 @@ pub(crate) fn handle(
         let app_name = format!("({backend}) burnlm");
         let delim = "> ";
 
-        // toto
         while meta_action.borrow().is_some() {
             match meta_action.borrow().as_ref().unwrap() {
                 ShellMetaAction::RefreshParser => {
@@ -140,7 +144,7 @@ pub(crate) fn handle(
         let comp_msg = format!("Compiling for requested Burn backend {backend}...");
         let mut sp = spinners::Spinner::new(
             spinners::Spinners::Bounce,
-            comp_msg.bright_black().rapid_blink().to_string().into()
+            comp_msg.bright_black().rapid_blink().to_string().into(),
         );
         let inference_feature = format!("burnlm-inference/{}", backend);
         let target_dir = format!("{}/{backend}", super::INNER_BURNLM_CLI_TARGET_DIR);
@@ -166,7 +170,7 @@ pub(crate) fn handle(
             .expect("burnlm command should build successfully");
         // Stop the spinner and clear the temporary message
         sp.stop();
-        print!("\r\x1b[K");
+        print!("{}", super::ANSI_CODE_DELETE_COMPILING_MESSAGES);
         stdout().flush().unwrap();
         // Build step results
         let stderr_text = String::from_utf8_lossy(&build_output.stderr);

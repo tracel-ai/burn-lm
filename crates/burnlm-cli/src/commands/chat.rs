@@ -1,4 +1,7 @@
-use std::{io::{stdout, Write}, process::exit};
+use std::{
+    io::{stdout, Write},
+    process::exit,
+};
 
 use burnlm_inference::{Message, MessageRole};
 use burnlm_registry::Registry;
@@ -6,7 +9,10 @@ use rustyline::{history::DefaultHistory, Editor};
 use yansi::Paint;
 
 use super::BurnLMPromptHelper;
-use crate::{backends::{BackendValues, DEFAULT_BURN_BACKEND}, utils};
+use crate::{
+    backends::{BackendValues, DEFAULT_BURN_BACKEND},
+    utils,
+};
 
 #[derive(clap::Subcommand)]
 pub enum MessageCommand {
@@ -161,7 +167,7 @@ pub(crate) fn handle(
         let comp_msg = format!("Compiling for requested Burn backend {backend}...");
         let mut sp = spinners::Spinner::new(
             spinners::Spinners::Bounce,
-            comp_msg.bright_black().rapid_blink().to_string().into()
+            comp_msg.bright_black().rapid_blink().to_string().into(),
         );
         let inference_feature = format!("burnlm-inference/{backend}");
         let target_dir = format!("{}/{backend}", super::INNER_BURNLM_CLI_TARGET_DIR);
@@ -187,7 +193,7 @@ pub(crate) fn handle(
             .expect("burnlm command should build successfully");
         // Stop the spinner and clear the temporary message
         sp.stop();
-        print!("\r\x1b[K");
+        print!("{}", super::ANSI_CODE_DELETE_COMPILING_MESSAGES);
         stdout().flush().unwrap();
         // Build step results
         let stderr_text = String::from_utf8_lossy(&build_output.stderr);

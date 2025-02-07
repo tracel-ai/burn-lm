@@ -1,15 +1,30 @@
 use spinners::{Spinner, Spinners};
+use std::{
+    io::{stdout, Write},
+    process::{exit, Command},
+};
 use yansi::Paint;
-use std::{io::{stdout, Write}, process::{exit, Command}};
 
 fn main() {
     let mut sp = Spinner::new(
         Spinners::Bounce,
-        "Compiling burnlm CLI, please wait...".bright_black().rapid_blink().to_string().into()
+        "Compiling burnlm CLI, please wait..."
+            .bright_black()
+            .rapid_blink()
+            .to_string()
+            .into(),
     );
     // build burnlm cli
     let build_output = Command::new("cargo")
-        .args(["build", "--release", "--bin", "burnlm", "--quiet", "--color", "always"])
+        .args([
+            "build",
+            "--release",
+            "--bin",
+            "burnlm",
+            "--quiet",
+            "--color",
+            "always",
+        ])
         .output()
         .expect("build command should compile burnlm successfully");
     // stop the spinner and remove the line

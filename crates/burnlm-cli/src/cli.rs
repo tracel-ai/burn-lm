@@ -1,7 +1,10 @@
 use clap::ValueEnum;
 use yansi::Paint;
 
-use crate::{backends::{BackendValues, DEFAULT_BURN_BACKEND}, commands};
+use crate::{
+    backends::{BackendValues, DEFAULT_BURN_BACKEND},
+    commands,
+};
 
 const BURNLM_DEFAULT_BACKEND_ENVVAR: &str = "BURNLM_DEFAULT_BACKEND";
 

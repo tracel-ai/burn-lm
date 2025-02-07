@@ -155,18 +155,26 @@ pub(crate) fn handle(
             "--target-dir",
             &target_dir,
             "--quiet",
+            "--color",
+            "always",
         ];
-        let build_status = std::process::Command::new("cargo")
+        let build_output = std::process::Command::new("cargo")
             .env(super::INNER_BURNLM_CLI_ENVVAR, "1")
             .env(super::BURNLM_SHELL_ENVVAR, "1")
             .args(&args)
-            .status()
+            .output()
             .expect("burnlm command should build successfully");
+        // Stop the spinner and clear the temporary message
         sp.stop();
         print!("\r\x1b[K");
         stdout().flush().unwrap();
-        if !build_status.success() {
-            exit(build_status.code().unwrap_or(1));
+        // Build step results
+        let stderr_text = String::from_utf8_lossy(&build_output.stderr);
+        if !stderr_text.is_empty() {
+            println!("{stderr_text}");
+        }
+        if !build_output.status.success() {
+            exit(build_output.status.code().unwrap_or(1));
         }
         // launch shell
         let backend_str = &backend.to_string();

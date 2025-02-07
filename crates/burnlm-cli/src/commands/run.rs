@@ -1,3 +1,5 @@
+use std::{io::{stdout, Write}, process::exit};
+
 use burnlm_inference::{message::MessageRole, Message};
 use burnlm_registry::Registry;
 use yansi::Paint;
@@ -52,9 +54,46 @@ pub(crate) fn handle(args: &clap::ArgMatches) -> super::HandleCommandResult {
     } else {
         let backend = run_args.get_one::<BackendValues>("backend").unwrap();
         println!("Running inference...");
-        println!("Compiling for requested Burn backend {backend}...");
+        let comp_msg = format!("Compiling for requested Burn backend {backend}...");
+        let mut sp = spinners::Spinner::new(
+            spinners::Spinners::Bounce,
+            comp_msg.bright_black().rapid_blink().to_string().into()
+        );
         let inference_feature = format!("burnlm-inference/{}", backend);
         let target_dir = format!("{}/{backend}", super::INNER_BURNLM_CLI_TARGET_DIR);
+        let args = vec![
+            "build",
+            "--release",
+            "--bin",
+            "burnlm",
+            "--no-default-features",
+            "--features",
+            &inference_feature,
+            "--target-dir",
+            &target_dir,
+            "--quiet",
+            "--color",
+            "always",
+        ];
+        let build_output = std::process::Command::new("cargo")
+            .env(super::INNER_BURNLM_CLI_ENVVAR, "1")
+            .env(super::BURNLM_SHELL_ENVVAR, "1")
+            .args(&args)
+            .output()
+            .expect("burnlm command should build successfully");
+        // Stop the spinner and clear the temporary message
+        sp.stop();
+        print!("\r\x1b[K");
+        stdout().flush().unwrap();
+        // Build step results
+        let stderr_text = String::from_utf8_lossy(&build_output.stderr);
+        if !stderr_text.is_empty() {
+            println!("{stderr_text}");
+        }
+        if !build_output.status.success() {
+            exit(build_output.status.code().unwrap_or(1));
+        }
+        // execute run command
         let mut args = vec![
             "run",
             "--release",

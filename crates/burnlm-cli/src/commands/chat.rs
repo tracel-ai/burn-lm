@@ -1,10 +1,12 @@
+use std::{io::{stdout, Write}, process::exit};
+
 use burnlm_inference::{Message, MessageRole};
 use burnlm_registry::Registry;
 use rustyline::{history::DefaultHistory, Editor};
 use yansi::Paint;
 
 use super::BurnLMPromptHelper;
-use crate::{backends::BackendValues, utils};
+use crate::{backends::{BackendValues, DEFAULT_BURN_BACKEND}, utils};
 
 #[derive(clap::Subcommand)]
 pub enum MessageCommand {
@@ -74,7 +76,8 @@ pub(crate) fn create() -> clap::Command {
                 clap::Arg::new("backend")
                     .long("backend")
                     .value_parser(clap::value_parser!(BackendValues))
-                    .required(true)
+                    .default_value(DEFAULT_BURN_BACKEND)
+                    .required(false)
                     .help("The Burn backend used for chat inference"),
             );
         }
@@ -155,9 +158,46 @@ pub(crate) fn handle(
         println!("Chat session closed!");
     } else {
         println!("Starting burnlm chat session...");
-        println!("Compiling for requested Burn backend {backend}...");
+        let comp_msg = format!("Compiling for requested Burn backend {backend}...");
+        let mut sp = spinners::Spinner::new(
+            spinners::Spinners::Bounce,
+            comp_msg.bright_black().rapid_blink().to_string().into()
+        );
         let inference_feature = format!("burnlm-inference/{backend}");
         let target_dir = format!("{}/{backend}", super::INNER_BURNLM_CLI_TARGET_DIR);
+        let args = vec![
+            "build",
+            "--release",
+            "--bin",
+            "burnlm",
+            "--no-default-features",
+            "--features",
+            &inference_feature,
+            "--target-dir",
+            &target_dir,
+            "--quiet",
+            "--color",
+            "always",
+        ];
+        let build_output = std::process::Command::new("cargo")
+            .env(super::INNER_BURNLM_CLI_ENVVAR, "1")
+            .env(super::BURNLM_SHELL_ENVVAR, "1")
+            .args(&args)
+            .output()
+            .expect("burnlm command should build successfully");
+        // Stop the spinner and clear the temporary message
+        sp.stop();
+        print!("\r\x1b[K");
+        stdout().flush().unwrap();
+        // Build step results
+        let stderr_text = String::from_utf8_lossy(&build_output.stderr);
+        if !stderr_text.is_empty() {
+            println!("{stderr_text}");
+        }
+        if !build_output.status.success() {
+            exit(build_output.status.code().unwrap_or(1));
+        }
+        // run chat command
         let mut chat_args = vec![
             "run",
             "--release",

@@ -73,6 +73,13 @@ fn run(plugin_name: &str, run_args: &clap::ArgMatches) -> super::HandleCommandRe
         .map(|(_, plugin)| plugin);
     let plugin = plugin.unwrap_or_else(|| panic!("Plugin should be registered: {plugin_name}"));
     plugin.parse_cli_config(run_args);
+    // load the model
+    let mut temp_msg = super::LoadingMessage::start(
+        "Preparing model...",
+        &format!("Loading model '{}'", plugin.model_name()));
+    plugin.load()?;
+    temp_msg.end();
+    println!("");
     let prompt = run_args
         .get_one::<String>("prompt")
         .expect("The prompt argument should be set.");

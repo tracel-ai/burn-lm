@@ -45,6 +45,11 @@ impl<Server: InferenceServer> InferenceChannel<Server> for MutexChannel<Server> 
         server.parse_json_config(json);
     }
 
+    fn load(&self) -> InferenceResult<()> {
+        let mut server = self.server.lock().unwrap();
+        server.load()
+    }
+
     fn unload(&self) -> InferenceResult<()> {
         let mut server = self.server.lock().unwrap();
         server.unload()

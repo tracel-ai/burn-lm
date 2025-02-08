@@ -114,6 +114,12 @@ pub(crate) fn handle(
             .map(|(_, plugin)| plugin);
         let plugin = plugin.unwrap_or_else(|| panic!("Plugin should be registered: {plugin_name}"));
         plugin.parse_cli_config(plugin_args);
+        // load the model
+        let mut temp_msg = super::LoadingMessage::start(
+            "Preparing model...",
+            &format!("Loading model '{}'", plugin.model_name()));
+        plugin.load()?;
+        temp_msg.end();
 
         // create chat shell
         let app_name = format!("({backend}) chat|{}", plugin.model_name());
@@ -147,6 +153,7 @@ pub(crate) fn handle(
             }
         };
 
+        println!("");
         let mut shell = cloop::Shell::new(
             format!("{app_name}{delim}"),
             ChatContext::new(),

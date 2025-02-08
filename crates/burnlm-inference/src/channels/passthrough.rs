@@ -44,6 +44,10 @@ impl<Server: InferenceServer> InferenceChannel<Server> for SingleThreadedChannel
         self.server.borrow_mut().parse_json_config(json);
     }
 
+    fn load(&self) -> InferenceResult<()> {
+        self.server.borrow_mut().load()
+    }
+
     fn unload(&self) -> InferenceResult<()> {
         self.server.borrow_mut().unload()
     }

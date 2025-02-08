@@ -63,6 +63,19 @@ impl InferenceServer for TinyLlamaServer<InferenceBackend> {
         model.is_downloaded()
     }
 
+    fn load(&mut self) -> InferenceResult<()> {
+        if self.model.is_none() {
+            self.model = Some(
+                llama::LlamaConfig::tiny_llama_pretrained::<InferenceBackend>(
+                    self.config.max_seq_len,
+                    &INFERENCE_DEVICE,
+                )
+                .unwrap(),
+            );
+        }
+        Ok(())
+    }
+
     fn unload(&mut self) -> InferenceResult<()> {
         self.model = None;
         Ok(())
@@ -97,19 +110,6 @@ impl InferenceServer for TinyLlamaServer<InferenceBackend> {
 }
 
 impl TinyLlamaServer<InferenceBackend> {
-    fn load(&mut self) -> InferenceResult<()> {
-        if self.model.is_none() {
-            self.model = Some(
-                llama::LlamaConfig::tiny_llama_pretrained::<InferenceBackend>(
-                    self.config.max_seq_len,
-                    &INFERENCE_DEVICE,
-                )
-                .unwrap(),
-            );
-        }
-        Ok(())
-    }
-
     fn prompt(&self, messages: Vec<Message>) -> InferenceResult<burnlm_inference::Prompt> {
         let mut prompt: Vec<String> = vec![];
         for message in messages {

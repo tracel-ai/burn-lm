@@ -30,6 +30,9 @@ pub trait InferenceServer: ServerConfigParsing + Default + Send + Sync + Debug {
         false
     }
 
+    /// Load the model.
+    fn load(&mut self) -> InferenceResult<()>;
+
     /// Unload the model.
     fn unload(&mut self) -> InferenceResult<()>;
 

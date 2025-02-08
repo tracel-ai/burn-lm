@@ -92,6 +92,10 @@ impl InferenceServer for Llama3InstructServer<InferenceBackend> {
         model.is_downloaded()
     }
 
+    fn load(&mut self) -> InferenceResult<()> {
+        self.server.load(&self.config)
+    }
+
     fn unload(&mut self) -> InferenceResult<()> {
         self.server.unload()
     }
@@ -136,6 +140,10 @@ impl InferenceServer for Llama31InstructServer<InferenceBackend> {
     fn is_downloaded(&mut self) -> bool {
         let model = pretrained::Llama::Llama31Instruct.pretrained();
         model.is_downloaded()
+    }
+
+    fn load(&mut self) -> InferenceResult<()> {
+        self.server.load(&self.config)
     }
 
     fn unload(&mut self) -> InferenceResult<()> {
@@ -184,6 +192,10 @@ impl InferenceServer for Llama321bInstructServer<InferenceBackend> {
         model.is_downloaded()
     }
 
+    fn load(&mut self) -> InferenceResult<()> {
+        self.server.load(&self.config)
+    }
+
     fn unload(&mut self) -> InferenceResult<()> {
         self.server.unload()
     }
@@ -228,6 +240,10 @@ impl InferenceServer for Llama323bInstructServer<InferenceBackend> {
     fn is_downloaded(&mut self) -> bool {
         let model = pretrained::Llama::Llama323bInstruct.pretrained();
         model.is_downloaded()
+    }
+
+    fn load(&mut self) -> InferenceResult<()> {
+        self.server.load(&self.config)
     }
 
     fn unload(&mut self) -> InferenceResult<()> {

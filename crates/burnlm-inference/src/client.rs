@@ -74,6 +74,10 @@ where
         self.channel.parse_json_config(json);
     }
 
+    fn load(&self) -> InferenceResult<()> {
+        self.channel.load()
+    }
+
     fn unload(&self) -> InferenceResult<()> {
         self.channel.unload()
     }

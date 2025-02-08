@@ -64,15 +64,10 @@ fn build_and_run_burnlm(
     burnlm_run_args: &[impl AsRef<str>],
     extra_env_vars: &[(&str, &str)],
 ) -> std::process::ExitStatus {
-    // Print the initial message.
-    println!("{}", initial_message);
-
     // Start a spinner with a compilation message.
-    let comp_msg = format!("Compiling for requested Burn backend {}...", backend);
-    let mut spinner = spinners::Spinner::new(
-        spinners::Spinners::Bounce,
-        comp_msg.bright_black().rapid_blink().to_string().into(),
-    );
+    let mut temp_msg = LoadingMessage::start(
+        initial_message,
+        &format!("Compiling for requested Burn backend {}...", backend));
 
     // Compute the common build/run parameters.
     let inference_feature = format!("burnlm-inference/{}", backend);
@@ -110,9 +105,7 @@ fn build_and_run_burnlm(
         .expect("cargo build should compile burnlm successfully");
 
     // Stop the spinner and clear the temporary compiling message.
-    spinner.stop();
-    print!("{}", ANSI_CODE_DELETE_COMPILING_MESSAGES);
-    stdout().flush().unwrap();
+    temp_msg.end();
 
     // Print any stderr output from the build.
     let stderr_text = String::from_utf8_lossy(&build_output.stderr);
@@ -150,4 +143,26 @@ fn build_and_run_burnlm(
     run_cmd.args(&run_args)
         .status()
         .expect("cargo run should execute burnlm successfully")
+}
+
+struct LoadingMessage {
+    spinner: spinners::Spinner,
+}
+
+impl LoadingMessage {
+    fn start(title: &str, loading_message: &str) -> Self {
+        println!("{title}");
+        Self {
+            spinner: spinners::Spinner::new(
+                spinners::Spinners::Bounce,
+                loading_message.bright_black().rapid_blink().to_string().into(),
+            ),
+        }
+    }
+
+    fn end(&mut self) {
+        self.spinner.stop();
+        print!("{}", ANSI_CODE_DELETE_COMPILING_MESSAGES);
+        stdout().flush().unwrap();
+    }
 }

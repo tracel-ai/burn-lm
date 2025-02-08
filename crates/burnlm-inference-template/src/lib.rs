@@ -63,6 +63,11 @@ impl InferenceServer for ParrotServer<InferenceBackend> {
         None
     }
 
+    fn load(&mut self) -> InferenceResult<()> {
+        // Load the model here
+        Ok(())
+    }
+
     fn unload(&mut self) -> InferenceResult<()> {
         // Drop the model here
         Ok(())

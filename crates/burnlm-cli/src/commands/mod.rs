@@ -53,3 +53,101 @@ impl rustyline::highlight::Highlighter for BurnLMPromptHelper {
         }
     }
 }
+
+use std::io::{stdout, Write};
+/// Build burnlm for the specified backend and run the burnlm command
+/// via its run arguments.
+/// It returns the exist status of the run process.
+fn build_and_run_burnlm(
+    initial_message: &str,
+    backend: &str,
+    burnlm_run_args: &[impl AsRef<str>],
+    extra_env_vars: &[(&str, &str)],
+) -> std::process::ExitStatus {
+    // Print the initial message.
+    println!("{}", initial_message);
+
+    // Start a spinner with a compilation message.
+    let comp_msg = format!("Compiling for requested Burn backend {}...", backend);
+    let mut spinner = spinners::Spinner::new(
+        spinners::Spinners::Bounce,
+        comp_msg.bright_black().rapid_blink().to_string().into(),
+    );
+
+    // Compute the common build/run parameters.
+    let inference_feature = format!("burnlm-inference/{}", backend);
+    let target_dir = format!("{}/{backend}", INNER_BURNLM_CLI_TARGET_DIR);
+
+    // Define the base environment variable(s) needed for all commands.
+    let mut env_vars = vec![(INNER_BURNLM_CLI_ENVVAR, "1")];
+    // Append any extra environment variables provided.
+    env_vars.extend_from_slice(extra_env_vars);
+
+    // Common arguments for the build command.
+    let build_args = [
+        "build",
+        "--release",
+        "--bin",
+        "burnlm",
+        "--no-default-features",
+        "--features",
+        &inference_feature,
+        "--target-dir",
+        &target_dir,
+        "--quiet",
+        "--color",
+        "always",
+    ];
+
+    // Execute the build command.
+    let mut build_cmd = std::process::Command::new("cargo");
+    for (key, value) in &env_vars {
+        build_cmd.env(key, value);
+    }
+    let build_output = build_cmd
+        .args(&build_args)
+        .output()
+        .expect("cargo build should compile burnlm successfully");
+
+    // Stop the spinner and clear the temporary compiling message.
+    spinner.stop();
+    print!("{}", ANSI_CODE_DELETE_COMPILING_MESSAGES);
+    stdout().flush().unwrap();
+
+    // Print any stderr output from the build.
+    let stderr_text = String::from_utf8_lossy(&build_output.stderr);
+    if !stderr_text.is_empty() {
+        println!("{stderr_text}");
+    }
+    if !build_output.status.success() {
+        std::process::exit(build_output.status.code().unwrap_or(1));
+    }
+
+    // Base arguments for the run command.
+    let mut run_args = vec![
+        "run",
+        "--release",
+        "--bin",
+        "burnlm",
+        "--no-default-features",
+        "--features",
+        &inference_feature,
+        "--target-dir",
+        &target_dir,
+        "--quiet",
+        "--color",
+        "always",
+        "--",
+    ];
+    // Append any extra run arguments provided by the caller.
+    run_args.extend(burnlm_run_args.iter().map(|arg| arg.as_ref()));
+
+    // Execute the run command.
+    let mut run_cmd = std::process::Command::new("cargo");
+    for (key, value) in &env_vars {
+        run_cmd.env(key, value);
+    }
+    run_cmd.args(&run_args)
+        .status()
+        .expect("cargo run should execute burnlm successfully")
+}

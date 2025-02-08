@@ -1,12 +1,10 @@
 use std::{
     cell::RefCell,
-    io::{stdout, Write},
     process::exit,
     rc::Rc,
 };
 
 use rustyline::{history::DefaultHistory, Editor};
-use yansi::Paint;
 
 use super::{BurnLMPromptHelper, ShellMetaAction};
 use crate::backends::{BackendValues, DEFAULT_BURN_BACKEND};
@@ -144,72 +142,13 @@ pub(crate) fn handle(
         }
         println!("Bye!");
     } else {
-        println!("Running burnlm shell...");
-        let comp_msg = format!("Compiling for requested Burn backend {backend}...");
-        let mut sp = spinners::Spinner::new(
-            spinners::Spinners::Bounce,
-            comp_msg.bright_black().rapid_blink().to_string().into(),
-        );
-        let inference_feature = format!("burnlm-inference/{}", backend);
-        let target_dir = format!("{}/{backend}", super::INNER_BURNLM_CLI_TARGET_DIR);
-        let args = vec![
-            "build",
-            "--release",
-            "--bin",
-            "burnlm",
-            "--no-default-features",
-            "--features",
-            &inference_feature,
-            "--target-dir",
-            &target_dir,
-            "--quiet",
-            "--color",
-            "always",
-        ];
-        let build_output = std::process::Command::new("cargo")
-            .env(super::INNER_BURNLM_CLI_ENVVAR, "1")
-            .env(super::BURNLM_SHELL_ENVVAR, "1")
-            .args(&args)
-            .output()
-            .expect("burnlm command should build successfully");
-        // Stop the spinner and clear the temporary message
-        sp.stop();
-        print!("{}", super::ANSI_CODE_DELETE_COMPILING_MESSAGES);
-        stdout().flush().unwrap();
-        // Build step results
-        let stderr_text = String::from_utf8_lossy(&build_output.stderr);
-        if !stderr_text.is_empty() {
-            println!("{stderr_text}");
-        }
-        if !build_output.status.success() {
-            exit(build_output.status.code().unwrap_or(1));
-        }
-        // launch shell
         let backend_str = &backend.to_string();
-        let args = vec![
-            "run",
-            "--release",
-            "--bin",
-            "burnlm",
-            "--no-default-features",
-            "--features",
-            &inference_feature,
-            "--target-dir",
-            &target_dir,
-            "--quiet",
-            "--",
-            "shell",
-            "--backend",
+        let shell_status = super::build_and_run_burnlm(
+            "Running burnlm shell...",
             &backend_str,
-        ];
-        let run_status = std::process::Command::new("cargo")
-            .env(super::INNER_BURNLM_CLI_ENVVAR, "1")
-            .env(super::BURNLM_SHELL_ENVVAR, "1")
-            .args(&args)
-            .status()
-            .expect("burnlm command should execute successfully");
-        exit(run_status.code().unwrap_or(1));
+            &["shell", "--backend", &backend_str],
+            &[(super::BURNLM_SHELL_ENVVAR, "1")]);
+        exit(shell_status.code().unwrap_or(1));
     }
-
     Ok(())
 }

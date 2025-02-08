@@ -1,8 +1,3 @@
-use std::{
-    io::{stdout, Write},
-    process::exit,
-};
-
 use burnlm_inference::{Message, MessageRole};
 use burnlm_registry::Registry;
 use rustyline::{history::DefaultHistory, Editor};
@@ -78,6 +73,7 @@ pub(crate) fn create() -> clap::Command {
             .about(format!("Chat with {} model", plugin.model_name()))
             .args((plugin.create_cli_flags_fn())().get_arguments());
         if std::env::var(super::BURNLM_SHELL_ENVVAR).is_err() {
+            // inside a shell the backend is already set
             subcommand = subcommand.arg(
                 clap::Arg::new("backend")
                     .long("backend")
@@ -163,68 +159,14 @@ pub(crate) fn handle(
         shell.run().unwrap();
         println!("Chat session closed!");
     } else {
-        println!("Starting burnlm chat session...");
-        let comp_msg = format!("Compiling for requested Burn backend {backend}...");
-        let mut sp = spinners::Spinner::new(
-            spinners::Spinners::Bounce,
-            comp_msg.bright_black().rapid_blink().to_string().into(),
-        );
-        let inference_feature = format!("burnlm-inference/{backend}");
-        let target_dir = format!("{}/{backend}", super::INNER_BURNLM_CLI_TARGET_DIR);
-        let args = vec![
-            "build",
-            "--release",
-            "--bin",
-            "burnlm",
-            "--no-default-features",
-            "--features",
-            &inference_feature,
-            "--target-dir",
-            &target_dir,
-            "--quiet",
-            "--color",
-            "always",
-        ];
-        let build_output = std::process::Command::new("cargo")
-            .env(super::INNER_BURNLM_CLI_ENVVAR, "1")
-            .env(super::BURNLM_SHELL_ENVVAR, "1")
-            .args(&args)
-            .output()
-            .expect("burnlm command should build successfully");
-        // Stop the spinner and clear the temporary message
-        sp.stop();
-        print!("{}", super::ANSI_CODE_DELETE_COMPILING_MESSAGES);
-        stdout().flush().unwrap();
-        // Build step results
-        let stderr_text = String::from_utf8_lossy(&build_output.stderr);
-        if !stderr_text.is_empty() {
-            println!("{stderr_text}");
-        }
-        if !build_output.status.success() {
-            exit(build_output.status.code().unwrap_or(1));
-        }
-        // run chat command
-        let mut chat_args = vec![
-            "run",
-            "--release",
-            "--bin",
-            "burnlm",
-            "--no-default-features",
-            "--features",
-            &inference_feature,
-            "--target-dir",
-            &target_dir,
-            "--quiet",
-            "--",
-        ];
-        let cli_args: Vec<String> = std::env::args().skip(1).collect();
-        chat_args.extend(cli_args.iter().map(|s| s.as_str()));
-        std::process::Command::new("cargo")
-            .env(super::INNER_BURNLM_CLI_ENVVAR, "1")
-            .args(&chat_args)
-            .status()
-            .expect("burnlm command should execute successfully");
+        let backend_str = &backend.to_string();
+        let chat_args: Vec<String> = std::env::args().skip(1).collect();
+        let run_status = super::build_and_run_burnlm(
+            "Starting burnlm chat session...",
+            &backend_str,
+            &chat_args,
+            &[]);
+        std::process::exit(run_status.code().unwrap_or(1));
     }
-
     Ok(None)
 }

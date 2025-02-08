@@ -1,8 +1,3 @@
-use std::{
-    io::{stdout, Write},
-    process::exit,
-};
-
 use burnlm_inference::{message::MessageRole, Message};
 use burnlm_registry::Registry;
 use yansi::Paint;
@@ -29,8 +24,10 @@ pub(crate) fn create() -> clap::Command {
                     .help("The prompt to send to the model")
                     .required(true)
                     .index(1),
-            )
-            .arg(
+            );
+        if std::env::var(super::BURNLM_SHELL_ENVVAR).is_err() {
+            // inside a shell the backend is already set
+            subcommand = subcommand.arg(
                 clap::Arg::new("backend")
                     .long("backend")
                     .value_parser(clap::value_parser!(BackendValues))
@@ -38,6 +35,7 @@ pub(crate) fn create() -> clap::Command {
                     .required(false)
                     .help("The Burn backend for the inference"),
             );
+        }
         root = root.subcommand(subcommand);
     }
     root
@@ -56,68 +54,13 @@ pub(crate) fn handle(args: &clap::ArgMatches) -> super::HandleCommandResult {
         run(plugin_name, run_args)
     } else {
         let backend = run_args.get_one::<BackendValues>("backend").unwrap();
-        println!("Running inference...");
-        let comp_msg = format!("Compiling for requested Burn backend {backend}...");
-        let mut sp = spinners::Spinner::new(
-            spinners::Spinners::Bounce,
-            comp_msg.bright_black().rapid_blink().to_string().into(),
-        );
-        let inference_feature = format!("burnlm-inference/{}", backend);
-        let target_dir = format!("{}/{backend}", super::INNER_BURNLM_CLI_TARGET_DIR);
-        let args = vec![
-            "build",
-            "--release",
-            "--bin",
-            "burnlm",
-            "--no-default-features",
-            "--features",
-            &inference_feature,
-            "--target-dir",
-            &target_dir,
-            "--quiet",
-            "--color",
-            "always",
-        ];
-        let build_output = std::process::Command::new("cargo")
-            .env(super::INNER_BURNLM_CLI_ENVVAR, "1")
-            .env(super::BURNLM_SHELL_ENVVAR, "1")
-            .args(&args)
-            .output()
-            .expect("burnlm command should build successfully");
-        // Stop the spinner and clear the temporary message
-        sp.stop();
-        print!("{}", super::ANSI_CODE_DELETE_COMPILING_MESSAGES);
-        stdout().flush().unwrap();
-        // Build step results
-        let stderr_text = String::from_utf8_lossy(&build_output.stderr);
-        if !stderr_text.is_empty() {
-            println!("{stderr_text}");
-        }
-        if !build_output.status.success() {
-            exit(build_output.status.code().unwrap_or(1));
-        }
-        // execute run command
-        let mut args = vec![
-            "run",
-            "--release",
-            "--bin",
-            "burnlm",
-            "--no-default-features",
-            "--features",
-            &inference_feature,
-            "--target-dir",
-            &target_dir,
-            "--quiet",
-            "--",
-        ];
-        let passed_args: Vec<String> = std::env::args().skip(1).collect();
-        args.extend(passed_args.iter().map(|s| s.as_str()));
-        std::process::Command::new("cargo")
-            .env(super::INNER_BURNLM_CLI_ENVVAR, "1")
-            .args(&args)
-            .status()
-            .expect("burnlm command should execute successfully");
-        Ok(None)
+        let run_args: Vec<String> = std::env::args().skip(1).collect();
+        let run_status = super::build_and_run_burnlm(
+            "Running inference...",
+            &backend.to_string(),
+            &run_args,
+            &[]);
+        std::process::exit(run_status.code().unwrap_or(1));
     }
 }
 

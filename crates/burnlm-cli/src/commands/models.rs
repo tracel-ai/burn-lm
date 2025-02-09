@@ -5,7 +5,7 @@ pub(crate) fn create() -> clap::Command {
     clap::Command::new("models").about("List all available models and their download status")
 }
 
-pub(crate) fn handle() -> super::HandleCommandResult {
+pub(crate) fn handle(shell: bool) -> super::HandleCommandResult {
     let registry = Registry::new();
     let mut table = Table::new();
     table
@@ -30,7 +30,7 @@ pub(crate) fn handle() -> super::HandleCommandResult {
         let install_cmd_cell = if plugin.downloader().is_some() {
             let content = format!(
                 "{}download {}",
-                if std::env::var(super::BURNLM_SHELL_ENVVAR).is_ok() {
+                if shell {
                     ""
                 } else {
                     "cargo burnlm "

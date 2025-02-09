@@ -7,7 +7,8 @@ use std::{
 use rustyline::{history::DefaultHistory, Editor};
 
 use super::{BurnLMPromptHelper, ShellMetaAction};
-use crate::backends::{BackendValues, DEFAULT_BURN_BACKEND};
+
+const RESTART_SHELL_EXIT_CODE: i32 = 8;
 
 // custom rustyline editor to stylize the prompt
 struct ShellEditor<H: rustyline::Helper> {
@@ -27,16 +28,7 @@ impl cloop::InputReader for ShellEditor<BurnLMPromptHelper> {
 }
 
 pub(crate) fn create() -> clap::Command {
-    clap::Command::new("shell")
-        .about("Start a burnlm shell session")
-        .arg(
-            clap::Arg::new("backend")
-                .long("backend")
-                .value_parser(clap::value_parser!(BackendValues))
-                .default_value(DEFAULT_BURN_BACKEND)
-                .required(false)
-                .help("The Burn backend used for inference"),
-        )
+    clap::Command::new("shell").about("Start a burnlm shell session")
 }
 
 type ShellContext = ();
@@ -54,10 +46,7 @@ fn create_parser() -> clap::Command {
         .multicall(true)
 }
 
-pub(crate) fn handle(
-    args: Option<&clap::ArgMatches>,
-    backend: Option<&BackendValues>,
-) -> anyhow::Result<()> {
+pub(crate) fn handle(backend: &str) -> anyhow::Result<()> {
     // meta action used to control the outer loop
     // we need interior mutability here because the shell handler
     // is bound to the Fn trait
@@ -75,80 +64,61 @@ pub(crate) fn handle(
     let helper = BurnLMPromptHelper::new(yansi::Color::Green.bold());
     editor.borrow_mut().set_helper(Some(helper));
 
-    // Burn backend for this shell session
-    let backend = match backend {
-        Some(b) => b,
-        None => args
-            .expect("should have parsed args when no backend function argument has been provided")
-            .get_one::<BackendValues>("backend")
-            .unwrap(),
-    };
+    println!("\nWelcome to Burn LM shell 🔥 (press CTRL+D to exit)");
+    let app_name = format!("({backend}) burnlm");
+    let delim = "> ";
 
-    if std::env::var(super::INNER_BURNLM_CLI_ENVVAR).is_ok() {
-        println!("Welcome to Burn LM shell 🔥 (press CTRL+D to exit)");
-        let app_name = format!("({backend}) burnlm");
-        let delim = "> ";
-
-        while meta_action.borrow().is_some() {
-            match meta_action.borrow().as_ref().unwrap() {
-                ShellMetaAction::Initialize => (),
-                ShellMetaAction::RefreshParser => {
-                    println!("Refreshing shell...");
-                    parser = create_parser()
-                }
-                ShellMetaAction::RestartShell => {
-                    println!("Restarting shell...");
-                    exit(super::RESTART_SHELL_EXIT_CODE);
-                }
+    while meta_action.borrow().is_some() {
+        match meta_action.borrow().as_ref().unwrap() {
+            ShellMetaAction::Initialize => (),
+            ShellMetaAction::RefreshParser => {
+                println!("Refreshing shell...");
+                parser = create_parser()
             }
-            *meta_action.borrow_mut() = None;
-
-            let handler = |args: clap::ArgMatches, _: &mut ShellContext| -> cloop::ShellResult {
-                *meta_action.borrow_mut() = if args.subcommand_matches("backends").is_some() {
-                    super::backends::handle()?
-                } else if let Some(args) = args.subcommand_matches("chat") {
-                    super::chat::handle(args, Some(backend))?
-                } else if let Some(args) = args.subcommand_matches("download") {
-                    super::download::handle(args)?
-                } else if args.subcommand_matches("models").is_some() {
-                    super::models::handle()?
-                } else if let Some(args) = args.subcommand_matches("new") {
-                    super::new::handle(args)?
-                } else if let Some(args) = args.subcommand_matches("run") {
-                    super::run::handle(args)?
-                } else if let Some(args) = args.subcommand_matches("server") {
-                    super::server::handle(args)?
-                } else if let Some(args) = args.subcommand_matches("web") {
-                    super::web::handle(args)?
-                } else {
-                    None
-                };
-                if meta_action.borrow().is_some() {
-                    Ok(cloop::ShellAction::Exit)
-                } else {
-                    Ok(cloop::ShellAction::Continue)
-                }
-            };
-
-            let mut shell = cloop::Shell::new(
-                format!("{app_name}{delim}"),
-                ShellContext::default(),
-                ShellEditor::new(editor.clone()),
-                parser.clone(),
-                handler,
-            );
-
-            shell.run().unwrap();
+            ShellMetaAction::RestartShell => {
+                println!("Restarting shell...");
+                exit(RESTART_SHELL_EXIT_CODE);
+            }
         }
-        println!("Bye!");
-    } else {
-        let backend_str = &backend.to_string();
-        let shell_status = super::build_and_run_burnlm(
-            "Running burnlm shell...",
-            &backend_str,
-            &["shell", "--backend", &backend_str],
-            &[(super::BURNLM_SHELL_ENVVAR, "1")]);
-        exit(shell_status.code().unwrap_or(1));
+        *meta_action.borrow_mut() = None;
+
+        let handler = |args: clap::ArgMatches, _: &mut ShellContext| -> cloop::ShellResult {
+            *meta_action.borrow_mut() = if args.subcommand_matches("backends").is_some() {
+                super::backends::handle()?
+            } else if let Some(args) = args.subcommand_matches("chat") {
+                super::chat::handle(args, backend)?
+            } else if let Some(args) = args.subcommand_matches("download") {
+                super::download::handle(args)?
+            } else if args.subcommand_matches("models").is_some() {
+                super::models::handle(true)?
+            } else if let Some(args) = args.subcommand_matches("new") {
+                super::new::handle(args)?
+            } else if let Some(args) = args.subcommand_matches("run") {
+                super::run::handle(args)?
+            } else if let Some(args) = args.subcommand_matches("server") {
+                super::server::handle(args)?
+            } else if let Some(args) = args.subcommand_matches("web") {
+                super::web::handle(args)?
+            } else {
+                None
+            };
+            if meta_action.borrow().is_some() {
+                Ok(cloop::ShellAction::Exit)
+            } else {
+                Ok(cloop::ShellAction::Continue)
+            }
+        };
+
+        let mut shell = cloop::Shell::new(
+            format!("{app_name}{delim}"),
+            ShellContext::default(),
+            ShellEditor::new(editor.clone()),
+            parser.clone(),
+            handler,
+        );
+
+        shell.run().unwrap();
     }
+    println!("Bye!");
     Ok(())
 }

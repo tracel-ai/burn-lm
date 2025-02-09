@@ -23,5 +23,5 @@ rstest = { workspace = true }
 tempfile = { workspace = true }
 
 [[bin]]
-name = "burnlm"
-path = "src/bin/burnlm.rs"
+name = "burnlm-cli"
+path = "src/bin/burnlm-cli.rs"

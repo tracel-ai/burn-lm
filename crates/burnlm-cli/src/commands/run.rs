@@ -1,8 +1,7 @@
 use burnlm_inference::{message::MessageRole, Message};
 use burnlm_registry::Registry;
+use spinners::{Spinner, Spinners};
 use yansi::Paint;
-
-use crate::backends::{BackendValues, DEFAULT_BURN_BACKEND};
 
 pub(crate) fn create() -> clap::Command {
     let mut root = clap::Command::new("run").about("Run inference on chosen model in the terminal");
@@ -15,9 +14,8 @@ pub(crate) fn create() -> clap::Command {
         .collect();
     installed.sort_by_key(|(key, ..)| *key);
     for (_name, plugin) in installed {
-        let mut subcommand = clap::Command::new(plugin.model_cli_param_name())
-            .about(format!("Use {} model", plugin.model_name()));
-        subcommand = subcommand
+        let subcommand = clap::Command::new(plugin.model_cli_param_name())
+            .about(format!("Use {} model", plugin.model_name()))
             .args((plugin.create_cli_flags_fn())().get_arguments())
             .arg(
                 clap::Arg::new("prompt")
@@ -25,17 +23,6 @@ pub(crate) fn create() -> clap::Command {
                     .required(true)
                     .index(1),
             );
-        if std::env::var(super::BURNLM_SHELL_ENVVAR).is_err() {
-            // inside a shell the backend is already set
-            subcommand = subcommand.arg(
-                clap::Arg::new("backend")
-                    .long("backend")
-                    .value_parser(clap::value_parser!(BackendValues))
-                    .default_value(DEFAULT_BURN_BACKEND) // we pass as litteral as enum default does not work here
-                    .required(false)
-                    .help("The Burn backend for the inference"),
-            );
-        }
         root = root.subcommand(subcommand);
     }
     root
@@ -50,18 +37,7 @@ pub(crate) fn handle(args: &clap::ArgMatches) -> super::HandleCommandResult {
         }
     };
     let run_args = args.subcommand_matches(plugin_name).unwrap();
-    if std::env::var(super::INNER_BURNLM_CLI_ENVVAR).is_ok() {
-        run(plugin_name, run_args)
-    } else {
-        let backend = run_args.get_one::<BackendValues>("backend").unwrap();
-        let run_args: Vec<String> = std::env::args().skip(1).collect();
-        let run_status = super::build_and_run_burnlm(
-            "Running inference...",
-            &backend.to_string(),
-            &run_args,
-            &[]);
-        std::process::exit(run_status.code().unwrap_or(1));
-    }
+    run(plugin_name, run_args)
 }
 
 fn run(plugin_name: &str, run_args: &clap::ArgMatches) -> super::HandleCommandResult {
@@ -73,13 +49,22 @@ fn run(plugin_name: &str, run_args: &clap::ArgMatches) -> super::HandleCommandRe
         .map(|(_, plugin)| plugin);
     let plugin = plugin.unwrap_or_else(|| panic!("Plugin should be registered: {plugin_name}"));
     plugin.parse_cli_config(run_args);
+
     // load the model
-    let mut temp_msg = super::LoadingMessage::start(
-        "Preparing model...",
-        &format!("Loading model '{}'", plugin.model_name()));
+    let loading_msg = format!("loading model '{}'...", plugin.model_name());
+    let mut sp = Spinner::new(
+        Spinners::Bounce,
+        loading_msg.bright_black().to_string().into(),
+    );
     plugin.load()?;
-    temp_msg.end();
-    println!("");
+    let completion_msg = format!(
+        "{} {}",
+        "✓".bright_green().bold().to_string(),
+        "model loaded!".bright_black().bold().to_string(),
+    );
+    sp.stop_with_message(completion_msg);
+
+    // generation
     let prompt = run_args
         .get_one::<String>("prompt")
         .expect("The prompt argument should be set.");
@@ -88,11 +73,21 @@ fn run(plugin_name: &str, run_args: &clap::ArgMatches) -> super::HandleCommandRe
         content: prompt.clone(),
         refusal: None,
     };
+    let mut sp = Spinner::new(
+        Spinners::Bounce,
+        "generating answer...".bright_black().to_string().into(),
+    );
     let result = plugin.complete(vec![message]);
     match result {
         Ok(answer) => {
-            let fmt_answer = answer.bright_black().bold();
-            println!("{fmt_answer}");
+            let completion_msg = format!(
+                "{} {}",
+                "✓".bright_green().bold().to_string(),
+                "answer generated!".bright_black().bold().to_string(),
+            );
+            sp.stop_with_message(completion_msg);
+            let fmt_answer = answer.bright_black();
+            println!("\n{fmt_answer}");
             Ok(None)
         }
         Err(err) => anyhow::bail!("An error occured: {err}"),

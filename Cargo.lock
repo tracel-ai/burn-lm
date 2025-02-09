@@ -683,6 +683,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "burnlm"
+version = "0.0.1"
+dependencies = [
+ "spinners",
+ "yansi",
+]
+
+[[package]]
 name = "burnlm-cli"
 version = "0.0.1"
 dependencies = [
@@ -998,14 +1006,6 @@ name = "clap_lex"
 version = "0.7.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "afb84c814227b90d6895e01398aee0d8033c00e7466aca416fb6a8e0eb19d8a7"
-
-[[package]]
-name = "cli-launcher"
-version = "0.0.1"
-dependencies = [
- "spinners",
- "yansi",
-]
 
 [[package]]
 name = "clipboard-win"

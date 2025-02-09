@@ -1,5 +1,5 @@
 [package]
-name = "cli-launcher"
+name = "burnlm"
 edition.workspace = true
 version.workspace = true
 license.workspace = true

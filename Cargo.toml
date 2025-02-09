@@ -5,13 +5,13 @@
 resolver = "2"
 
 members = [
+    "crates/burnlm",
     "crates/burnlm-cli",
     "crates/burnlm-http",
     "crates/burnlm-inference",
     "crates/burnlm-inference-*",
     "crates/burnlm-macros",
     "crates/burnlm-registry",
-    "crates/cli-launcher",
     "models/llama-burn",
     "xtask",
 ]

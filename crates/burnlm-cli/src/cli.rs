@@ -1,15 +1,6 @@
-use clap::ValueEnum;
-use yansi::Paint;
+use crate::commands;
 
-use crate::{
-    backends::{BackendValues, DEFAULT_BURN_BACKEND},
-    commands,
-};
-
-const BURNLM_DEFAULT_BACKEND_ENVVAR: &str = "BURNLM_DEFAULT_BACKEND";
-
-pub fn run() -> anyhow::Result<()> {
-    println!();
+pub fn run(backend: &str) -> anyhow::Result<()> {
     // Define CLI
     let cli = clap::command!()
         .subcommand(commands::backends::create())
@@ -28,37 +19,23 @@ pub fn run() -> anyhow::Result<()> {
     if matches.subcommand_matches("backends").is_some() {
         commands::backends::handle().map(|_| ())
     } else if let Some(args) = matches.subcommand_matches("chat") {
-        commands::chat::handle(args, None).map(|_| ())
+        commands::chat::handle(args, backend).map(|_| ())
     } else if let Some(args) = matches.subcommand_matches("download") {
         commands::download::handle(args).map(|_| ())
     } else if matches.subcommand_matches("models").is_some() {
-        commands::models::handle().map(|_| ())
+        commands::models::handle(false).map(|_| ())
     } else if let Some(args) = matches.subcommand_matches("new") {
         commands::new::handle(args).map(|_| ())
     } else if let Some(args) = matches.subcommand_matches("run") {
         commands::run::handle(args).map(|_| ())
     } else if let Some(args) = matches.subcommand_matches("server") {
         commands::server::handle(args).map(|_| ())
-    } else if let Some(args) = matches.subcommand_matches("shell") {
-        commands::shell::handle(Some(args), None).map(|_| ())
+    } else if matches.subcommand_matches("shell").is_some() {
+        commands::shell::handle(backend).map(|_| ())
     } else if let Some(args) = matches.subcommand_matches("web") {
         commands::web::handle(args).map(|_| ())
     } else {
-        // default command is to launch a shell
-        let backend = match std::env::var(BURNLM_DEFAULT_BACKEND_ENVVAR) {
-            Ok(backend) => BackendValues::from_str(&backend, true).unwrap(),
-            Err(_) => {
-                let mut table = comfy_table::Table::new();
-                table.load_preset(comfy_table::presets::UTF8_FULL)
-                    .apply_modifier(comfy_table::modifiers::UTF8_ROUND_CORNERS)
-                    .set_content_arrangement(comfy_table::ContentArrangement::Dynamic)
-                    .set_width(80)
-                    .add_row(
-                        vec![comfy_table::Cell::new(format!("💡 Hint: No environment variable '{BURNLM_DEFAULT_BACKEND_ENVVAR}' defined. Using default Burn backend which is 'wgpu'. To get a list of all supported backends on this platform use 'cargo burnlm backends'."))]);
-                println!("{}\n", table.bright_yellow().bold());
-                BackendValues::from_str(DEFAULT_BURN_BACKEND, true).unwrap()
-            }
-        };
-        commands::shell::handle(None, Some(&backend)).map(|_| ())
+        // default action is to start a shell
+        commands::shell::handle(backend).map(|_| ())
     }
 }

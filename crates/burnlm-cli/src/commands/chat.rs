@@ -1,3 +1,5 @@
+use std::io::{stdout, Write};
+
 use burnlm_inference::{Message, MessageRole};
 use burnlm_registry::Registry;
 use rustyline::{history::DefaultHistory, Editor};
@@ -121,6 +123,10 @@ pub(crate) fn handle(args: &clap::ArgMatches, backend: &str) -> super::HandleCom
                     refusal: None,
                 };
                 ctx.messages.push(formatted_msg);
+                let mut sp = Spinner::new(
+                    Spinners::Bounce,
+                    "generating answer...".bright_black().to_string().into(),
+                );
                 let result = plugin.complete(ctx.messages.clone());
                 match result {
                     Ok(answer) => {
@@ -130,6 +136,11 @@ pub(crate) fn handle(args: &clap::ArgMatches, backend: &str) -> super::HandleCom
                             refusal: None,
                         };
                         ctx.messages.push(formatted_ans);
+
+                        sp.stop();
+                        print!("{}", super::ANSI_CODE_DELETE_LINE);
+                        stdout().flush().unwrap();
+
                         let fmt_answer = answer.bright_black().bold();
                         println!("{fmt_answer}");
                     }

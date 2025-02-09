@@ -8,6 +8,8 @@ pub(crate) mod server;
 pub(crate) mod shell;
 pub(crate) mod web;
 
+const ANSI_CODE_DELETE_LINE: &str = "\r\x1b[K";
+
 /// Meta action used in shell mode.
 /// It is returned by the handle function of each command.
 pub(crate) enum ShellMetaAction {

@@ -20,6 +20,8 @@ pub(crate) enum ShellMetaAction {
 
 type HandleCommandResult = anyhow::Result<Option<ShellMetaAction>>;
 
+use std::io::{stdout, Write};
+
 use yansi::Paint;
 /// Rustyline custom line editor helper
 /// Principal aim for this is to provide a way to stylize the prompt.
@@ -50,3 +52,45 @@ impl rustyline::highlight::Highlighter for BurnLMPromptHelper {
     }
 }
 
+
+/// A message with a spinner that can display the elpased time once finished.
+pub(crate) struct SpinningMessage {
+    end_message: String,
+    spinner: spinners::Spinner,
+    start_time: std::time::Instant,
+}
+
+impl SpinningMessage {
+    pub fn new(start_msg: &str, end_msg: &str) -> Self {
+        let now = std::time::Instant::now();
+        let spinner = spinners::Spinner::new(
+            spinners::Spinners::Bounce,
+            start_msg.bright_black().to_string().into(),
+        );
+        Self {
+            end_message: end_msg.to_owned(),
+            spinner,
+            start_time: now,
+        }
+    }
+
+    /// Stop the spinner and replace the line with the end message.
+    /// If delete is true then delete the spinner line alltogether.
+    pub fn end(&mut self, delete: bool) {
+        if delete {
+            self.spinner.stop();
+            print!("{}", ANSI_CODE_DELETE_LINE);
+            stdout().flush().unwrap();
+        } else {
+            let elapsed = self.start_time.elapsed().as_secs_f32();
+            let elapsed_msg = format!("({:.3}s)", elapsed);
+            let completion_msg = format!(
+                "{} {} {}",
+                "✓".bright_green().bold().to_string(),
+                self.end_message.bright_black().bold().to_string(),
+                elapsed_msg.bright_black().bold().italic().to_string(),
+            );
+            self.spinner.stop_with_message(completion_msg);
+        }
+    }
+}

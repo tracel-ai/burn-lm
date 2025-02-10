@@ -1,6 +1,5 @@
 use burnlm_inference::{message::MessageRole, Message};
 use burnlm_registry::Registry;
-use spinners::{Spinner, Spinners};
 use yansi::Paint;
 
 pub(crate) fn create() -> clap::Command {
@@ -51,18 +50,12 @@ fn run(plugin_name: &str, run_args: &clap::ArgMatches) -> super::HandleCommandRe
     plugin.parse_cli_config(run_args);
 
     // load the model
-    let loading_msg = format!("loading model '{}'...", plugin.model_name());
-    let mut sp = Spinner::new(
-        Spinners::Bounce,
-        loading_msg.bright_black().to_string().into(),
+    let mut spin_msg = super::SpinningMessage::new(
+        &format!("loading model '{}'...", plugin.model_name()),
+        "model loaded!"
     );
     plugin.load()?;
-    let completion_msg = format!(
-        "{} {}",
-        "✓".bright_green().bold().to_string(),
-        "model loaded!".bright_black().bold().to_string(),
-    );
-    sp.stop_with_message(completion_msg);
+    spin_msg.end(false);
 
     // generation
     let prompt = run_args
@@ -73,19 +66,14 @@ fn run(plugin_name: &str, run_args: &clap::ArgMatches) -> super::HandleCommandRe
         content: prompt.clone(),
         refusal: None,
     };
-    let mut sp = Spinner::new(
-        Spinners::Bounce,
-        "generating answer...".bright_black().to_string().into(),
+    let mut spin_msg = super::SpinningMessage::new(
+        "generating answer...",
+        "answer generated!"
     );
     let result = plugin.complete(vec![message]);
     match result {
         Ok(answer) => {
-            let completion_msg = format!(
-                "{} {}",
-                "✓".bright_green().bold().to_string(),
-                "answer generated!".bright_black().bold().to_string(),
-            );
-            sp.stop_with_message(completion_msg);
+            spin_msg.end(false);
             let fmt_answer = answer.bright_black();
             println!("\n{fmt_answer}");
             Ok(None)

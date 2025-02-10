@@ -1,9 +1,6 @@
-use std::io::{stdout, Write};
-
 use burnlm_inference::{Message, MessageRole};
 use burnlm_registry::Registry;
 use rustyline::{history::DefaultHistory, Editor};
-use spinners::{Spinner, Spinners};
 use yansi::Paint;
 
 use super::BurnLMPromptHelper;
@@ -98,18 +95,12 @@ pub(crate) fn handle(args: &clap::ArgMatches, backend: &str) -> super::HandleCom
     plugin.parse_cli_config(plugin_args);
 
     // load the model
-    let loading_msg = format!("loading model '{}'...", plugin.model_name());
-    let mut sp = Spinner::new(
-        Spinners::Bounce,
-        loading_msg.bright_black().to_string().into(),
+    let mut spin_msg = super::SpinningMessage::new(
+        &format!("loading model '{}'...", plugin.model_name()),
+        "model loaded!"
     );
     plugin.load()?;
-    let completion_msg = format!(
-        "{} {}",
-        "✓".bright_green().bold().to_string(),
-        "model loaded!".bright_black().bold().to_string(),
-    );
-    sp.stop_with_message(completion_msg);
+    spin_msg.end(false);
 
     // create chat shell
     let app_name = format!("({backend}) chat|{}", plugin.model_name());
@@ -123,9 +114,9 @@ pub(crate) fn handle(args: &clap::ArgMatches, backend: &str) -> super::HandleCom
                     refusal: None,
                 };
                 ctx.messages.push(formatted_msg);
-                let mut sp = Spinner::new(
-                    Spinners::Bounce,
-                    "generating answer...".bright_black().to_string().into(),
+                let mut spin_msg = super::SpinningMessage::new(
+                    "generating answer...",
+                    "generation complete!"
                 );
                 let result = plugin.complete(ctx.messages.clone());
                 match result {
@@ -136,11 +127,7 @@ pub(crate) fn handle(args: &clap::ArgMatches, backend: &str) -> super::HandleCom
                             refusal: None,
                         };
                         ctx.messages.push(formatted_ans);
-
-                        sp.stop();
-                        print!("{}", super::ANSI_CODE_DELETE_LINE);
-                        stdout().flush().unwrap();
-
+                        spin_msg.end(true);
                         let fmt_answer = answer.bright_black().bold();
                         println!("{fmt_answer}");
                     }

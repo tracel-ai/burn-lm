@@ -1,8 +1,4 @@
-use std::{
-    cell::RefCell,
-    process::exit,
-    rc::Rc,
-};
+use std::{cell::RefCell, process::exit, rc::Rc};
 
 use rustyline::{history::DefaultHistory, Editor};
 
@@ -96,9 +92,9 @@ pub(crate) fn handle(backend: &str) -> anyhow::Result<()> {
             } else if let Some(args) = args.subcommand_matches("run") {
                 super::run::handle(args)?
             } else if let Some(args) = args.subcommand_matches("server") {
-                super::server::handle(args)?
+                super::server::handle(args, backend)?
             } else if let Some(args) = args.subcommand_matches("web") {
-                super::web::handle(args)?
+                super::web::handle(args, backend)?
             } else {
                 None
             };

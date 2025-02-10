@@ -52,7 +52,6 @@ impl rustyline::highlight::Highlighter for BurnLMPromptHelper {
     }
 }
 
-
 /// A message with a spinner that can display the elpased time once finished.
 pub(crate) struct SpinningMessage {
     end_message: String,
@@ -88,7 +87,7 @@ impl SpinningMessage {
                 "{} {} {}",
                 "✓".bright_green().bold().to_string(),
                 self.end_message.bright_black().bold().to_string(),
-                elapsed_msg.bright_black().bold().italic().to_string(),
+                elapsed_msg.bright_black().italic().to_string(),
             );
             self.spinner.stop_with_message(completion_msg);
         }

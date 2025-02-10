@@ -1,4 +1,4 @@
-use burnlm_inference::{InferenceError, InferenceResult};
+use burnlm_inference::{InferenceError, InferenceResult, Stats};
 use burnlm_registry::Registry;
 
 pub(crate) fn create() -> clap::Command {
@@ -30,7 +30,7 @@ pub(crate) fn handle(args: &clap::ArgMatches) -> super::HandleCommandResult {
     let registry = Registry::new();
     let downloaders = match args.subcommand_name() {
         Some("all") => {
-            let mut candidates: Vec<(String, fn() -> InferenceResult<()>)> = registry
+            let mut candidates: Vec<(String, fn() -> InferenceResult<Option<Stats>>)> = registry
                 .get()
                 .iter()
                 .filter(|(_, plugin)| plugin.downloader().is_some())

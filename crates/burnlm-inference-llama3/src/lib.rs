@@ -65,7 +65,11 @@ impl<B: Backend> Default for Llama3InstructServer<B> {
     }
 }
 
-fn llama_downloader(version: pretrained::Llama, name: &'static str) -> InferenceResult<()> {
+fn llama_downloader(
+    version: pretrained::Llama,
+    name: &'static str,
+) -> InferenceResult<Option<Stats>> {
+    let now = std::time::Instant::now();
     let model = pretrained::Llama::pretrained(&version);
     model
         .download_weights()
@@ -73,12 +77,16 @@ fn llama_downloader(version: pretrained::Llama, name: &'static str) -> Inference
     model
         .download_tokenizer()
         .map_err(|err| InferenceError::DownloadTokenizerError(name.to_string(), err.to_string()))?;
-    Ok(())
+    let mut stats = Stats::new();
+    stats
+        .entries
+        .insert(StatEntry::ModelDownloadingDuration(now.elapsed()));
+    Ok(Some(stats))
 }
 
 impl InferenceServer for Llama3InstructServer<InferenceBackend> {
-    fn downloader(&mut self) -> Option<fn() -> InferenceResult<()>> {
-        fn downloader() -> InferenceResult<()> {
+    fn downloader(&mut self) -> Option<fn() -> InferenceResult<Option<Stats>>> {
+        fn downloader() -> InferenceResult<Option<Stats>> {
             llama_downloader(
                 pretrained::Llama::Llama3,
                 Llama3InstructServer::<InferenceBackend>::model_name(),
@@ -92,11 +100,11 @@ impl InferenceServer for Llama3InstructServer<InferenceBackend> {
         model.is_downloaded()
     }
 
-    fn load(&mut self) -> InferenceResult<()> {
+    fn load(&mut self) -> InferenceResult<Option<Stats>> {
         self.server.load(&self.config)
     }
 
-    fn unload(&mut self) -> InferenceResult<()> {
+    fn unload(&mut self) -> InferenceResult<Option<Stats>> {
         self.server.unload()
     }
 
@@ -127,8 +135,8 @@ impl<B: Backend> Default for Llama31InstructServer<B> {
 }
 
 impl InferenceServer for Llama31InstructServer<InferenceBackend> {
-    fn downloader(&mut self) -> Option<fn() -> InferenceResult<()>> {
-        fn downloader() -> InferenceResult<()> {
+    fn downloader(&mut self) -> Option<fn() -> InferenceResult<Option<Stats>>> {
+        fn downloader() -> InferenceResult<Option<Stats>> {
             llama_downloader(
                 pretrained::Llama::Llama31Instruct,
                 Llama31InstructServer::<InferenceBackend>::model_name(),
@@ -142,11 +150,11 @@ impl InferenceServer for Llama31InstructServer<InferenceBackend> {
         model.is_downloaded()
     }
 
-    fn load(&mut self) -> InferenceResult<()> {
+    fn load(&mut self) -> InferenceResult<Option<Stats>> {
         self.server.load(&self.config)
     }
 
-    fn unload(&mut self) -> InferenceResult<()> {
+    fn unload(&mut self) -> InferenceResult<Option<Stats>> {
         self.server.unload()
     }
 
@@ -177,8 +185,8 @@ impl<B: Backend> Default for Llama321bInstructServer<B> {
 }
 
 impl InferenceServer for Llama321bInstructServer<InferenceBackend> {
-    fn downloader(&mut self) -> Option<fn() -> InferenceResult<()>> {
-        fn downloader() -> InferenceResult<()> {
+    fn downloader(&mut self) -> Option<fn() -> InferenceResult<Option<Stats>>> {
+        fn downloader() -> InferenceResult<Option<Stats>> {
             llama_downloader(
                 pretrained::Llama::Llama321bInstruct,
                 Llama321bInstructServer::<InferenceBackend>::model_name(),
@@ -192,11 +200,11 @@ impl InferenceServer for Llama321bInstructServer<InferenceBackend> {
         model.is_downloaded()
     }
 
-    fn load(&mut self) -> InferenceResult<()> {
+    fn load(&mut self) -> InferenceResult<Option<Stats>> {
         self.server.load(&self.config)
     }
 
-    fn unload(&mut self) -> InferenceResult<()> {
+    fn unload(&mut self) -> InferenceResult<Option<Stats>> {
         self.server.unload()
     }
 
@@ -227,8 +235,8 @@ impl<B: Backend> Default for Llama323bInstructServer<B> {
 }
 
 impl InferenceServer for Llama323bInstructServer<InferenceBackend> {
-    fn downloader(&mut self) -> Option<fn() -> InferenceResult<()>> {
-        fn downloader() -> InferenceResult<()> {
+    fn downloader(&mut self) -> Option<fn() -> InferenceResult<Option<Stats>>> {
+        fn downloader() -> InferenceResult<Option<Stats>> {
             llama_downloader(
                 pretrained::Llama::Llama323bInstruct,
                 Llama323bInstructServer::<InferenceBackend>::model_name(),
@@ -242,11 +250,11 @@ impl InferenceServer for Llama323bInstructServer<InferenceBackend> {
         model.is_downloaded()
     }
 
-    fn load(&mut self) -> InferenceResult<()> {
+    fn load(&mut self) -> InferenceResult<Option<Stats>> {
         self.server.load(&self.config)
     }
 
-    fn unload(&mut self) -> InferenceResult<()> {
+    fn unload(&mut self) -> InferenceResult<Option<Stats>> {
         self.server.unload()
     }
 
@@ -273,9 +281,9 @@ impl<B: Backend> Llama3BaseServer<B> {
 }
 
 impl Llama3BaseServer<InferenceBackend> {
-    fn unload(&mut self) -> InferenceResult<()> {
+    fn unload(&mut self) -> InferenceResult<Option<Stats>> {
         self.model = None;
-        Ok(())
+        Ok(None)
     }
 
     fn complete(
@@ -283,9 +291,7 @@ impl Llama3BaseServer<InferenceBackend> {
         messages: Vec<Message>,
         config: &Llama3ServerConfig,
     ) -> InferenceResult<Completion> {
-        // println!("{:?}", config);
-        // println!("Burn device: {:?}", INFERENCE_DEVICE);
-        self.load(config)?;
+        let load_stats = self.load(config)?;
         let prompt = self.prompt(messages)?;
         let seed = match config.seed {
             0 => rand::thread_rng().gen::<u64>(),
@@ -296,21 +302,30 @@ impl Llama3BaseServer<InferenceBackend> {
         } else {
             Sampler::Argmax
         };
-        // println!("Generating...");
         let generated = match self.model.borrow_mut() {
             Some(model) => {
                 model.generate(&prompt, config.sample_len, config.temperature, &mut sampler)
             }
             _ => return Err(InferenceError::ModelNotLoaded),
         };
-        Ok(generated.text)
+        let mut completion = Completion::new(&generated.text);
+        completion.stats.entries.extend(vec![
+            StatEntry::InferenceDuration(generated.time),
+            StatEntry::TokensCount(generated.tokens),
+            StatEntry::TokensPerSecond(generated.tokens, generated.time),
+        ]);
+        if let Some(stats) = load_stats {
+            completion.stats.entries.extend(stats.entries);
+        }
+        Ok(completion)
     }
 
     fn load(
         &mut self,
         config: &Llama3ServerConfig,
-    ) -> burnlm_inference::errors::InferenceResult<()> {
+    ) -> burnlm_inference::errors::InferenceResult<Option<Stats>> {
         if self.model.is_none() {
+            let now = std::time::Instant::now();
             self.model = match self.version {
                 LlamaVersion::Llama3Instruct => Some(
                     llama::LlamaConfig::llama3_8b_pretrained::<InferenceBackend>(
@@ -341,8 +356,14 @@ impl Llama3BaseServer<InferenceBackend> {
                     .unwrap(),
                 ),
             };
+            let mut stats = Stats::new();
+            stats
+                .entries
+                .insert(StatEntry::ModelLoadingDuration(now.elapsed()));
+            Ok(Some(stats))
+        } else {
+            Ok(None)
         }
-        Ok(())
     }
 
     fn prompt(

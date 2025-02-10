@@ -1,7 +1,6 @@
 use std::io::Write;
 use std::process::Command as StdCommand;
 
-use crate::backends::{BackendValues, DEFAULT_BURN_BACKEND};
 use crate::utils;
 
 const DOCKER_COMPOSE_CONFIG: &str = "./crates/burnlm-cli/config/docker-compose.web.yml";
@@ -10,22 +9,13 @@ const MPROC_WEB_TEMPLATE: &str = "./crates/burnlm-cli/config/mprocs_web.yml";
 const MPROC_WEB_CONFIG: &str = "./tmp/mprocs_web.yml";
 
 pub(crate) fn create() -> clap::Command {
-    let mut root = clap::Command::new("web").about("Run inference in an Open WebUI client");
-    let start = clap::Command::new("start").about("Start web client").arg(
-        clap::Arg::new("backend")
-            .long("backend")
-            .value_parser(clap::value_parser!(BackendValues))
-            .default_value(DEFAULT_BURN_BACKEND)
-            .required(false)
-            .help("The Burn backend used for inference"),
-    );
-    root = root.subcommand(start);
-    let stop = clap::Command::new("stop").about("Stop web client");
-    root = root.subcommand(stop);
-    root
+    clap::Command::new("web")
+        .about("Run inference in an Open WebUI client")
+        .subcommand(clap::Command::new("start").about("Start web client"))
+        .subcommand(clap::Command::new("stop").about("Stop web client"))
 }
 
-pub(crate) fn handle(args: &clap::ArgMatches) -> super::HandleCommandResult {
+pub(crate) fn handle(args: &clap::ArgMatches, backend: &str) -> super::HandleCommandResult {
     let action = match args.subcommand_name() {
         Some(cmd) => cmd,
         None => {
@@ -34,21 +24,17 @@ pub(crate) fn handle(args: &clap::ArgMatches) -> super::HandleCommandResult {
         }
     };
     match action {
-        "start" => {
-            let start_args = args.subcommand_matches(action).unwrap();
-            start_web(start_args)
-        }
+        "start" => start_web(backend),
         "stop" => stop_web(),
         _ => Err(anyhow::format_err!("Error: command unknown {action}")),
     }
 }
 
-fn start_web(args: &clap::ArgMatches) -> super::HandleCommandResult {
+fn start_web(backend: &str) -> super::HandleCommandResult {
     println!("Starting containerized services...",);
     up_docker_compose()?;
     // write mprocs file from template
     let template = std::fs::read_to_string(MPROC_WEB_TEMPLATE).unwrap();
-    let backend = args.get_one::<BackendValues>("backend").unwrap();
     let script = template.replace("{{BACKEND}}", &backend.to_string());
     std::fs::create_dir_all("tmp").expect("directory should be created");
     let mut file = std::fs::File::create(MPROC_WEB_CONFIG).unwrap();

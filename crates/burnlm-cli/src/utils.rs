@@ -1,4 +1,6 @@
 use anyhow::Context;
+use burnlm_inference::Completion;
+use yansi::Paint;
 
 /// Sanitizes a given crate name by replacing invalid characters, merging consecutive
 /// hyphens, and ensuring it adheres to common crate naming conventions.
@@ -138,6 +140,13 @@ pub fn parse_command(input: &str) -> (Option<String>, &str) {
             (command, args)
         })
         .unwrap_or((None, ""))
+}
+
+/// Display stats from a completion
+pub fn display_stats(completion: &Completion) {
+    let stats = format!("{}", completion.stats.display_stats());
+    let fmt_stats = stats.italic();
+    println!("{fmt_stats}");
 }
 
 #[cfg(test)]

@@ -30,11 +30,7 @@ pub(crate) fn handle(shell: bool) -> super::HandleCommandResult {
         let install_cmd_cell = if plugin.downloader().is_some() {
             let content = format!(
                 "{}download {}",
-                if shell {
-                    ""
-                } else {
-                    "cargo burnlm "
-                },
+                if shell { "" } else { "cargo burnlm " },
                 plugin.model_cli_param_name()
             );
             Cell::new(content).set_alignment(comfy_table::CellAlignment::Left)

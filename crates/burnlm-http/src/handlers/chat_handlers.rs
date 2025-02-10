@@ -6,7 +6,7 @@ use axum::{
 };
 use tokio::sync::mpsc;
 use tokio_stream::{wrappers::ReceiverStream, StreamExt};
-use tracing::info;
+use tracing::{debug, info};
 
 use crate::{
     controllers::model_controllers::ModelController,
@@ -52,8 +52,9 @@ async fn handle_non_streaming_response(
         .expect("ChatCompletionParams should serialize to a JSON string");
     info!("PARAMS JSON: {}", json_params);
     plugin.parse_json_config(&json_params);
-    let content = plugin.complete(messages).unwrap();
-    tracing::debug!("Answer: {content}");
+    let answer = plugin.complete(messages).unwrap();
+    let content = answer.completion;
+    tracing::debug!("Answer: {}", content);
     let response = ChatCompletionSchema {
         id: ChatCompletionId::new().to_string(),
         object: "chat.completion".to_string(),
@@ -89,15 +90,20 @@ async fn handle_streaming_response(
                 .expect("ChatCompletionParams should serialize to a JSON string");
             info!("PARAMS JSON: {}", json_params);
             plugin.parse_json_config(&json_params);
-            let messages: Vec<burnlm_inference::Message> =
+            let mut messages: Vec<burnlm_inference::Message> =
                 payload.messages.iter().cloned().map(Into::into).collect();
-            let content = plugin.complete(messages).unwrap();
-            tracing::debug!("Answer: {content}");
+            messages
+                .iter_mut()
+                .for_each(|m| m.remove_after(burnlm_inference::STATS_MARKER));
+            debug!("MESSAGES CONTENT: {:?}", messages);
+            let answer = plugin.complete(messages).unwrap();
+            let content = format!("{}\n\n{}", answer.completion, answer.stats.display_stats());
+            tracing::debug!("Answer: {}", answer.completion);
             let chunk = StreamingChunk::Data(ChatCompletionChunkSchema {
                 id: id.clone(),
                 object: "chat.completion.chunk".to_string(),
                 created: chrono::Utc::now().timestamp(),
-                model: "toto".to_string(),
+                model: plugin.model_name().to_owned(),
                 choices: vec![ChunkChoiceSchema {
                     index: 0,
                     delta: Some(ChunkChoiceDeltaSchema {

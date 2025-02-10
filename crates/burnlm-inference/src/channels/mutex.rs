@@ -1,6 +1,9 @@
 use std::sync::{Arc, Mutex};
 
-use crate::{errors::InferenceResult, message::Message, server::InferenceServer, Completion};
+use crate::{
+    completion::Completion, errors::InferenceResult, message::Message, server::InferenceServer,
+    Stats,
+};
 
 use super::InferenceChannel;
 
@@ -25,7 +28,7 @@ impl<Server: InferenceServer> MutexChannel<Server> {
 }
 
 impl<Server: InferenceServer> InferenceChannel<Server> for MutexChannel<Server> {
-    fn downloader(&self) -> Option<fn() -> InferenceResult<()>> {
+    fn downloader(&self) -> Option<fn() -> InferenceResult<Option<Stats>>> {
         let mut server = self.server.lock().unwrap();
         server.downloader()
     }
@@ -45,12 +48,12 @@ impl<Server: InferenceServer> InferenceChannel<Server> for MutexChannel<Server> 
         server.parse_json_config(json);
     }
 
-    fn load(&self) -> InferenceResult<()> {
+    fn load(&self) -> InferenceResult<Option<Stats>> {
         let mut server = self.server.lock().unwrap();
         server.load()
     }
 
-    fn unload(&self) -> InferenceResult<()> {
+    fn unload(&self) -> InferenceResult<Option<Stats>> {
         let mut server = self.server.lock().unwrap();
         server.unload()
     }

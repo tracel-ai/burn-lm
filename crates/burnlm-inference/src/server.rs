@@ -1,4 +1,4 @@
-use crate::{errors::InferenceResult, message::Message, Completion};
+use crate::{completion::Completion, errors::InferenceResult, message::Message, Stats};
 use std::fmt::Debug;
 
 /// Marker trait for server configurations.
@@ -20,7 +20,7 @@ pub trait ServerConfigParsing {
 /// model in Burn LM registry.
 pub trait InferenceServer: ServerConfigParsing + Default + Send + Sync + Debug {
     /// Return closure of a function to download the model
-    fn downloader(&mut self) -> Option<fn() -> InferenceResult<()>> {
+    fn downloader(&mut self) -> Option<fn() -> InferenceResult<Option<Stats>>> {
         None
     }
 
@@ -31,10 +31,10 @@ pub trait InferenceServer: ServerConfigParsing + Default + Send + Sync + Debug {
     }
 
     /// Load the model.
-    fn load(&mut self) -> InferenceResult<()>;
+    fn load(&mut self) -> InferenceResult<Option<Stats>>;
 
     /// Unload the model.
-    fn unload(&mut self) -> InferenceResult<()>;
+    fn unload(&mut self) -> InferenceResult<Option<Stats>>;
 
     /// Complete the prompt composed of formatted messages
     fn complete(&mut self, messages: Vec<Message>) -> InferenceResult<Completion>;

@@ -29,11 +29,11 @@ pub fn run(backend: &str) -> anyhow::Result<()> {
     } else if let Some(args) = matches.subcommand_matches("run") {
         commands::run::handle(args).map(|_| ())
     } else if let Some(args) = matches.subcommand_matches("server") {
-        commands::server::handle(args).map(|_| ())
+        commands::server::handle(args, backend).map(|_| ())
     } else if matches.subcommand_matches("shell").is_some() {
         commands::shell::handle(backend).map(|_| ())
     } else if let Some(args) = matches.subcommand_matches("web") {
-        commands::web::handle(args).map(|_| ())
+        commands::web::handle(args, backend).map(|_| ())
     } else {
         // default action is to start a shell
         commands::shell::handle(backend).map(|_| ())

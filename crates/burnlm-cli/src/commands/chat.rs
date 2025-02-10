@@ -8,8 +8,13 @@ use crate::utils;
 
 #[derive(clap::Subcommand)]
 pub enum MessageCommand {
-    Msg { message: String },
+    Msg {
+        message: String,
+    },
     // slash commands
+    /// Toggle stats
+    Stats,
+    /// Exit chat session
     Exit,
 }
 
@@ -47,11 +52,15 @@ impl cloop::InputReader for ChatEditor<BurnLMPromptHelper> {
 #[derive(Default)]
 struct ChatContext {
     messages: Vec<Message>,
+    stats: bool,
 }
 
 impl ChatContext {
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            messages: vec![],
+            stats: true,
+        }
     }
 }
 
@@ -97,7 +106,7 @@ pub(crate) fn handle(args: &clap::ArgMatches, backend: &str) -> super::HandleCom
     // load the model
     let mut spin_msg = super::SpinningMessage::new(
         &format!("loading model '{}'...", plugin.model_name()),
-        "model loaded!"
+        "model loaded!",
     );
     plugin.load()?;
     spin_msg.end(false);
@@ -114,25 +123,32 @@ pub(crate) fn handle(args: &clap::ArgMatches, backend: &str) -> super::HandleCom
                     refusal: None,
                 };
                 ctx.messages.push(formatted_msg);
-                let mut spin_msg = super::SpinningMessage::new(
-                    "generating answer...",
-                    "generation complete!"
-                );
+                let mut spin_msg =
+                    super::SpinningMessage::new("generating answer...", "generation complete!");
                 let result = plugin.complete(ctx.messages.clone());
                 match result {
                     Ok(answer) => {
                         let formatted_ans = Message {
                             role: MessageRole::Assistant,
-                            content: answer.clone(),
+                            content: answer.completion.to_owned(),
                             refusal: None,
                         };
                         ctx.messages.push(formatted_ans);
                         spin_msg.end(true);
-                        let fmt_answer = answer.bright_black().bold();
+                        let fmt_answer = answer.completion.bright_black().bold();
                         println!("{fmt_answer}");
+                        if ctx.stats {
+                            crate::utils::display_stats(&answer);
+                        }
                     }
                     Err(err) => anyhow::bail!("An error occured: {err}"),
                 }
+                Ok(cloop::ShellAction::Continue)
+            }
+            MessageCommand::Stats => {
+                ctx.stats = !ctx.stats;
+                let msg = format!("Stats toggled {}!", if ctx.stats { "on" } else { "off" });
+                println!("{}", msg.bright_black().bold());
                 Ok(cloop::ShellAction::Continue)
             }
             MessageCommand::Exit => Ok(cloop::ShellAction::Exit),

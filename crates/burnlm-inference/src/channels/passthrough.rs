@@ -1,6 +1,9 @@
 use std::{cell::RefCell, sync::Arc};
 
-use crate::{errors::InferenceResult, message::Message, server::InferenceServer, Completion};
+use crate::{
+    completion::Completion, errors::InferenceResult, message::Message, server::InferenceServer,
+    Stats,
+};
 
 use super::InferenceChannel;
 
@@ -28,7 +31,7 @@ impl<Server: InferenceServer> SingleThreadedChannel<Server> {
 }
 
 impl<Server: InferenceServer> InferenceChannel<Server> for SingleThreadedChannel<Server> {
-    fn downloader(&self) -> Option<fn() -> InferenceResult<()>> {
+    fn downloader(&self) -> Option<fn() -> InferenceResult<Option<Stats>>> {
         self.server.borrow_mut().downloader()
     }
 
@@ -44,11 +47,11 @@ impl<Server: InferenceServer> InferenceChannel<Server> for SingleThreadedChannel
         self.server.borrow_mut().parse_json_config(json);
     }
 
-    fn load(&self) -> InferenceResult<()> {
+    fn load(&self) -> InferenceResult<Option<Stats>> {
         self.server.borrow_mut().load()
     }
 
-    fn unload(&self) -> InferenceResult<()> {
+    fn unload(&self) -> InferenceResult<Option<Stats>> {
         self.server.borrow_mut().unload()
     }
 

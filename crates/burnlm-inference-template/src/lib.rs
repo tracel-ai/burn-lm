@@ -56,28 +56,40 @@ impl InferenceServer for ParrotServer<InferenceBackend> {
         true
     }
 
-    fn downloader(&mut self) -> Option<fn() -> InferenceResult<()>> {
+    fn downloader(&mut self) -> Option<fn() -> InferenceResult<Option<Stats>>> {
         // Return a closure with code to download the model if available.
         // Return none if there is no possiblity to download the model or if
         // this model does not need to be downloaded.
         None
     }
 
-    fn load(&mut self) -> InferenceResult<()> {
+    fn load(&mut self) -> InferenceResult<Option<Stats>> {
         // Load the model here
-        Ok(())
+        let now = std::time::Instant::now();
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        let mut stats = Stats::new();
+        stats
+            .entries
+            .insert(StatEntry::ModelLoadingDuration(now.elapsed()));
+        Ok(Some(stats))
     }
 
-    fn unload(&mut self) -> InferenceResult<()> {
+    fn unload(&mut self) -> InferenceResult<Option<Stats>> {
         // Drop the model here
-        Ok(())
+        Ok(None)
     }
 
     fn complete(&mut self, messages: Vec<Message>) -> InferenceResult<Completion> {
         // This where the inference actually happens
-        match messages.last() {
-            Some(msg) => Ok(msg.content.clone()),
-            _ => Ok("...".to_string()),
-        }
+        let mut completion = match messages.last() {
+            Some(msg) => Completion::new(&msg.content),
+            _ => Completion::new("..."),
+        };
+        // example of a returned stat
+        completion
+            .stats
+            .entries
+            .insert(StatEntry::Named("Everything".to_string(), "42".to_string()));
+        Ok(completion)
     }
 }

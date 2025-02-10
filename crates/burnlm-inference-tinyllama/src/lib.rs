@@ -42,8 +42,9 @@ pub struct TinyLlamaServer<B: Backend> {
 }
 
 impl InferenceServer for TinyLlamaServer<InferenceBackend> {
-    fn downloader(&mut self) -> Option<fn() -> InferenceResult<()>> {
+    fn downloader(&mut self) -> Option<fn() -> InferenceResult<Option<Stats>>> {
         Some(|| {
+            let now = std::time::Instant::now();
             let model = pretrained::Llama::TinyLlama.pretrained();
             model.download_weights().map_err(|err| {
                 InferenceError::DownloadWeightError(Self::model_name().to_string(), err.to_string())
@@ -54,7 +55,11 @@ impl InferenceServer for TinyLlamaServer<InferenceBackend> {
                     err.to_string(),
                 )
             })?;
-            Ok(())
+            let mut stats = Stats::new();
+            stats
+                .entries
+                .insert(StatEntry::ModelDownloadingDuration(now.elapsed()));
+            Ok(Some(stats))
         })
     }
 
@@ -63,8 +68,9 @@ impl InferenceServer for TinyLlamaServer<InferenceBackend> {
         model.is_downloaded()
     }
 
-    fn load(&mut self) -> InferenceResult<()> {
+    fn load(&mut self) -> InferenceResult<Option<Stats>> {
         if self.model.is_none() {
+            let now = std::time::Instant::now();
             self.model = Some(
                 llama::LlamaConfig::tiny_llama_pretrained::<InferenceBackend>(
                     self.config.max_seq_len,
@@ -72,19 +78,23 @@ impl InferenceServer for TinyLlamaServer<InferenceBackend> {
                 )
                 .unwrap(),
             );
+            let mut stats = Stats::new();
+            stats
+                .entries
+                .insert(StatEntry::ModelLoadingDuration(now.elapsed()));
+            Ok(Some(stats))
+        } else {
+            Ok(None)
         }
-        Ok(())
     }
 
-    fn unload(&mut self) -> InferenceResult<()> {
+    fn unload(&mut self) -> InferenceResult<Option<Stats>> {
         self.model = None;
-        Ok(())
+        Ok(None)
     }
 
     fn complete(&mut self, messages: Vec<Message>) -> InferenceResult<Completion> {
-        // println!("{:?}", self.config);
-        // println!("Burn device: {:?}", INFERENCE_DEVICE);
-        self.load()?;
+        let load_stats = self.load()?;
         let prompt = self.prompt(messages)?;
         let seed = match self.config.seed {
             0 => rand::thread_rng().gen::<u64>(),
@@ -95,7 +105,6 @@ impl InferenceServer for TinyLlamaServer<InferenceBackend> {
         } else {
             Sampler::Argmax
         };
-        // println!("Generating...");
         let generated = match self.model.borrow_mut() {
             Some(model) => model.generate(
                 &prompt,
@@ -105,7 +114,16 @@ impl InferenceServer for TinyLlamaServer<InferenceBackend> {
             ),
             _ => return Err(InferenceError::ModelNotLoaded),
         };
-        Ok(generated.text)
+        let mut completion = Completion::new(&generated.text);
+        completion.stats.entries.extend(vec![
+            StatEntry::InferenceDuration(generated.time),
+            StatEntry::TokensCount(generated.tokens),
+            StatEntry::TokensPerSecond(generated.tokens, generated.time),
+        ]);
+        if let Some(stats) = load_stats {
+            completion.stats.entries.extend(stats.entries);
+        }
+        Ok(completion)
     }
 }
 

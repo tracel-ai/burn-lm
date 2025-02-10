@@ -9,19 +9,21 @@ const BURNLM_BACKEND_ENVVAR: &str = "BURNLM_BACKEND";
 const DEFAULT_BURN_BACKEND: &str = "wgpu";
 
 fn main() {
-    println!("");
+    println!();
     // retrieve backend
     let mut exit_code = BURNLM_SUPERVISER_RESTART_EXIT_CODE;
     let mut backend = match std::env::var(BURNLM_BACKEND_ENVVAR) {
         Ok(backend) => backend,
         Err(_) => {
             let hint = format!(
-"╭──────────────────────────────────────────────────────────────────────────╮
+                "╭──────────────────────────────────────────────────────────────────────────╮
 │ 💡 Hint: No environment variable 'BURNLM_BACKEND' defined. Using default │
 │ Burn backend which is '{}'. To get a list of all supported backends on │
 │ this platform use 'cargo burnlm backends'.                               │
 ╰──────────────────────────────────────────────────────────────────────────╯
-", DEFAULT_BURN_BACKEND);
+",
+                DEFAULT_BURN_BACKEND
+            );
             print!("{}", hint.bright_yellow().bold());
             DEFAULT_BURN_BACKEND.to_string()
         }
@@ -53,10 +55,13 @@ fn main() {
 
     // Rebuild and restart burnlm while its exit code is SUPERVISER_RESTART_EXIT_CODE
     while exit_code == BURNLM_SUPERVISER_RESTART_EXIT_CODE {
-        let compile_msg = format!("Compiling burnlm CLI for backend '{}', please wait...", backend.clone());
+        let compile_msg = format!(
+            "Compiling burnlm CLI for backend '{}', please wait...",
+            backend.clone()
+        );
         let mut sp = Spinner::new(
             Spinners::Bounce,
-            compile_msg.bright_black().to_string().into(),
+            compile_msg.bright_black().to_string(),
         );
         // build burnlm cli
         let build_output = Command::new("cargo")
@@ -74,8 +79,8 @@ fn main() {
         // stop the spinner and remove the line
         let completion_msg = format!(
             "{} {}",
-            "✓".bright_green().bold().to_string(),
-            "burnlm CLI ready!".bright_black().bold().to_string(),
+            "✓".bright_green().bold(),
+            "burnlm CLI ready!".bright_black().bold(),
         );
         sp.stop_with_message(completion_msg);
         // execute burnlm

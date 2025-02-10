@@ -17,6 +17,13 @@ pub(crate) fn create() -> clap::Command {
             .about(format!("Use {} model", plugin.model_name()))
             .args((plugin.create_cli_flags_fn())().get_arguments())
             .arg(
+                clap::Arg::new("no-stats")
+                    .help("Disable display of satistics at the end of the inference")
+                    .long("no-stats")
+                    .action(clap::ArgAction::SetTrue)
+                    .required(false),
+            )
+            .arg(
                 clap::Arg::new("prompt")
                     .help("The prompt to send to the model")
                     .required(true)
@@ -52,7 +59,7 @@ fn run(plugin_name: &str, run_args: &clap::ArgMatches) -> super::HandleCommandRe
     // load the model
     let mut spin_msg = super::SpinningMessage::new(
         &format!("loading model '{}'...", plugin.model_name()),
-        "model loaded!"
+        "model loaded!",
     );
     plugin.load()?;
     spin_msg.end(false);
@@ -66,16 +73,16 @@ fn run(plugin_name: &str, run_args: &clap::ArgMatches) -> super::HandleCommandRe
         content: prompt.clone(),
         refusal: None,
     };
-    let mut spin_msg = super::SpinningMessage::new(
-        "generating answer...",
-        "answer generated!"
-    );
+    let mut spin_msg = super::SpinningMessage::new("generating answer...", "answer generated!");
     let result = plugin.complete(vec![message]);
     match result {
         Ok(answer) => {
             spin_msg.end(false);
-            let fmt_answer = answer.bright_black();
+            let fmt_answer = answer.completion.bright_black();
             println!("\n{fmt_answer}");
+            if !run_args.get_flag("no-stats") {
+                crate::utils::display_stats(&answer);
+            }
             Ok(None)
         }
         Err(err) => anyhow::bail!("An error occured: {err}"),

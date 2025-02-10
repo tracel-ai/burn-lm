@@ -2,11 +2,12 @@ use std::marker::PhantomData;
 
 use crate::{
     channels::InferenceChannel,
+    completion::Completion,
     errors::InferenceResult,
     message::Message,
     plugin::{CreateCliFlagsFn, InferencePlugin},
     server::InferenceServer,
-    Completion,
+    Stats,
 };
 
 #[derive(Debug)]
@@ -58,7 +59,7 @@ where
     Server: InferenceServer,
     Channel: InferenceChannel<Server>,
 {
-    fn downloader(&self) -> Option<fn() -> InferenceResult<()>> {
+    fn downloader(&self) -> Option<fn() -> InferenceResult<Option<Stats>>> {
         self.channel.downloader()
     }
 
@@ -74,11 +75,11 @@ where
         self.channel.parse_json_config(json);
     }
 
-    fn load(&self) -> InferenceResult<()> {
+    fn load(&self) -> InferenceResult<Option<Stats>> {
         self.channel.load()
     }
 
-    fn unload(&self) -> InferenceResult<()> {
+    fn unload(&self) -> InferenceResult<Option<Stats>> {
         self.channel.unload()
     }
 

@@ -601,7 +601,7 @@ pub struct GenerationOutput {
     /// The number of generated tokens.
     pub tokens: usize,
     /// The time it took to produce the output tokens (generation + decoding).
-    pub time: f64,
+    pub time: std::time::Duration,
 }
 
 #[derive(Clone)]
@@ -757,12 +757,10 @@ impl<B: Backend, T: Tokenizer> Llama<B, T> {
             .collect::<Vec<_>>();
 
         let generated = self.tokenizer.decode(tokens);
-        let elapsed = now.elapsed().as_secs_f64();
-
         GenerationOutput {
             text: generated,
             tokens: num_tokens,
-            time: elapsed,
+            time: now.elapsed(),
         }
     }
 

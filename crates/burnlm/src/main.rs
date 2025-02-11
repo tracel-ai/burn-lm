@@ -59,10 +59,7 @@ fn main() {
             "Compiling burnlm CLI for backend '{}', please wait...",
             backend.clone()
         );
-        let mut sp = Spinner::new(
-            Spinners::Bounce,
-            compile_msg.bright_black().to_string(),
-        );
+        let mut sp = Spinner::new(Spinners::Bounce, compile_msg.bright_black().to_string());
         // build burnlm cli
         let build_output = Command::new("cargo")
             .args(&build_args)
@@ -76,7 +73,7 @@ fn main() {
         if !build_output.status.success() {
             exit(build_output.status.code().unwrap_or(1));
         }
-        // stop the spinner and remove the line
+        // stop the spinner
         let completion_msg = format!(
             "{} {}",
             "✓".bright_green().bold(),

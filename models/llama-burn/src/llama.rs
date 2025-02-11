@@ -537,13 +537,9 @@ impl LlamaConfig {
                 // Map norm.weight -> norm.gamma for all layers
                 .with_key_remap("(.*)norm\\.weight", "${1}norm.gamma");
         }
-        // println!("Loading record...");
-        // let now = Instant::now();
         let mut record: TransformerRecord<B> = PyTorchFileRecorder::<HalfPrecisionSettings>::new()
             .load(load_args, device)
             .map_err(|e| e.to_string())?;
-        // let elapsed = now.elapsed().as_secs();
-        // println!("Loaded in {}s", elapsed);
 
         if cfg!(feature = "tiny") {
             // TinyLlama weights from HuggingFace use a different rotary positional encoding
@@ -793,12 +789,7 @@ impl<B: Backend, T: Tokenizer> Llama<B, T> {
         file_path: &str,
         recorder: &R,
     ) -> Result<Self, RecorderError> {
-        // println!("Loading record...");
-        // let now = Instant::now();
         self.model = self.model.load_file(file_path, recorder, &self.device)?;
-        // let elapsed = now.elapsed().as_secs();
-        // println!("Loaded in {}s", elapsed);
-
         Ok(self)
     }
 

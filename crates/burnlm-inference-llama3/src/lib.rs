@@ -309,14 +309,28 @@ impl Llama3BaseServer<InferenceBackend> {
             _ => return Err(InferenceError::ModelNotLoaded),
         };
         let mut completion = Completion::new(&generated.text);
+        let mut total_duration = generated.time;
         completion.stats.entries.extend(vec![
             StatEntry::InferenceDuration(generated.time),
             StatEntry::TokensCount(generated.tokens),
             StatEntry::TokensPerSecond(generated.tokens, generated.time),
         ]);
         if let Some(stats) = load_stats {
+            let model_loading = stats
+                .entries
+                .iter()
+                .find(|e| matches!(e, StatEntry::ModelLoadingDuration(_)));
+            if let Some(stat) = model_loading {
+                total_duration += stat
+                    .get_duration()
+                    .expect("should be a ModelLoadingDuration stat")
+            }
             completion.stats.entries.extend(stats.entries);
         }
+        completion
+            .stats
+            .entries
+            .insert(StatEntry::TotalDuration(total_duration));
         Ok(completion)
     }
 

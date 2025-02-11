@@ -18,6 +18,22 @@ pub enum StatEntry {
     TokensCount(usize),
     /// The number of tokens per second
     TokensPerSecond(usize, Duration),
+    /// A total duration
+    TotalDuration(Duration),
+}
+
+impl StatEntry {
+    /// Return duration value if available
+    pub fn get_duration(&self) -> Option<Duration> {
+        match self {
+            StatEntry::InferenceDuration(duration)
+            | StatEntry::ModelDownloadingDuration(duration)
+            | StatEntry::TotalDuration(duration)
+            | StatEntry::TokensPerSecond(_, duration)
+            | StatEntry::ModelLoadingDuration(duration) => Some(duration.clone()),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Default)]
@@ -30,7 +46,7 @@ impl Stats {
         Self::default()
     }
 
-    /// Returns a markdown table displaying the stats.
+    /// Return a markdown table displaying the stats.
     pub fn display_stats(&self) -> String {
         let mut table = Table::new();
         table
@@ -60,6 +76,10 @@ impl Stats {
                 ),
                 StatEntry::ModelLoadingDuration(duration) => (
                     "Model Loading Duration".to_string(),
+                    format!("{:.2}s", duration.as_secs_f64()),
+                ),
+                StatEntry::TotalDuration(duration) => (
+                    "Total Duration".to_string(),
                     format!("{:.2}s", duration.as_secs_f64()),
                 ),
                 StatEntry::Named(name, val) => (name.clone(), val.clone()),

@@ -58,14 +58,39 @@ mod downloader {
             Ok(file_name)
         }
 
+        /// Delete the file to the local cache directory.
+        fn delete(&self, url: &str) -> Result<(), std::io::Error> {
+            let model_dir = self.model_dir();
+            if !model_dir.exists() {
+                return Ok(());
+            }
+            let file_base_name = self.model_file_name(url);
+            let file_name = model_dir.join(&file_base_name);
+            if file_name.exists() {
+                std::fs::remove_file(file_name)
+                    .expect(&format!("should delete model file '{file_base_name}'"));
+            }
+            Ok(())
+        }
+
         /// Download the pre-trained model weights to the local cache directory.
         pub fn download_weights(&self) -> Result<PathBuf, std::io::Error> {
             self.download(self.model)
         }
 
-        /// Download the tokenizer to the local cache directory.
+        /// Delete the tokenizer to the local cache directory.
         pub fn download_tokenizer(&self) -> Result<PathBuf, std::io::Error> {
             self.download(self.tokenizer)
+        }
+
+        /// Delete the pre-trained model weights from the local cache directory.
+        pub fn delete_weights(&self) -> Result<(), std::io::Error> {
+            self.delete(self.model)
+        }
+
+        /// Delete the tokenizer from the local cache directory.
+        pub fn delete_tokenizer(&self) -> Result<(), std::io::Error> {
+            self.delete(self.tokenizer)
         }
     }
 }

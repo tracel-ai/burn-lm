@@ -39,6 +39,10 @@ impl<Server: InferenceServer> InferenceChannel<Server> for SingleThreadedChannel
         self.server.borrow_mut().is_downloaded()
     }
 
+    fn deleter(&self) -> Option<fn() -> InferenceResult<Option<Stats>>> {
+        self.server.borrow_mut().deleter()
+    }
+
     fn parse_cli_config(&self, args: &clap::ArgMatches) {
         self.server.borrow_mut().parse_cli_config(args);
     }

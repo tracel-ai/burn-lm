@@ -49,6 +49,13 @@ pub struct ParrotServer<B: Backend> {
 // inference in the `complete` function. This can be achieved by wrapping the `model`
 // field in an Option<T>.
 impl InferenceServer for ParrotServer<InferenceBackend> {
+    fn downloader(&mut self) -> Option<fn() -> InferenceResult<Option<Stats>>> {
+        // Return a closure with code to download the model if available.
+        // Return none if there is no possiblity to download the model or if
+        // this model does not need to be downloaded.
+        None
+    }
+
     fn is_downloaded(&mut self) -> bool {
         // this server example does not require downloading
         // thus is can be considered always installed.
@@ -56,10 +63,11 @@ impl InferenceServer for ParrotServer<InferenceBackend> {
         true
     }
 
-    fn downloader(&mut self) -> Option<fn() -> InferenceResult<Option<Stats>>> {
-        // Return a closure with code to download the model if available.
-        // Return none if there is no possiblity to download the model or if
-        // this model does not need to be downloaded.
+    fn deleter(&mut self) -> Option<fn() -> InferenceResult<Option<Stats>>> {
+        // Return a closure with code to delete the model if applicable.
+        // Return none if there is no possiblity to delete the model or if
+        // this model does not need to be deleted because nothing needs to be
+        // downloaded.
         None
     }
 

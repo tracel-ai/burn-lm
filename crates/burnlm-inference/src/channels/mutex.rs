@@ -38,6 +38,11 @@ impl<Server: InferenceServer> InferenceChannel<Server> for MutexChannel<Server> 
         server.is_downloaded()
     }
 
+    fn deleter(&self) -> Option<fn() -> InferenceResult<Option<Stats>>> {
+        let mut server = self.server.lock().unwrap();
+        server.deleter()
+    }
+
     fn parse_cli_config(&self, args: &clap::ArgMatches) {
         let mut server = self.server.lock().unwrap();
         server.parse_cli_config(args);

@@ -1,5 +1,6 @@
 pub(crate) mod backends;
 pub(crate) mod chat;
+pub(crate) mod delete;
 pub(crate) mod download;
 pub(crate) mod models;
 pub(crate) mod new;

@@ -73,15 +73,26 @@ fn llama_downloader(
     let model = pretrained::Llama::pretrained(&version);
     model
         .download_weights()
-        .map_err(|err| InferenceError::DownloadWeightError(name.to_string(), err.to_string()))?;
+        .map_err(|err| InferenceError::DownloadError(name.to_string(), err.to_string()))?;
     model
         .download_tokenizer()
-        .map_err(|err| InferenceError::DownloadTokenizerError(name.to_string(), err.to_string()))?;
+        .map_err(|err| InferenceError::DownloadError(name.to_string(), err.to_string()))?;
     let mut stats = Stats::new();
     stats
         .entries
         .insert(StatEntry::ModelDownloadingDuration(now.elapsed()));
     Ok(Some(stats))
+}
+
+fn llama_deleter(version: pretrained::Llama, name: &'static str) -> InferenceResult<Option<Stats>> {
+    let model = pretrained::Llama::pretrained(&version);
+    model
+        .delete_weights()
+        .map_err(|err| InferenceError::DeleteError(name.to_string(), err.to_string()))?;
+    model
+        .delete_tokenizer()
+        .map_err(|err| InferenceError::DeleteError(name.to_string(), err.to_string()))?;
+    Ok(None)
 }
 
 impl InferenceServer for Llama3InstructServer<InferenceBackend> {
@@ -98,6 +109,16 @@ impl InferenceServer for Llama3InstructServer<InferenceBackend> {
     fn is_downloaded(&mut self) -> bool {
         let model = pretrained::Llama::Llama3.pretrained();
         model.is_downloaded()
+    }
+
+    fn deleter(&mut self) -> Option<fn() -> InferenceResult<Option<Stats>>> {
+        fn deleter() -> InferenceResult<Option<Stats>> {
+            llama_deleter(
+                pretrained::Llama::Llama3,
+                Llama3InstructServer::<InferenceBackend>::model_name(),
+            )
+        }
+        Some(deleter)
     }
 
     fn load(&mut self) -> InferenceResult<Option<Stats>> {
@@ -150,6 +171,16 @@ impl InferenceServer for Llama31InstructServer<InferenceBackend> {
         model.is_downloaded()
     }
 
+    fn deleter(&mut self) -> Option<fn() -> InferenceResult<Option<Stats>>> {
+        fn deleter() -> InferenceResult<Option<Stats>> {
+            llama_deleter(
+                pretrained::Llama::Llama31Instruct,
+                Llama31InstructServer::<InferenceBackend>::model_name(),
+            )
+        }
+        Some(deleter)
+    }
+
     fn load(&mut self) -> InferenceResult<Option<Stats>> {
         self.server.load(&self.config)
     }
@@ -200,6 +231,16 @@ impl InferenceServer for Llama321bInstructServer<InferenceBackend> {
         model.is_downloaded()
     }
 
+    fn deleter(&mut self) -> Option<fn() -> InferenceResult<Option<Stats>>> {
+        fn deleter() -> InferenceResult<Option<Stats>> {
+            llama_deleter(
+                pretrained::Llama::Llama321bInstruct,
+                Llama321bInstructServer::<InferenceBackend>::model_name(),
+            )
+        }
+        Some(deleter)
+    }
+
     fn load(&mut self) -> InferenceResult<Option<Stats>> {
         self.server.load(&self.config)
     }
@@ -248,6 +289,16 @@ impl InferenceServer for Llama323bInstructServer<InferenceBackend> {
     fn is_downloaded(&mut self) -> bool {
         let model = pretrained::Llama::Llama323bInstruct.pretrained();
         model.is_downloaded()
+    }
+
+    fn deleter(&mut self) -> Option<fn() -> InferenceResult<Option<Stats>>> {
+        fn deleter() -> InferenceResult<Option<Stats>> {
+            llama_deleter(
+                pretrained::Llama::Llama323bInstruct,
+                Llama323bInstructServer::<InferenceBackend>::model_name(),
+            )
+        }
+        Some(deleter)
     }
 
     fn load(&mut self) -> InferenceResult<Option<Stats>> {

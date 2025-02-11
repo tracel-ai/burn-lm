@@ -67,6 +67,10 @@ where
         self.channel.is_downloaded()
     }
 
+    fn deleter(&self) -> Option<fn() -> InferenceResult<Option<Stats>>> {
+        self.channel.deleter()
+    }
+
     fn parse_cli_config(&self, args: &clap::ArgMatches) {
         self.channel.parse_cli_config(args);
     }

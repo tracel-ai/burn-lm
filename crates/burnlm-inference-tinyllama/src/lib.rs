@@ -47,13 +47,10 @@ impl InferenceServer for TinyLlamaServer<InferenceBackend> {
             let now = std::time::Instant::now();
             let model = pretrained::Llama::TinyLlama.pretrained();
             model.download_weights().map_err(|err| {
-                InferenceError::DownloadWeightError(Self::model_name().to_string(), err.to_string())
+                InferenceError::DownloadError(Self::model_name().to_string(), err.to_string())
             })?;
             model.download_tokenizer().map_err(|err| {
-                InferenceError::DownloadTokenizerError(
-                    Self::model_name().to_string(),
-                    err.to_string(),
-                )
+                InferenceError::DownloadError(Self::model_name().to_string(), err.to_string())
             })?;
             let mut stats = Stats::new();
             stats
@@ -66,6 +63,19 @@ impl InferenceServer for TinyLlamaServer<InferenceBackend> {
     fn is_downloaded(&mut self) -> bool {
         let model = pretrained::Llama::TinyLlama.pretrained();
         model.is_downloaded()
+    }
+
+    fn deleter(&mut self) -> Option<fn() -> InferenceResult<Option<Stats>>> {
+        Some(|| {
+            let model = pretrained::Llama::TinyLlama.pretrained();
+            model.delete_weights().map_err(|err| {
+                InferenceError::DeleteError(Self::model_name().to_string(), err.to_string())
+            })?;
+            model.delete_tokenizer().map_err(|err| {
+                InferenceError::DeleteError(Self::model_name().to_string(), err.to_string())
+            })?;
+            Ok(None)
+        })
     }
 
     fn load(&mut self) -> InferenceResult<Option<Stats>> {

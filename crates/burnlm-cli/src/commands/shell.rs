@@ -33,6 +33,7 @@ fn create_parser() -> clap::Command {
     clap::Command::default()
         .subcommand(super::backends::create())
         .subcommand(super::chat::create())
+        .subcommand(super::delete::create())
         .subcommand(super::download::create())
         .subcommand(super::models::create())
         .subcommand(super::new::create())
@@ -83,6 +84,8 @@ pub(crate) fn handle(backend: &str) -> anyhow::Result<()> {
                 super::backends::handle()?
             } else if let Some(args) = args.subcommand_matches("chat") {
                 super::chat::handle(args, backend)?
+            } else if let Some(args) = args.subcommand_matches("delete") {
+                super::delete::handle(args)?
             } else if let Some(args) = args.subcommand_matches("download") {
                 super::download::handle(args)?
             } else if args.subcommand_matches("models").is_some() {

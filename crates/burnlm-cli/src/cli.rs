@@ -5,6 +5,7 @@ pub fn run(backend: &str) -> anyhow::Result<()> {
     let cli = clap::command!()
         .subcommand(commands::backends::create())
         .subcommand(commands::chat::create())
+        .subcommand(commands::delete::create())
         .subcommand(commands::download::create())
         .subcommand(commands::models::create())
         .subcommand(commands::new::create())
@@ -20,6 +21,8 @@ pub fn run(backend: &str) -> anyhow::Result<()> {
         commands::backends::handle().map(|_| ())
     } else if let Some(args) = matches.subcommand_matches("chat") {
         commands::chat::handle(args, backend).map(|_| ())
+    } else if let Some(args) = matches.subcommand_matches("delete") {
+        commands::delete::handle(args).map(|_| ())
     } else if let Some(args) = matches.subcommand_matches("download") {
         commands::download::handle(args).map(|_| ())
     } else if matches.subcommand_matches("models").is_some() {

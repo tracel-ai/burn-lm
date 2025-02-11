@@ -30,6 +30,11 @@ pub trait InferenceServer: ServerConfigParsing + Default + Send + Sync + Debug {
         false
     }
 
+    /// Return closure of a function to delete the model
+    fn deleter(&mut self) -> Option<fn() -> InferenceResult<Option<Stats>>> {
+        None
+    }
+
     /// Load the model.
     fn load(&mut self) -> InferenceResult<Option<Stats>>;
 

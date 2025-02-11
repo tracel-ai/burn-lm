@@ -8,6 +8,7 @@ use crate::{
 pub trait InferenceChannel<Server: InferenceServer>: Send + Sync + Debug {
     fn downloader(&self) -> Option<fn() -> InferenceResult<Option<Stats>>>;
     fn is_downloaded(&self) -> bool;
+    fn deleter(&self) -> Option<fn() -> InferenceResult<Option<Stats>>>;
     fn parse_cli_config(&self, args: &clap::ArgMatches);
     fn parse_json_config(&self, json: &str);
     fn load(&self) -> InferenceResult<Option<Stats>>;

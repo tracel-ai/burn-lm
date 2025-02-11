@@ -5,7 +5,7 @@ procs:
     autorestart: true
     stop: SIGTERM
   openai-server:
-    shell: 'cargo watch -q -c -w crates/burnlm-http/src/ -x "run --package burnlm-http --bin server --features burnlm-inference/{{BACKEND}} -- run --port 3001"'
+    shell: 'cargo watch -q -c -w crates/burnlm-http/src/ -x "run --package burnlm-http --bin burnlm-http --features burnlm-inference/{{BACKEND}} -- run --port 3001"'
     autostart: true
     autorestart: true
     stop: {send-keys: ["<C-c>"]}

@@ -20,10 +20,6 @@ pub(crate) enum BackendValues {
     #[strum(to_string = "cuda")]
     Cuda,
 
-    #[cfg(not(target_os = "macos"))]
-    #[strum(to_string = "cuda-fusion")]
-    CudaFusion,
-
     // hip -------------------------------------------------------------------
     #[cfg(target_os = "linux")]
     #[strum(to_string = "hip")]
@@ -42,12 +38,16 @@ pub(crate) enum BackendValues {
     #[strum(to_string = "ndarray-blas-openblas")]
     NdarrayBlasOpenblas,
 
-    // torch -----------------------------------------------------------------
-    #[strum(to_string = "tch-cpu")]
-    TchCpu,
+    // libtorch --------------------------------------------------------------
+    #[strum(to_string = "libtorch-cpu")]
+    LibTorchCpu,
 
-    #[strum(to_string = "tch")]
-    Tch,
+    #[strum(to_string = "libtorch")]
+    LibTorch,
+
+    // vulkan ----------------------------------------------------------------
+    #[strum(to_string = "vulkan")]
+    Vulkan,
 
     // wgpu ------------------------------------------------------------------
     #[strum(to_string = "wgpu")]
@@ -56,12 +56,4 @@ pub(crate) enum BackendValues {
     #[strum(to_string = "wgpu-cpu")]
     WgpuCpu,
 
-    #[strum(to_string = "wgpu-fusion")]
-    WgpuFusion,
-
-    #[strum(to_string = "wgpu-spirv")]
-    WgpuSpirv,
-
-    #[strum(to_string = "wgpu-spirv-fusion")]
-    WgpuSpirvFusion,
 }

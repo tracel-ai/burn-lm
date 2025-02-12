@@ -29,7 +29,7 @@ pub mod burn_backend_types {
 
 // Cuda ----------------------------------------------------------------------
 
-#[cfg(any(feature = "cuda", feature = "cuda-fusion",))]
+#[cfg(feature = "cuda")]
 pub mod burn_backend_types {
     use burn::backend::cuda::{Cuda, CudaDevice};
     pub type InferenceBackend = Cuda;
@@ -66,7 +66,7 @@ pub mod burn_backend_types {
 
 // LibTorch ------------------------------------------------------------------
 
-#[cfg(feature = "tch")]
+#[cfg(feature = "libtorch")]
 pub mod burn_backend_types {
     use burn::backend::libtorch::{LibTorch, LibTorchDevice};
     pub type InferenceBackend = LibTorch<burn::tensor::f16>;
@@ -78,7 +78,7 @@ pub mod burn_backend_types {
     pub const INFERENCE_DEVICE: InferenceDevice = LibTorchDevice::Mps;
 }
 
-#[cfg(feature = "tch-cpu")]
+#[cfg(feature = "libtorch-cpu")]
 pub mod burn_backend_types {
     use burn::backend::libtorch::{LibTorch, LibTorchDevice};
     pub type InferenceBackend = LibTorch;
@@ -90,9 +90,7 @@ pub mod burn_backend_types {
 
 #[cfg(any(
     feature = "wgpu",
-    feature = "wgpu-fusion",
-    feature = "wgpu-spirv",
-    feature = "wgpu-spirv-fusion",
+    feature = "vulkan",
 ))]
 pub mod burn_backend_types {
     use burn::backend::wgpu::{Wgpu, WgpuDevice};

@@ -13,18 +13,21 @@ pub(crate) fn handle() -> super::HandleCommandResult {
     let mut backends: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for backend in BackendValues::iter() {
         let backend_string = backend.to_string();
+        // prefix is for sorting, prefix can be duplicated
         let key = if backend_string.starts_with("candle") {
             "[5]Candle"
         } else if backend_string.starts_with("cuda") {
             "[2]Cuda"
         } else if backend_string.starts_with("hip") {
-            "[3]ROCm HIP"
+            "[2]ROCm HIP"
         } else if backend_string.starts_with("ndarray") {
             "[4]ndarray"
-        } else if backend_string.starts_with("tch") {
+        } else if backend_string.starts_with("libtorch") {
             "[6]LibTorch"
         } else if backend_string.starts_with("wgpu") {
             "[1]WebGPU"
+        } else if backend_string.starts_with("vulkan") {
+            "[3]Vulkan"
         } else {
             panic!("add support for backend: {backend_string}");
         };

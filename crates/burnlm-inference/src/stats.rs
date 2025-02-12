@@ -1,7 +1,7 @@
 use comfy_table::{Cell, CellAlignment, Table};
 use std::{collections::BTreeSet, time::Duration};
 
-pub const STATS_MARKER: &str = "##### Stats";
+pub const STATS_MARKER: &str = "##### BurnLM Stats";
 
 /// A statistic entry returned by a Completion
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]

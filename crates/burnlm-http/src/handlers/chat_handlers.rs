@@ -4,17 +4,17 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
+use burnlm_inference::StatEntry;
 use tokio::sync::mpsc;
 use tokio_stream::{wrappers::ReceiverStream, StreamExt};
-use tracing::{debug, info};
 
 use crate::{
     controllers::model_controllers::ModelController,
     errors::ServerResult,
     schemas::chat_schemas::{
         ChatCompletionChunkSchema, ChatCompletionRequestSchema, ChatCompletionSchema,
-        ChoiceMessageRoleSchema, ChoiceMessageSchema, ChoiceSchema, ChunkChoiceDeltaSchema,
-        ChunkChoiceSchema, FinishReasonSchema, StreamingChunk, UsageSchema,
+        ChoiceMessageRoleSchema, ChoiceMessageSchema, ChoiceSchema, FinishReasonSchema,
+        StreamingChunk, UsageSchema,
     },
     stores::model_store::ModelStoreState,
     utils::id::ChatCompletionId,
@@ -24,7 +24,7 @@ pub async fn chat_completions(
     State(state): State<ModelStoreState>,
     Json(payload): Json<ChatCompletionRequestSchema>,
 ) -> ServerResult<Response> {
-    info!(
+    tracing::info!(
         "<<<<<<<<<<<< [CHAT COMPLETIONS] Received JSON payload: {:?} >>>>>>>>>>>>",
         payload
     );
@@ -50,7 +50,7 @@ async fn handle_non_streaming_response(
         .collect();
     let json_params = serde_json::to_string(&payload.params)
         .expect("ChatCompletionParams should serialize to a JSON string");
-    info!("PARAMS JSON: {}", json_params);
+    tracing::info!("PARAMS JSON: {}", json_params);
     plugin.parse_json_config(&json_params);
     let answer = plugin.complete(messages).unwrap();
     let content = answer.completion;
@@ -82,51 +82,93 @@ async fn handle_streaming_response(
 ) -> ServerResult<Response> {
     let (tx, rx) = mpsc::channel(10);
     tokio::spawn({
-        let id = ChatCompletionId::new().to_string();
         async move {
             let store = state.lock().await;
-            let plugin = store.get_model_plugin(&payload.model).await.unwrap();
+            let id = ChatCompletionId::new().to_string();
+            let plugin = store
+                .get_model_plugin(&payload.model)
+                .await
+                .expect("should get model plugin");
             let json_params = serde_json::to_string(&payload.params)
                 .expect("ChatCompletionParams should serialize to a JSON string");
-            info!("PARAMS JSON: {}", json_params);
             plugin.parse_json_config(&json_params);
+            let now = chrono::Utc::now().timestamp();
+            let model = plugin.model_name();
+
+            // load model and gives feedback in real time in the client
+            if !plugin.is_loaded() {
+                // loading model chunks
+                let chunk = StreamingChunk::Data(ChatCompletionChunkSchema::new(
+                    &id,
+                    model,
+                    now,
+                    &format!("```BurnLM\nloading model '{}'... ", plugin.model_name()),
+                ));
+                tx.send(chunk.to_event_stream())
+                    .await
+                    .expect("should send loading model chunk");
+                let loading_stats = tokio::task::spawn_blocking({
+                    let plugin = plugin.clone();
+                    move || {
+                        plugin
+                            .load()
+                            .expect(&format!("model '{}' should load", plugin.model_name()))
+                    }
+                })
+                .await
+                .expect("should complete model loading");
+                let loading_duration = match loading_stats {
+                    Some(stats) => {
+                        let model_duration_stat = stats
+                            .entries
+                            .iter()
+                            .find(|e| matches!(e, StatEntry::ModelLoadingDuration(_)));
+                        if let Some(stat) = model_duration_stat {
+                            let duration = stat.get_duration().unwrap().as_secs_f64();
+                            format!(" ({duration:.2}s)")
+                        } else {
+                            "".to_string()
+                        }
+                    }
+                    _ => "".to_string(),
+                };
+                let chunk = StreamingChunk::Data(ChatCompletionChunkSchema::new(
+                    &id,
+                    model,
+                    now,
+                    &format!("model loaded ! ✓{}\n```\n\n", loading_duration),
+                ));
+                tx.send(chunk.to_event_stream())
+                    .await
+                    .expect("should send end of loading model chunk");
+            }
+
+            // answer chunck
             let mut messages: Vec<burnlm_inference::Message> =
                 payload.messages.iter().cloned().map(Into::into).collect();
             messages
                 .iter_mut()
                 .for_each(|m| m.remove_after(burnlm_inference::STATS_MARKER));
-            debug!("MESSAGES CONTENT: {:?}", messages);
-            let answer = plugin.complete(messages).unwrap();
+            // debug!("MESSAGES CONTENT: {:?}", messages);
+            let answer = tokio::task::spawn_blocking({
+                let plugin = plugin.clone();
+                move || plugin.complete(messages).expect("should generate answer")
+            })
+            .await
+            .expect("should complete answer generation");
             let content = format!("{}\n\n{}", answer.completion, answer.stats.display_stats());
-            tracing::debug!("Answer: {}", answer.completion);
-            let chunk = StreamingChunk::Data(ChatCompletionChunkSchema {
-                id: id.clone(),
-                object: "chat.completion.chunk".to_string(),
-                created: chrono::Utc::now().timestamp(),
-                model: plugin.model_name().to_owned(),
-                choices: vec![ChunkChoiceSchema {
-                    index: 0,
-                    delta: Some(ChunkChoiceDeltaSchema {
-                        role: None,
-                        content: Some(content),
-                    }),
-                    finish_reason: None,
-                    logprobs: None,
-                }],
-                usage: None,
-                system_fingerprint: "".to_string(),
-                service_tier: None,
-            });
-
+            // tracing::debug!("Answer: {}", answer.completion);
+            let chunk =
+                StreamingChunk::Data(ChatCompletionChunkSchema::new(&id, model, now, &content));
             tx.send(chunk.to_event_stream())
                 .await
-                .expect("should send chunk_1");
+                .expect("should send answer chunk");
 
             // Done chunk
             let done_chunk = StreamingChunk::Done;
             tx.send(done_chunk.to_event_stream())
                 .await
-                .expect("should send done_chunk");
+                .expect("should send done chunk");
         }
     });
 

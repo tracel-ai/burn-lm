@@ -45,7 +45,7 @@ impl ModelController for ModelStore {
         Ok(models)
     }
 
-    async fn get_model_plugin(&self, name: &str) -> ServerResult<&Box<dyn InferencePlugin>> {
+    async fn get_model_plugin(&self, name: &str) -> ServerResult<Box<dyn InferencePlugin>> {
         let plugin = self
             .registry
             .get()
@@ -53,6 +53,6 @@ impl ModelController for ModelStore {
             .find(|(pname, _)| (**pname).to_lowercase() == name.to_lowercase())
             .map(|(_, plugin)| plugin);
         let plugin = plugin.unwrap_or_else(|| panic!("Model plugin should be registered: {name}"));
-        Ok(plugin)
+        Ok(plugin.clone())
     }
 }

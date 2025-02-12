@@ -5,13 +5,14 @@ use crate::{
     Stats,
 };
 
-pub trait InferenceChannel<Server: InferenceServer>: Send + Sync + Debug {
+pub trait InferenceChannel<Server: InferenceServer>: Clone + Send + Sync + Debug {
     fn downloader(&self) -> Option<fn() -> InferenceResult<Option<Stats>>>;
     fn is_downloaded(&self) -> bool;
     fn deleter(&self) -> Option<fn() -> InferenceResult<Option<Stats>>>;
     fn parse_cli_config(&self, args: &clap::ArgMatches);
     fn parse_json_config(&self, json: &str);
     fn load(&self) -> InferenceResult<Option<Stats>>;
+    fn is_loaded(&self) -> bool;
     fn unload(&self) -> InferenceResult<Option<Stats>>;
     fn complete(&self, message: Vec<Message>) -> InferenceResult<Completion>;
 }

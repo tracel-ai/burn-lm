@@ -9,7 +9,7 @@ use super::InferenceChannel;
 
 /// Simple passthrough channel that just provides interior mutability.
 /// Not meant to be used in multithreaded environment.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SingleThreadedChannel<Server: InferenceServer> {
     server: Arc<RefCell<Server>>,
 }
@@ -53,6 +53,10 @@ impl<Server: InferenceServer> InferenceChannel<Server> for SingleThreadedChannel
 
     fn load(&self) -> InferenceResult<Option<Stats>> {
         self.server.borrow_mut().load()
+    }
+
+    fn is_loaded(&self) -> bool {
+        self.server.borrow_mut().is_loaded()
     }
 
     fn unload(&self) -> InferenceResult<Option<Stats>> {

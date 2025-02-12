@@ -142,7 +142,7 @@ impl InferenceServerConfigReceiver {
         // Output
         let expanded = quote! {
             // Rewritten struct
-            #[derive(Parser, Deserialize, ::std::fmt::Debug)]
+            #[derive(Clone, Parser, Deserialize, ::std::fmt::Debug)]
             #(#struct_attrs)*
             #vis struct #struct_name #impl_generics #where_clause {
                 #(#field_defs)*

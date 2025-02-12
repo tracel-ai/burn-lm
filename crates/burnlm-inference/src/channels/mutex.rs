@@ -8,7 +8,7 @@ use crate::{
 use super::InferenceChannel;
 
 /// ARC Mutex channel that lock the server each time the client reaches to it.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct MutexChannel<Server: InferenceServer> {
     server: Arc<Mutex<Server>>,
 }
@@ -56,6 +56,11 @@ impl<Server: InferenceServer> InferenceChannel<Server> for MutexChannel<Server> 
     fn load(&self) -> InferenceResult<Option<Stats>> {
         let mut server = self.server.lock().unwrap();
         server.load()
+    }
+
+    fn is_loaded(&self) -> bool {
+        let mut server = self.server.lock().unwrap();
+        server.is_loaded()
     }
 
     fn unload(&self) -> InferenceResult<Option<Stats>> {

@@ -147,6 +147,29 @@ pub struct ChatCompletionChunkSchema {
     pub service_tier: Option<String>,
 }
 
+impl ChatCompletionChunkSchema {
+    pub fn new(id: &str, model: &str, creation_time: i64, content: &str) -> Self {
+        Self {
+            id: id.to_owned(),
+            object: "chat.completion.chunk".to_string(),
+            created: creation_time,
+            model: model.to_owned(),
+            choices: vec![ChunkChoiceSchema {
+                index: 0,
+                delta: Some(ChunkChoiceDeltaSchema {
+                    role: None,
+                    content: Some(content.to_owned()),
+                }),
+                finish_reason: None,
+                logprobs: None,
+            }],
+            usage: None,
+            system_fingerprint: "".to_string(),
+            service_tier: None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, ToSchema)]
 pub struct ChunkChoiceSchema {
     pub index: u32,

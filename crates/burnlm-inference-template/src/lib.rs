@@ -32,7 +32,7 @@ pub struct ParrotServerConfig {
 //         server_type = "ParrotServer<InferenceBackend>",
 //     ),
 //
-#[derive(InferenceServer, Default, Debug)]
+#[derive(InferenceServer, Clone, Default, Debug)]
 #[inference_server(
     model_name = "Parrot",
     model_creation_date = "01/28/2025",
@@ -41,6 +41,8 @@ pub struct ParrotServerConfig {
 pub struct ParrotServer<B: Backend> {
     config: ParrotServerConfig,
     // remove the phantom data and add your model here, see TinyLLama example.
+    // You'll likely need to wrap your model in an Arc Mutex because the server
+    // needs to be clonable.
     _model: std::marker::PhantomData<B>,
 }
 
@@ -80,6 +82,11 @@ impl InferenceServer for ParrotServer<InferenceBackend> {
             .entries
             .insert(StatEntry::ModelLoadingDuration(now.elapsed()));
         Ok(Some(stats))
+    }
+
+    fn is_loaded(&mut self) -> bool {
+        // Return true when the model is ready for inference
+        true
     }
 
     fn unload(&mut self) -> InferenceResult<Option<Stats>> {

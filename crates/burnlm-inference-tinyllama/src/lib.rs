@@ -1,6 +1,6 @@
 use rand::Rng;
 use serde::Deserialize;
-use std::borrow::BorrowMut;
+use std::sync::{Arc, Mutex};
 
 use burn::prelude::Backend;
 use burnlm_inference::*;
@@ -30,7 +30,7 @@ pub struct TinyLlamaServerConfig {
     pub seed: u64,
 }
 
-#[derive(InferenceServer, Default, Debug)]
+#[derive(InferenceServer, Clone, Default, Debug)]
 #[inference_server(
     model_name = "TinyLlama",
     model_creation_date = "05/01/2024",
@@ -38,7 +38,7 @@ pub struct TinyLlamaServerConfig {
 )]
 pub struct TinyLlamaServer<B: Backend> {
     config: TinyLlamaServerConfig,
-    model: Option<Llama<B, SentiencePieceTokenizer>>,
+    model: Option<Arc<Mutex<Llama<B, SentiencePieceTokenizer>>>>,
 }
 
 impl InferenceServer for TinyLlamaServer<InferenceBackend> {
@@ -79,15 +79,14 @@ impl InferenceServer for TinyLlamaServer<InferenceBackend> {
     }
 
     fn load(&mut self) -> InferenceResult<Option<Stats>> {
-        if self.model.is_none() {
+        if !self.is_loaded() {
             let now = std::time::Instant::now();
-            self.model = Some(
-                llama::LlamaConfig::tiny_llama_pretrained::<InferenceBackend>(
-                    self.config.max_seq_len,
-                    &INFERENCE_DEVICE,
-                )
-                .unwrap(),
-            );
+            let model = llama::LlamaConfig::tiny_llama_pretrained::<InferenceBackend>(
+                self.config.max_seq_len,
+                &INFERENCE_DEVICE,
+            )
+            .unwrap();
+            self.model = Some(Arc::new(Mutex::new(model)));
             let mut stats = Stats::new();
             stats
                 .entries
@@ -96,6 +95,10 @@ impl InferenceServer for TinyLlamaServer<InferenceBackend> {
         } else {
             Ok(None)
         }
+    }
+
+    fn is_loaded(&mut self) -> bool {
+        self.model.is_some()
     }
 
     fn unload(&mut self) -> InferenceResult<Option<Stats>> {
@@ -115,13 +118,16 @@ impl InferenceServer for TinyLlamaServer<InferenceBackend> {
         } else {
             Sampler::Argmax
         };
-        let generated = match self.model.borrow_mut() {
-            Some(model) => model.generate(
-                &prompt,
-                self.config.sample_len,
-                self.config.temperature,
-                &mut sampler,
-            ),
+        let generated = match &self.model {
+            Some(arc_model) => arc_model
+                .lock()
+                .expect("should be able to lock the model for inference")
+                .generate(
+                    &prompt,
+                    self.config.sample_len,
+                    self.config.temperature,
+                    &mut sampler,
+                ),
             _ => return Err(InferenceError::ModelNotLoaded),
         };
         let mut completion = Completion::new(&generated.text);

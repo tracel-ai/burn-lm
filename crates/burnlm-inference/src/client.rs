@@ -10,8 +10,8 @@ use crate::{
     Stats,
 };
 
-#[derive(Debug)]
-pub struct InferenceClient<Server: InferenceServer, Channel> {
+#[derive(Debug, Clone)]
+pub struct InferenceClient<Server: InferenceServer + 'static, Channel: 'static> {
     model_name: &'static str,
     model_cli_param_name: &'static str,
     model_creation_date: &'static str,
@@ -56,9 +56,13 @@ where
 
 impl<Server, Channel> InferencePlugin for InferenceClient<Server, Channel>
 where
-    Server: InferenceServer,
-    Channel: InferenceChannel<Server>,
+    Server: InferenceServer + 'static,
+    Channel: InferenceChannel<Server> + 'static,
 {
+    fn clone_box(&self) -> Box<dyn InferencePlugin> {
+        Box::new(self.clone())
+    }
+
     fn downloader(&self) -> Option<fn() -> InferenceResult<Option<Stats>>> {
         self.channel.downloader()
     }
@@ -81,6 +85,10 @@ where
 
     fn load(&self) -> InferenceResult<Option<Stats>> {
         self.channel.load()
+    }
+
+    fn is_loaded(&self) -> bool {
+        self.channel.is_loaded()
     }
 
     fn unload(&self) -> InferenceResult<Option<Stats>> {

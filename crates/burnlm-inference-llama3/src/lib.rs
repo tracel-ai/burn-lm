@@ -1,6 +1,6 @@
 use rand::Rng;
 use serde::Deserialize;
-use std::borrow::BorrowMut;
+use std::sync::{Arc, Mutex};
 
 use burn::prelude::Backend;
 use burnlm_inference::*;
@@ -44,7 +44,7 @@ pub struct Llama3ServerConfig {
     pub seed: u64,
 }
 
-#[derive(InferenceServer, Debug)]
+#[derive(InferenceServer, Clone, Debug)]
 #[inference_server(
     model_name = "Llama 3 (8B Instruct)",
     model_cli_param_name = "llama3",
@@ -125,6 +125,10 @@ impl InferenceServer for Llama3InstructServer<InferenceBackend> {
         self.server.load(&self.config)
     }
 
+    fn is_loaded(&mut self) -> bool {
+        self.server.is_loaded()
+    }
+
     fn unload(&mut self) -> InferenceResult<Option<Stats>> {
         self.server.unload()
     }
@@ -134,7 +138,7 @@ impl InferenceServer for Llama3InstructServer<InferenceBackend> {
     }
 }
 
-#[derive(InferenceServer, Debug)]
+#[derive(InferenceServer, Clone, Debug)]
 #[inference_server(
     model_name = "Llama 3.1 (8B Instruct)",
     model_cli_param_name = "llama31",
@@ -185,6 +189,10 @@ impl InferenceServer for Llama31InstructServer<InferenceBackend> {
         self.server.load(&self.config)
     }
 
+    fn is_loaded(&mut self) -> bool {
+        self.server.is_loaded()
+    }
+
     fn unload(&mut self) -> InferenceResult<Option<Stats>> {
         self.server.unload()
     }
@@ -194,7 +202,7 @@ impl InferenceServer for Llama31InstructServer<InferenceBackend> {
     }
 }
 
-#[derive(InferenceServer, Debug)]
+#[derive(InferenceServer, Clone, Debug)]
 #[inference_server(
     model_name = "Llama 3.2 (1B Instruct)",
     model_cli_param_name = "llama32",
@@ -245,6 +253,10 @@ impl InferenceServer for Llama321bInstructServer<InferenceBackend> {
         self.server.load(&self.config)
     }
 
+    fn is_loaded(&mut self) -> bool {
+        self.server.is_loaded()
+    }
+
     fn unload(&mut self) -> InferenceResult<Option<Stats>> {
         self.server.unload()
     }
@@ -254,7 +266,7 @@ impl InferenceServer for Llama321bInstructServer<InferenceBackend> {
     }
 }
 
-#[derive(InferenceServer, Debug)]
+#[derive(InferenceServer, Clone, Debug)]
 #[inference_server(
     model_name = "Llama 3.2 (3B Instruct)",
     model_cli_param_name = "llama32-3b",
@@ -305,6 +317,10 @@ impl InferenceServer for Llama323bInstructServer<InferenceBackend> {
         self.server.load(&self.config)
     }
 
+    fn is_loaded(&mut self) -> bool {
+        self.server.is_loaded()
+    }
+
     fn unload(&mut self) -> InferenceResult<Option<Stats>> {
         self.server.unload()
     }
@@ -314,9 +330,9 @@ impl InferenceServer for Llama323bInstructServer<InferenceBackend> {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct Llama3BaseServer<B: Backend> {
-    model: Option<Llama<B, Tiktoken>>,
+    model: Option<Arc<Mutex<Llama<B, Tiktoken>>>>,
     version: LlamaVersion,
 }
 
@@ -353,11 +369,14 @@ impl Llama3BaseServer<InferenceBackend> {
         } else {
             Sampler::Argmax
         };
-        let generated = match self.model.borrow_mut() {
-            Some(model) => {
+        let generated = match &self.model {
+            Some(arc_model) => {
+                let mut model = arc_model
+                    .lock()
+                    .expect("shoud lock the model for inference");
                 model.generate(&prompt, config.sample_len, config.temperature, &mut sampler)
             }
-            _ => return Err(InferenceError::ModelNotLoaded),
+            None => return Err(InferenceError::ModelNotLoaded),
         };
         let mut completion = Completion::new(&generated.text);
         let mut total_duration = generated.time;
@@ -389,38 +408,35 @@ impl Llama3BaseServer<InferenceBackend> {
         &mut self,
         config: &Llama3ServerConfig,
     ) -> burnlm_inference::errors::InferenceResult<Option<Stats>> {
-        if self.model.is_none() {
+        if !self.is_loaded() {
             let now = std::time::Instant::now();
-            self.model = match self.version {
-                LlamaVersion::Llama3Instruct => Some(
-                    llama::LlamaConfig::llama3_8b_pretrained::<InferenceBackend>(
-                        config.max_seq_len,
-                        &INFERENCE_DEVICE,
-                    )
-                    .unwrap(),
-                ),
-                LlamaVersion::Llama31Instruct => Some(
-                    llama::LlamaConfig::llama3_1_8b_pretrained::<InferenceBackend>(
-                        config.max_seq_len,
-                        &INFERENCE_DEVICE,
-                    )
-                    .unwrap(),
-                ),
-                LlamaVersion::Llama323bInstruct => Some(
-                    llama::LlamaConfig::llama3_2_3b_pretrained::<InferenceBackend>(
-                        config.max_seq_len,
-                        &INFERENCE_DEVICE,
-                    )
-                    .unwrap(),
-                ),
-                LlamaVersion::Llama321bInstruct => Some(
-                    llama::LlamaConfig::llama3_2_1b_pretrained::<InferenceBackend>(
-                        config.max_seq_len,
-                        &INFERENCE_DEVICE,
-                    )
-                    .unwrap(),
-                ),
+            let model = match self.version {
+                LlamaVersion::Llama3Instruct => llama::LlamaConfig::llama3_8b_pretrained::<
+                    InferenceBackend,
+                >(
+                    config.max_seq_len, &INFERENCE_DEVICE
+                )
+                .unwrap(),
+                LlamaVersion::Llama31Instruct => llama::LlamaConfig::llama3_1_8b_pretrained::<
+                    InferenceBackend,
+                >(
+                    config.max_seq_len, &INFERENCE_DEVICE
+                )
+                .unwrap(),
+                LlamaVersion::Llama323bInstruct => llama::LlamaConfig::llama3_2_3b_pretrained::<
+                    InferenceBackend,
+                >(
+                    config.max_seq_len, &INFERENCE_DEVICE
+                )
+                .unwrap(),
+                LlamaVersion::Llama321bInstruct => llama::LlamaConfig::llama3_2_1b_pretrained::<
+                    InferenceBackend,
+                >(
+                    config.max_seq_len, &INFERENCE_DEVICE
+                )
+                .unwrap(),
             };
+            self.model = Some(Arc::new(Mutex::new(model)));
             let mut stats = Stats::new();
             stats
                 .entries
@@ -429,6 +445,10 @@ impl Llama3BaseServer<InferenceBackend> {
         } else {
             Ok(None)
         }
+    }
+
+    fn is_loaded(&mut self) -> bool {
+        self.model.is_some()
     }
 
     fn prompt(

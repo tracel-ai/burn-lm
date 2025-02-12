@@ -55,10 +55,7 @@ fn main() {
 
     // Rebuild and restart burnlm while its exit code is SUPERVISER_RESTART_EXIT_CODE
     while exit_code == BURNLM_SUPERVISER_RESTART_EXIT_CODE {
-        let compile_msg = format!(
-            "Compiling burnlm CLI for backend '{}', please wait...",
-            backend.clone()
-        );
+        let compile_msg = "compiling burnlm CLI, please wait...";
         let mut sp = Spinner::new(Spinners::Bounce, compile_msg.bright_black().to_string());
         // build burnlm cli
         let build_output = Command::new("cargo")

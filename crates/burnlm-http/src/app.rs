@@ -112,7 +112,7 @@ impl App {
             .expect("Server should bind to address successfully");
         // Serve the application
         let app = self.app().await;
-        info!("Server started!");
+        info!("Server started! (press CTRL+C to exit)");
         axum::serve(listener, app).await?;
         Ok(())
     }

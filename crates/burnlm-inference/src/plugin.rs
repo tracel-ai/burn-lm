@@ -19,7 +19,7 @@ pub trait InferencePlugin: Send + Sync + Debug {
     fn load(&self) -> InferenceResult<Option<Stats>>;
     fn is_loaded(&self) -> bool;
     fn unload(&self) -> InferenceResult<Option<Stats>>;
-    fn complete(&self, messages: Vec<Message>) -> InferenceResult<Completion>;
+    fn run_completion(&self, messages: Vec<Message>) -> InferenceResult<Completion>;
 }
 
 impl Clone for Box<dyn InferencePlugin> {

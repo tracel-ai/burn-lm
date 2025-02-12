@@ -74,7 +74,7 @@ fn run(plugin_name: &str, run_args: &clap::ArgMatches) -> super::HandleCommandRe
         refusal: None,
     };
     let mut spin_msg = super::SpinningMessage::new("generating answer...", "answer generated!");
-    let result = plugin.complete(vec![message]);
+    let result = plugin.run_completion(vec![message]);
     match result {
         Ok(answer) => {
             spin_msg.end(false);

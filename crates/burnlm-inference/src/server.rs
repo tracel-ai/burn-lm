@@ -44,6 +44,6 @@ pub trait InferenceServer: ServerConfigParsing + Clone + Default + Send + Sync +
     /// Unload the model.
     fn unload(&mut self) -> InferenceResult<Option<Stats>>;
 
-    /// Complete the prompt composed of formatted messages
-    fn complete(&mut self, messages: Vec<Message>) -> InferenceResult<Completion>;
+    /// Run inference to complete messages
+    fn run_completion(&mut self, messages: Vec<Message>) -> InferenceResult<Completion>;
 }

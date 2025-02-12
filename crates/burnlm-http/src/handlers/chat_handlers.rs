@@ -52,7 +52,7 @@ async fn handle_non_streaming_response(
         .expect("ChatCompletionParams should serialize to a JSON string");
     tracing::info!("PARAMS JSON: {}", json_params);
     plugin.parse_json_config(&json_params);
-    let answer = plugin.complete(messages).unwrap();
+    let answer = plugin.run_completion(messages).unwrap();
     let content = answer.completion;
     tracing::debug!("Answer: {}", content);
     let response = ChatCompletionSchema {
@@ -152,7 +152,7 @@ async fn handle_streaming_response(
             // debug!("MESSAGES CONTENT: {:?}", messages);
             let answer = tokio::task::spawn_blocking({
                 let plugin = plugin.clone();
-                move || plugin.complete(messages).expect("should generate answer")
+                move || plugin.run_completion(messages).expect("should generate answer")
             })
             .await
             .expect("should complete answer generation");

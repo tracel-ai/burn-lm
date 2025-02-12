@@ -133,7 +133,7 @@ impl InferenceServer for Llama3InstructServer<InferenceBackend> {
         self.server.unload()
     }
 
-    fn complete(&mut self, messages: Vec<Message>) -> InferenceResult<Completion> {
+    fn run_completion(&mut self, messages: Vec<Message>) -> InferenceResult<Completion> {
         self.server.complete(messages, &self.config)
     }
 }
@@ -197,7 +197,7 @@ impl InferenceServer for Llama31InstructServer<InferenceBackend> {
         self.server.unload()
     }
 
-    fn complete(&mut self, messages: Vec<Message>) -> InferenceResult<Completion> {
+    fn run_completion(&mut self, messages: Vec<Message>) -> InferenceResult<Completion> {
         self.server.complete(messages, &self.config)
     }
 }
@@ -261,7 +261,7 @@ impl InferenceServer for Llama321bInstructServer<InferenceBackend> {
         self.server.unload()
     }
 
-    fn complete(&mut self, messages: Vec<Message>) -> InferenceResult<Completion> {
+    fn run_completion(&mut self, messages: Vec<Message>) -> InferenceResult<Completion> {
         self.server.complete(messages, &self.config)
     }
 }
@@ -325,7 +325,7 @@ impl InferenceServer for Llama323bInstructServer<InferenceBackend> {
         self.server.unload()
     }
 
-    fn complete(&mut self, messages: Vec<Message>) -> InferenceResult<Completion> {
+    fn run_completion(&mut self, messages: Vec<Message>) -> InferenceResult<Completion> {
         self.server.complete(messages, &self.config)
     }
 }

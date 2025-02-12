@@ -68,8 +68,8 @@ impl<Server: InferenceServer> InferenceChannel<Server> for MutexChannel<Server> 
         server.unload()
     }
 
-    fn complete(&self, message: Vec<Message>) -> InferenceResult<Completion> {
+    fn run_completion(&self, message: Vec<Message>) -> InferenceResult<Completion> {
         let mut server = self.server.lock().unwrap();
-        server.complete(message)
+        server.run_completion(message)
     }
 }

@@ -94,7 +94,7 @@ impl InferenceServer for ParrotServer<InferenceBackend> {
         Ok(None)
     }
 
-    fn complete(&mut self, messages: Vec<Message>) -> InferenceResult<Completion> {
+    fn run_completion(&mut self, messages: Vec<Message>) -> InferenceResult<Completion> {
         // This where the inference actually happens
         let mut completion = match messages.last() {
             Some(msg) => Completion::new(&msg.content),

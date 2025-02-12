@@ -14,5 +14,5 @@ pub trait InferenceChannel<Server: InferenceServer>: Clone + Send + Sync + Debug
     fn load(&self) -> InferenceResult<Option<Stats>>;
     fn is_loaded(&self) -> bool;
     fn unload(&self) -> InferenceResult<Option<Stats>>;
-    fn complete(&self, message: Vec<Message>) -> InferenceResult<Completion>;
+    fn run_completion(&self, message: Vec<Message>) -> InferenceResult<Completion>;
 }

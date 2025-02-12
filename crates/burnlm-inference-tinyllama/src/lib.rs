@@ -106,7 +106,7 @@ impl InferenceServer for TinyLlamaServer<InferenceBackend> {
         Ok(None)
     }
 
-    fn complete(&mut self, messages: Vec<Message>) -> InferenceResult<Completion> {
+    fn run_completion(&mut self, messages: Vec<Message>) -> InferenceResult<Completion> {
         let load_stats = self.load()?;
         let prompt = self.prompt(messages)?;
         let seed = match self.config.seed {

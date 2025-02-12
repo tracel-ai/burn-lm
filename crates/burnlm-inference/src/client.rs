@@ -95,8 +95,8 @@ where
         self.channel.unload()
     }
 
-    fn complete(&self, messages: Vec<Message>) -> InferenceResult<Completion> {
-        self.channel.complete(messages)
+    fn run_completion(&self, messages: Vec<Message>) -> InferenceResult<Completion> {
+        self.channel.run_completion(messages)
     }
 
     fn model_name(&self) -> &'static str {

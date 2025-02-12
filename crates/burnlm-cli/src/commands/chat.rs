@@ -125,7 +125,7 @@ pub(crate) fn handle(args: &clap::ArgMatches, backend: &str) -> super::HandleCom
                 ctx.messages.push(formatted_msg);
                 let mut spin_msg =
                     super::SpinningMessage::new("generating answer...", "generation complete!");
-                let result = plugin.complete(ctx.messages.clone());
+                let result = plugin.run_completion(ctx.messages.clone());
                 match result {
                     Ok(answer) => {
                         let formatted_ans = Message {

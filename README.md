@@ -1,24 +1,86 @@
-# burn-lm
+<div align="center">
 
-Large Models Forge Repository powered by Burn.
+<h1>Burn LM</h1>
 
-## Quick Start
+[![Discord](https://img.shields.io/discord/1038839012602941528.svg?color=7289da&&logo=discord)](https://discord.gg/uPEBbYYDB6)
+[![Burn](https://img.shields.io/badge/DL_Framework-Burn-f45b16)](https://github.com/tracel-ai/burn)
+[![CubeCL](https://img.shields.io/badge/Compute_Language-CubeCL-3c83c2)](https://github.com/tracel-ai/cubecl)
+![license](https://shields.io/badge/license-MIT%2FApache--2.0-blue)
 
-### Run inference from the terminal
+---
+
+**Burn Large Models Repository.**
+
+<br/>
+</div>
+
+# Quick Start
+
+Launch a Burn LM shell with:
 
 ```sh
-cargo burnlm run tinyllama "Name a famous Quebecois dish."
+git clone https://github.com/tracel-ai/burn-lm.git
+cd burn-lm
+cargo burnlm
 ```
 
-List available models with:
+Type `help` to get a list of commands.
+
+# Usage
+
+## Burn Backend
+
+Select a Burn backend with the environment variable `BURNLM_BACKEND`.
+
+The list of available backends for your platform can be obtained with:
+
+```sh
+cargo burnlm backends
+```
+
+## Models management
+
+The list of installed models is displayed with:
 
 ```sh
 cargo burnlm models
 ```
 
-### Run inference from the browser
+To download a model use the `download` command. This is will give you
+the list of all downloadable models:
 
-First make sure `docker` is available on your system.
+```sh
+cargo burnlm download
+```
+
+To delete a downloaded model use the `delete` command.
+
+## Inference
+
+Run a single inference with the command `run`:
+
+```sh
+cargo burnlm run llama32 "Name a famous Quebecois dish."
+```
+
+## Chat
+
+Burn LM allows to chat with LLMs both in the terminal or in the browser.
+
+### Chat in the terminal
+
+Start a chat session with a chosen model using the `chat` command:
+
+```sh
+cargo chat llama32
+```
+
+Some slash commands are available, you can get the list of them by typing `/help`
+as a prompt.
+
+### Chat in Open WebUI
+
+First make sure `docker` and `docker-compose` are available on your system.
 
 Then execute the command:
 
@@ -26,20 +88,25 @@ Then execute the command:
 cargo burnlm web start
 ```
 
-Open http://localhost:3000 in your browser.
+Head your browser to http://localhost:3000 and enjoy.
 
-## Register a new model
+## Plugins
 
-To register a new model first create a new crate with:
+Models can be easily integrated with Burn LM by implementing the `InferenceServer`
+trait to create a plugable server that can be added to the Burn LM registry.
 
-```sh
-cargo burnlm new "crate-name"
-```
-
-Then verify that your new model is registered with:
+To bootstrap a new model server you can use the dedicated command `new`:
 
 ```sh
-cargo burnlm models
+cargo burnlm new "my-model"
 ```
+
+This will create a new crate named `burnlm-inference-my-model` and automatically
+register it in `burnlm-registry`.
+
+The bootstraped server is a model-less server that just repeat the prompt it is
+given. You can also get inspiration from the other crate with name starting with
+`burnlm-inference-`.
+
 
 

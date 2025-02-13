@@ -1,5 +1,6 @@
 use burnlm_inference::{Message, MessageRole};
 use burnlm_registry::Registry;
+use clap::CommandFactory as _;
 use rustyline::{history::DefaultHistory, Editor};
 use yansi::Paint;
 
@@ -8,14 +9,26 @@ use crate::utils;
 
 #[derive(clap::Subcommand)]
 pub enum MessageCommand {
+    /// Exit chat session
+    Exit,
+    /// Display slash commands help
+    Help,
+    /// Message (prompt) for inference
     Msg {
         message: String,
     },
-    // slash commands
     /// Toggle stats
     Stats,
-    /// Exit chat session
-    Exit,
+}
+
+// Dummy wrapper to get CommandFactory implemented
+#[derive(clap::Parser)]
+#[command(name = "chat",
+          about = "Burn LM Chat",
+          disable_help_subcommand = true)]
+struct MessageCli {
+    #[command(subcommand)]
+    command: MessageCommand,
 }
 
 // custom rustyline editor to automatically insert the 'msg' command
@@ -145,6 +158,12 @@ pub(crate) fn handle(args: &clap::ArgMatches, backend: &str) -> super::HandleCom
                 }
                 Ok(cloop::ShellAction::Continue)
             }
+            MessageCommand::Help => {
+                MessageCli::command()
+                    .print_help()
+                    .expect("help output should be printed");
+                Ok(cloop::ShellAction::Continue)
+            },
             MessageCommand::Stats => {
                 ctx.stats = !ctx.stats;
                 let msg = format!("Stats toggled {}!", if ctx.stats { "on" } else { "off" });

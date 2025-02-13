@@ -9,26 +9,24 @@ use tokio::sync::mpsc;
 use tokio_stream::{wrappers::ReceiverStream, StreamExt};
 
 use crate::{
-    controllers::model_controllers::ModelController,
+    controllers::chat_controllers::ChatController,
     errors::ServerResult,
     schemas::chat_schemas::{
         ChatCompletionChunkSchema, ChatCompletionRequestSchema, ChatCompletionSchema,
         ChoiceMessageRoleSchema, ChoiceMessageSchema, ChoiceSchema, FinishReasonSchema,
         StreamingChunk, UsageSchema,
     },
-    stores::model_store::ModelStoreState,
+    stores::chat_store::ModelStoreState,
     utils::id::ChatCompletionId,
 };
+
+pub const REPLY_MARKER: &str = "##### Model Reply";
 
 pub async fn chat_completions(
     State(state): State<ModelStoreState>,
     Json(payload): Json<ChatCompletionRequestSchema>,
 ) -> ServerResult<Response> {
-    tracing::info!(
-        "<<<<<<<<<<<< [CHAT COMPLETIONS] Received JSON payload: {:?} >>>>>>>>>>>>",
-        payload
-    );
-
+    tracing::debug!("Received JSON payload: {:?}", payload);
     if payload.stream {
         handle_streaming_response(state.clone(), payload).await
     } else {
@@ -40,8 +38,8 @@ async fn handle_non_streaming_response(
     state: ModelStoreState,
     payload: ChatCompletionRequestSchema,
 ) -> ServerResult<Response> {
-    let store = state.lock().await;
-    let plugin = store.get_model_plugin(&payload.model).await?;
+    let mut store = state.lock().await;
+    let (plugin, _) = store.get_plugin(&payload.model).await?;
     let messages: Vec<burnlm_inference::Message> = payload
         .messages
         .to_owned()
@@ -50,7 +48,7 @@ async fn handle_non_streaming_response(
         .collect();
     let json_params = serde_json::to_string(&payload.params)
         .expect("ChatCompletionParams should serialize to a JSON string");
-    tracing::info!("PARAMS JSON: {}", json_params);
+    tracing::debug!("Json params from payload: {}", json_params);
     plugin.parse_json_config(&json_params);
     let answer = plugin.run_completion(messages).unwrap();
     let content = answer.completion;
@@ -83,10 +81,10 @@ async fn handle_streaming_response(
     let (tx, rx) = mpsc::channel(10);
     tokio::spawn({
         async move {
-            let store = state.lock().await;
+            let mut store = state.lock().await;
             let id = ChatCompletionId::new().to_string();
-            let plugin = store
-                .get_model_plugin(&payload.model)
+            let (plugin, old_model_name) = store
+                .get_plugin(&payload.model)
                 .await
                 .expect("should get model plugin");
             let json_params = serde_json::to_string(&payload.params)
@@ -94,6 +92,19 @@ async fn handle_streaming_response(
             plugin.parse_json_config(&json_params);
             let now = chrono::Utc::now().timestamp();
             let model = plugin.model_name();
+
+            // feedback is we unloaded a previously loaded model
+            if let Some(name) = old_model_name {
+                let chunk = StreamingChunk::Data(ChatCompletionChunkSchema::new(
+                    &id,
+                    model,
+                    now,
+                    &format!("```BurnLM\nUnloaded model '{name}'!\n```\n\n"),
+                ));
+                tx.send(chunk.to_event_stream())
+                    .await
+                    .expect("should send unloading model chunk");
+            }
 
             // load model and gives feedback in real time in the client
             if !plugin.is_loaded() {
@@ -107,6 +118,7 @@ async fn handle_streaming_response(
                 tx.send(chunk.to_event_stream())
                     .await
                     .expect("should send loading model chunk");
+                tracing::debug!("Loading model '{}'", plugin.model_name());
                 let loading_stats = tokio::task::spawn_blocking({
                     let plugin = plugin.clone();
                     move || {
@@ -117,6 +129,7 @@ async fn handle_streaming_response(
                 })
                 .await
                 .expect("should complete model loading");
+                tracing::debug!("Model loaded '{}'", plugin.model_name());
                 let loading_duration = match loading_stats {
                     Some(stats) => {
                         let model_duration_stat = stats
@@ -144,20 +157,33 @@ async fn handle_streaming_response(
             }
 
             // answer chunck
+            let chunk = StreamingChunk::Data(ChatCompletionChunkSchema::new(
+                &id,
+                model,
+                now,
+                &format!("\n{REPLY_MARKER}\n"),
+            ));
+            tx.send(chunk.to_event_stream())
+                .await
+                .expect("should send reply section title chunk");
             let mut messages: Vec<burnlm_inference::Message> =
-                payload.messages.iter().cloned().map(Into::into).collect();
+                payload.messages.into_iter().map(Into::into).collect();
             messages
                 .iter_mut()
-                .for_each(|m| m.remove_after(burnlm_inference::STATS_MARKER));
-            // debug!("MESSAGES CONTENT: {:?}", messages);
+                .for_each(|m| m.cleanup(REPLY_MARKER, burnlm_inference::STATS_MARKER));
+            tracing::debug!("Cleaned up messages: {:?}", messages);
             let answer = tokio::task::spawn_blocking({
                 let plugin = plugin.clone();
-                move || plugin.run_completion(messages).expect("should generate answer")
+                move || {
+                    plugin
+                        .run_completion(messages)
+                        .expect("should generate answer")
+                }
             })
             .await
             .expect("should complete answer generation");
             let content = format!("{}\n\n{}", answer.completion, answer.stats.display_stats());
-            // tracing::debug!("Answer: {}", answer.completion);
+            tracing::debug!("Answer: {}", answer.completion);
             let chunk =
                 StreamingChunk::Data(ChatCompletionChunkSchema::new(&id, model, now, &content));
             tx.send(chunk.to_event_stream())

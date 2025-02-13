@@ -102,7 +102,22 @@ impl InferenceServer for TinyLlamaServer<InferenceBackend> {
     }
 
     fn unload(&mut self) -> InferenceResult<Option<Stats>> {
-        self.model = None;
+        if let Some(arc_model) = self.model.take() {
+            match Arc::try_unwrap(arc_model) {
+                Ok(mutex) => {
+                    let model = mutex
+                        .into_inner()
+                        .expect("should be able to extract model from mutex");
+                    drop(model);
+                }
+                Err(_) => {
+                    return Err(InferenceError::UnloadError(
+                        Self::model_name().to_string(),
+                        "Multiple references exist".to_string(),
+                    ))
+                }
+            }
+        }
         Ok(None)
     }
 

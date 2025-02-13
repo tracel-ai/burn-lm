@@ -2,9 +2,9 @@ use axum::extract::Path;
 use axum::{extract::State, Json};
 
 use crate::errors::ServerError;
-use crate::stores::model_store::ModelStoreState;
+use crate::stores::chat_store::ModelStoreState;
 use crate::{
-    controllers::model_controllers::ModelController, errors::ServerResult,
+    controllers::chat_controllers::ChatController, errors::ServerResult,
     schemas::model_schemas::ModelSchema,
 };
 

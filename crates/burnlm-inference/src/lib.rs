@@ -7,6 +7,7 @@ pub mod message;
 pub mod plugin;
 pub mod server;
 pub mod stats;
+pub mod utils;
 
 // ---------------------------------------------------------------------------
 // Re-exports for convenience so plugins implementors can just do:

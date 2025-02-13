@@ -9,8 +9,10 @@ pub enum InferenceError {
     DownloadError(String, String),
     #[error("Error loading model: {0}")]
     LoadError(String),
-    #[error("The plugin '{0}' does not support downloading.")]
-    PluginDownloadUnsupportedError(String),
     #[error("Model has not been loaded.")]
     ModelNotLoaded,
+    #[error("The plugin '{0}' does not support downloading.")]
+    PluginDownloadUnsupportedError(String),
+    #[error("Error unloading model: {0} (reason: {1})")]
+    UnloadError(String, String),
 }

@@ -3,7 +3,10 @@ use axum::async_trait;
 use burnlm_inference::InferencePlugin;
 
 #[async_trait]
-pub trait ModelController {
-    async fn get_model_plugin(&self, name: &str) -> ServerResult<Box<dyn InferencePlugin>>;
+pub trait ChatController {
+    async fn get_plugin(
+        &mut self,
+        name: &str,
+    ) -> ServerResult<(Box<dyn InferencePlugin>, Option<String>)>;
     async fn list_models(&self) -> ServerResult<Vec<ModelSchema>>;
 }

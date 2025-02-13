@@ -130,7 +130,7 @@ impl InferenceServer for Llama3InstructServer<InferenceBackend> {
     }
 
     fn unload(&mut self) -> InferenceResult<Option<Stats>> {
-        self.server.unload()
+        self.server.unload(Self::model_name())
     }
 
     fn run_completion(&mut self, messages: Vec<Message>) -> InferenceResult<Completion> {
@@ -194,7 +194,7 @@ impl InferenceServer for Llama31InstructServer<InferenceBackend> {
     }
 
     fn unload(&mut self) -> InferenceResult<Option<Stats>> {
-        self.server.unload()
+        self.server.unload(Self::model_name())
     }
 
     fn run_completion(&mut self, messages: Vec<Message>) -> InferenceResult<Completion> {
@@ -258,7 +258,7 @@ impl InferenceServer for Llama321bInstructServer<InferenceBackend> {
     }
 
     fn unload(&mut self) -> InferenceResult<Option<Stats>> {
-        self.server.unload()
+        self.server.unload(Self::model_name())
     }
 
     fn run_completion(&mut self, messages: Vec<Message>) -> InferenceResult<Completion> {
@@ -322,7 +322,7 @@ impl InferenceServer for Llama323bInstructServer<InferenceBackend> {
     }
 
     fn unload(&mut self) -> InferenceResult<Option<Stats>> {
-        self.server.unload()
+        self.server.unload(Self::model_name())
     }
 
     fn run_completion(&mut self, messages: Vec<Message>) -> InferenceResult<Completion> {
@@ -348,8 +348,23 @@ impl<B: Backend> Llama3BaseServer<B> {
 }
 
 impl Llama3BaseServer<InferenceBackend> {
-    fn unload(&mut self) -> InferenceResult<Option<Stats>> {
-        self.model = None;
+    fn unload(&mut self, model_name: &str) -> InferenceResult<Option<Stats>> {
+        if let Some(arc_model) = self.model.take() {
+            match Arc::try_unwrap(arc_model) {
+                Ok(mutex) => {
+                    let model = mutex
+                        .into_inner()
+                        .expect("should be able to extract model from mutex");
+                    drop(model);
+                }
+                Err(_) => {
+                    return Err(InferenceError::UnloadError(
+                        model_name.to_string(),
+                        "Multiple references exist".to_string(),
+                    ))
+                }
+            }
+        }
         Ok(None)
     }
 

@@ -18,7 +18,7 @@ use utoipa_swagger_ui::SwaggerUi;
 use crate::{
     openapi::ApiDoc,
     routers::{chat_routers, model_routers},
-    stores::model_store::ModelStore,
+    stores::chat_store::ChatStore,
     trace::{self, Latency},
 };
 
@@ -50,7 +50,7 @@ impl App {
     /// Define application service (router)
     async fn app(&self) -> Router {
         let version_prefix = "/v1";
-        let model_store = ModelStore::create_state();
+        let model_store = ChatStore::create_state();
         let openapi = ApiDoc::openapi();
         let public_routes = Router::new()
             .route("/", get(|| async { "Home" }))

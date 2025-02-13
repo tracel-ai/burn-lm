@@ -55,5 +55,4 @@ pub(crate) enum BackendValues {
 
     #[strum(to_string = "wgpu-cpu")]
     WgpuCpu,
-
 }

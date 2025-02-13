@@ -1,4 +1,4 @@
-use crate::{handlers::chat_handlers::*, stores::model_store::ModelStoreState};
+use crate::{handlers::chat_handlers::*, stores::chat_store::ModelStoreState};
 
 use axum::{routing::post, Router};
 

@@ -18,14 +18,22 @@ pub struct Message {
 }
 
 impl Message {
-    /// Removes from `self.content` everything after and including
-    /// the first occurrence of `mark`.
-    pub fn remove_after(&mut self, mark: &str) {
-        if mark.is_empty() {
+    /// Update 'content' to be the text between the first occurrence of 'start'
+    /// and the last occurrence of 'end', excluding both markers.
+    /// If either marker is empty, not found, or in the wrong order,
+    /// the content remains unchanged.
+    pub fn cleanup(&mut self, start: &str, end: &str) {
+        if start.is_empty() || end.is_empty() {
             return;
         }
-        if let Some(pos) = self.content.find(mark) {
-            self.content.truncate(pos);
+        if let Some(start_index) = self.content.find(start) {
+            let content_start = start_index + start.len();
+            if let Some(last_end_index) = self.content.rfind(end) {
+                if last_end_index >= content_start {
+                    // Update content to be the text between the markers
+                    self.content = self.content[content_start..last_end_index].to_string();
+                }
+            }
         }
     }
 }
@@ -37,27 +45,75 @@ mod tests {
 
     #[rstest(
         initial_content,
-        mark,
+        start,
+        end,
         expected_content,
-        case::marker_found("Hello, world! This is a test.", "world", "Hello, "),
-        case::marker_not_found(
+        case::markers_found(
+            "Hello, [start]This is a test[end] Goodbye",
+            "[start]",
+            "[end]",
+            "This is a test"
+        ),
+        case::start_marker_not_found(
+            "Hello, This is a test[end] Goodbye",
+            "[start]",
+            "[end]",
+            "Hello, This is a test[end] Goodbye"
+        ),
+        case::end_marker_not_found(
+            "Hello, [start]This is a test. Goodbye",
+            "[start]",
+            "[end]",
+            "Hello, [start]This is a test. Goodbye"
+        ),
+        case::both_markers_not_found(
             "Hello, world! This is a test.",
-            "foo",
+            "[start]",
+            "[end]",
             "Hello, world! This is a test."
         ),
-        case::empty_marker("Hello, world!", "", "Hello, world!")
+        case::empty_start_marker(
+            "Hello, [start]This is a test[end] Goodbye",
+            "",
+            "[end]",
+            "Hello, [start]This is a test[end] Goodbye"
+        ),
+        case::empty_end_marker(
+            "Hello, [start]This is a test[end] Goodbye",
+            "[start]",
+            "",
+            "Hello, [start]This is a test[end] Goodbye"
+        ),
+        case::multiple_occurrences(
+            "Ignore [start]Keep this[end] and [start]not this[end] end part",
+            "[start]",
+            "[end]",
+            "Keep this[end] and [start]not this"
+        ),
+        case::end_marker_before_start(
+            "Hello [end] there [start] world",
+            "[start]",
+            "[end]",
+            "Hello [end] there [start] world"
+        ),
+        case::same_marker(
+            "abcXdefXghi",
+            "X",
+            "X",
+            "def"
+        )
     )]
-    fn test_remove_after(initial_content: &str, mark: &str, expected_content: &str) {
+    fn test_cleanup(initial_content: &str, start: &str, end: &str, expected_content: &str) {
         let mut msg = Message {
             role: MessageRole::User,
             content: initial_content.to_string(),
             refusal: None,
         };
-        msg.remove_after(mark);
+        msg.cleanup(start, end);
         assert_eq!(
             msg.content, expected_content,
-            "Content should be '{}' after removing marker '{}'",
-            expected_content, mark
+            "Content should be '{}' after cleaning up with start '{}' and end '{}'",
+            expected_content, start, end
         );
     }
 }

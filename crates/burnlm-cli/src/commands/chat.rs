@@ -5,7 +5,6 @@ use rustyline::{history::DefaultHistory, Editor};
 use yansi::Paint;
 
 use super::BurnLMPromptHelper;
-use crate::utils;
 
 #[derive(clap::Subcommand)]
 pub enum MessageCommand {
@@ -14,18 +13,14 @@ pub enum MessageCommand {
     /// Display slash commands help
     Help,
     /// Message (prompt) for inference
-    Msg {
-        message: String,
-    },
+    Msg { message: String },
     /// Toggle stats
     Stats,
 }
 
 // Dummy wrapper to get CommandFactory implemented
 #[derive(clap::Parser)]
-#[command(name = "chat",
-          about = "Burn LM Chat",
-          disable_help_subcommand = true)]
+#[command(name = "chat", about = "Burn LM Chat", disable_help_subcommand = true)]
 struct MessageCli {
     #[command(subcommand)]
     command: MessageCommand,
@@ -50,7 +45,7 @@ impl cloop::InputReader for ChatEditor<BurnLMPromptHelper> {
     fn read(&mut self, prompt: &str) -> std::io::Result<cloop::InputResult> {
         match self.editor.read(prompt) {
             Ok(cloop::InputResult::Input(s)) => {
-                if let (Some(cmd), rest) = utils::parse_command(&s) {
+                if let (Some(cmd), rest) = burnlm_inference::utils::parse_command(&s) {
                     Ok(cloop::InputResult::Input(format!("{cmd} {rest}")))
                 } else {
                     // consider any freefrom input a message
@@ -163,7 +158,7 @@ pub(crate) fn handle(args: &clap::ArgMatches, backend: &str) -> super::HandleCom
                     .print_help()
                     .expect("help output should be printed");
                 Ok(cloop::ShellAction::Continue)
-            },
+            }
             MessageCommand::Stats => {
                 ctx.stats = !ctx.stats;
                 let msg = format!("Stats toggled {}!", if ctx.stats { "on" } else { "off" });

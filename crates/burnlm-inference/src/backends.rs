@@ -88,10 +88,7 @@ pub mod burn_backend_types {
 
 // WebGPU (default) ----------------------------------------------------------
 
-#[cfg(any(
-    feature = "wgpu",
-    feature = "vulkan",
-))]
+#[cfg(any(feature = "wgpu", feature = "vulkan",))]
 pub mod burn_backend_types {
     use burn::backend::wgpu::{Wgpu, WgpuDevice};
     pub type InferenceBackend = Wgpu;

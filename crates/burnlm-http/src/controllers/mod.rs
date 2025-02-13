@@ -1,1 +1,1 @@
-pub mod model_controllers;
+pub mod chat_controllers;

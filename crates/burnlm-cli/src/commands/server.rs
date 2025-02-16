@@ -1,3 +1,4 @@
+
 pub(crate) fn create() -> clap::Command {
     let mut root = clap::Command::new("server").about("Run a simple OpenAI API compatible server");
     let run = clap::Command::new("run")
@@ -33,9 +34,19 @@ pub(crate) fn handle(args: &clap::ArgMatches, backend: &str) -> super::HandleCom
             ];
             let mut build_args = vec!["build"];
             build_args.extend(common_args.clone());
+            let mut watch_args = vec![
+                "watch",
+                "-q",
+                "-c",
+                "-w",
+                "crates/",
+                "-x"
+            ];
             let mut run_args = vec!["run"];
-            run_args.extend(common_args);
+            run_args.extend(common_args.clone());
             run_args.extend(vec!["--", "run", "--port", &port_string]);
+            let run_args = format!("{}", run_args.join(" "));
+            watch_args.push(&run_args);
             let mut spin_msg = super::SpinningMessage::new(
                 &format!("compiling {backend} server..."),
                 "server ready!",
@@ -56,11 +67,11 @@ pub(crate) fn handle(args: &clap::ArgMatches, backend: &str) -> super::HandleCom
             // stop the spinner
             spin_msg.end(false);
             // run server
-            let run_status = std::process::Command::new("cargo")
-                .args(&run_args)
+            let watch_status = std::process::Command::new("cargo")
+                .args(&watch_args)
                 .status()
-                .expect("burnlm-http should execute successfully");
-            std::process::exit(run_status.code().unwrap_or(1));
+                .expect("burnlm-http should execute successfully while being watched");
+            std::process::exit(watch_status.code().unwrap_or(1));
         }
         _ => {
             create().print_help().unwrap();

@@ -2,4 +2,3 @@
 xtask = "run --target-dir target/xtask --package xtask --bin xtask --"
 # we don't build in release because we want burnlm launcher to build as fast as possible
 burnlm = "run --bin burnlm --profile launcher --"
-burnlmd = "run --release --bin burnlm --"

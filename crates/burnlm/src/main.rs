@@ -4,7 +4,6 @@ use std::process::{exit, Command};
 use yansi::Paint;
 
 const BURNLM_SUPERVISER_RESTART_EXIT_CODE: i32 = 8;
-const BURNLM_CLI_TARGET_DIR: &str = "target/cli";
 const BURNLM_BACKEND_ENVVAR: &str = "BURNLM_BACKEND";
 const DEFAULT_BURN_BACKEND: &str = "wgpu";
 
@@ -31,7 +30,6 @@ fn main() {
     backend = backend.to_lowercase();
     // build and run arguments
     let inference_feature = format!("burnlm-inference/{}", backend);
-    let target_dir = format!("{}/{backend}", BURNLM_CLI_TARGET_DIR);
     let common_args = vec![
         "--release",
         "--bin",
@@ -39,8 +37,6 @@ fn main() {
         "--no-default-features",
         "--features",
         &inference_feature,
-        "--target-dir",
-        &target_dir,
         "--quiet",
         "--color",
         "always",

@@ -38,12 +38,12 @@ pub mod burn_backend_types {
         std::sync::LazyLock::new(|| CudaDevice::default());
 }
 
-// Hip -----------------------------------------------------------------------
+// ROCm ----------------------------------------------------------------------
 
-#[cfg(feature = "hip")]
+#[cfg(feature = "rocm")]
 pub mod burn_backend_types {
-    use burn::backend::hip::{Hip, HipDevice};
-    pub type InferenceBackend = Hip;
+    use burn::backend::rocm::{Rocm, HipDevice};
+    pub type InferenceBackend = Rocm;
     pub type InferenceDevice = HipDevice;
     pub const INFERENCE_DEVICE: std::sync::LazyLock<HipDevice> =
         std::sync::LazyLock::new(|| HipDevice::default());

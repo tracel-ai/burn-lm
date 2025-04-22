@@ -17,9 +17,9 @@ pub(crate) fn handle() -> super::HandleCommandResult {
         let key = if backend_string.starts_with("candle") {
             "[5]Candle"
         } else if backend_string.starts_with("cuda") {
-            "[2]Cuda"
-        } else if backend_string.starts_with("hip") {
-            "[2]ROCm HIP"
+            "[2]CUDA"
+        } else if backend_string.starts_with("rocm") {
+            "[2]ROCm"
         } else if backend_string.starts_with("ndarray") {
             "[4]ndarray"
         } else if backend_string.starts_with("libtorch") {

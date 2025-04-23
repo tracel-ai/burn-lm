@@ -20,10 +20,10 @@ pub(crate) enum BackendValues {
     #[strum(to_string = "cuda")]
     Cuda,
 
-    // hip -------------------------------------------------------------------
+    // rocm -------------------------------------------------------------------
     #[cfg(target_os = "linux")]
-    #[strum(to_string = "hip")]
-    Hip,
+    #[strum(to_string = "rocm")]
+    Rocm,
 
     // ndarray ---------------------------------------------------------------
     #[strum(to_string = "ndarray")]

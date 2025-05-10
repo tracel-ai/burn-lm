@@ -27,7 +27,11 @@ pub fn inference_server_config(_attr: TokenStream, item: TokenStream) -> TokenSt
 }
 
 #[derive(FromDeriveInput)]
-#[darling(attributes(config), supports(struct_named))]
+#[darling(
+    attributes(config),
+    supports(struct_named),
+    forward_attrs(allow, doc, cfg)
+)]
 struct InferenceServerConfigReceiver {
     ident: syn::Ident,
     vis: syn::Visibility,

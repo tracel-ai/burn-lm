@@ -28,56 +28,79 @@ readme = "README.md"
 burn = { version = "0.17.0", default-features = false, features = ["std"] }
 burn-import = { version = "0.17.0" }
 
-anyhow = "1.0.95"
-axum = { version = "0.7.9", features = ["macros"] }
-chrono = { version = "0.4.39", features = ["serde"] }
-clap = { version = "4.5.22", features = ["derive", "cargo"] }
-cloop = "0.1.0"
-comfy-table = "7.1.3"
-darling = "0.20.10"
-dirs = { version = "5.0.1" }
-dotenvy = "0.15.7"
-lazy_static = "1.5.0"
-log = "0.4.22"
-proc-macro2 = "1.0.93"
-quote = "1.0.38"
-rand = "0.8.5"
-rstest = "0.24.0"
-rustyline = { version = "15.0.0", features = ["custom-bindings", "derive"] }
-serde = { version = "1.0.215", features = ["derive"] }
-serde_json = "1.0.133"
-spinners = "4.1.1"
-strum = { version = "0.26.3", features = ["derive"] }
-syn = { version = "2.0.96", features = ["full"] }
-tempfile = "3.16.0"
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Errors
+anyhow = "1"
 thiserror = "2"
-tokio = { version = "1.42.0", features = ["full"] }
-tokio-stream = "0.1.17"
-tower-http = { version = "0.6.0", features = [
+
+# Time
+chrono = { version = "0.4", features = ["serde"] }
+
+# Cli
+clap = { version = "4.5", features = ["derive", "cargo"] }
+cloop = "0.1.0"
+comfy-table = "7.1"
+dotenvy = "0.15"
+rustyline = { version = "15.0", features = ["custom-bindings", "derive"] }
+spinners = "4.1"
+yansi = "1.0"
+
+# Logging
+log = "0.4"
+tracing = { version = "0.1", features = ["log"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "registry"] }
+
+
+# Http & Async
+axum = { version = "0.7", features = ["macros"] }
+tokio = { version = "1.42", features = ["full"] }
+tokio-stream = "0.1"
+tower-http = { version = "0.6", features = [
     "fs",
     "cors",
     "trace",
     "request-id",
 ] }
-tracing = { version = "0.1.41", features = ["log"] }
-tracing-subscriber = {version = "0.3.19", features = ["env-filter", "registry"]}
-utoipa = { version = "5.2.0", features = ["axum_extras"] }
-utoipa-swagger-ui = { version = "8.0.3", features = ["axum"] }
-yansi = "1.0.1"
+utoipa = { version = "5.3", features = ["axum_extras"] }
+utoipa-swagger-ui = { version = "9.0", features = ["axum"] }
 
-# models
-base64 = { version = "0.22.1" }
-rustc-hash = { version = "1.1.0" }
-tiktoken-rs = { version = "0.5.8" }
-tokenizers = { version = "0.19.1", default-features = false, features = ["onig"] }
+
+# Macros & Derives
+darling = "0.20"
+syn = { version = "2", features = ["full"] }
+proc-macro2 = "1"
+quote = "1"
+strum = { version = "0.26", features = ["derive"] }
+
+# Files
+dirs = { version = "5" }
+tempfile = "3.16"
+
+# Init
+lazy_static = "1.5"
+
+# Random & Bytes manipulation
+rand = "0.9"
+base64 = { version = "0.22" }
+rustc-hash = { version = "1.1" }
+
+# Tests
+rstest = "0.24"
+
+# Tokenizers
+tiktoken-rs = { version = "0.5" }
+tokenizers = { version = "0.19", default-features = false, features = ["onig"] }
 
 ### For xtask crate ###
 tracel-xtask = { version = "=1.1.8" }
 
 # For dev we use the latest burn revision
 [patch.crates-io]
-burn = { git = "https://github.com/tracel-ai/burn", rev = "04c5e74daac2adbfda4f5293746bc37ab6be56ea" }
-burn-import = { git = "https://github.com/tracel-ai/burn", rev = "04c5e74daac2adbfda4f5293746bc37ab6be56ea" }
+burn = { git = "https://github.com/tracel-ai/burn", branch = "main" }
+burn-import = { git = "https://github.com/tracel-ai/burn", branch = "main" }
 
 [profile.dev]
 debug = 0 # Speed up compilation time and not necessary.

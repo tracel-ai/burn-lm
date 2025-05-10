@@ -21,6 +21,7 @@ pub use crate::plugin::InferencePlugin;
 pub use crate::server::{InferenceServer, InferenceServerConfig, ServerConfigParsing};
 pub use crate::stats::{StatEntry, Stats, STATS_MARKER};
 pub use backends::burn_backend_types::*;
+pub use backends::DTYPE_NAME;
 pub use burn::prelude::Backend;
 pub use burnlm_macros::inference_server_config;
 pub use burnlm_macros::InferenceServer;

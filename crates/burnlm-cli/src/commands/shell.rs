@@ -43,7 +43,7 @@ fn create_parser() -> clap::Command {
         .multicall(true)
 }
 
-pub(crate) fn handle(backend: &str) -> anyhow::Result<()> {
+pub(crate) fn handle(backend: &str, dtype: &str) -> anyhow::Result<()> {
     // meta action used to control the outer loop
     // we need interior mutability here because the shell handler
     // is bound to the Fn trait
@@ -62,7 +62,7 @@ pub(crate) fn handle(backend: &str) -> anyhow::Result<()> {
     editor.borrow_mut().set_helper(Some(helper));
 
     println!("\nWelcome to Burn LM shell 🔥 (press CTRL+D to exit)");
-    let app_name = format!("({backend}) burnlm");
+    let app_name = format!("({backend}-{dtype}) burnlm");
     let delim = "> ";
 
     while meta_action.borrow().is_some() {
@@ -83,7 +83,7 @@ pub(crate) fn handle(backend: &str) -> anyhow::Result<()> {
             *meta_action.borrow_mut() = if args.subcommand_matches("backends").is_some() {
                 super::backends::handle()?
             } else if let Some(args) = args.subcommand_matches("chat") {
-                super::chat::handle(args, backend)?
+                super::chat::handle(args, backend, dtype)?
             } else if let Some(args) = args.subcommand_matches("delete") {
                 super::delete::handle(args)?
             } else if let Some(args) = args.subcommand_matches("download") {
@@ -95,9 +95,9 @@ pub(crate) fn handle(backend: &str) -> anyhow::Result<()> {
             } else if let Some(args) = args.subcommand_matches("run") {
                 super::run::handle(args)?
             } else if let Some(args) = args.subcommand_matches("server") {
-                super::server::handle(args, backend)?
+                super::server::handle(args, backend, dtype)?
             } else if let Some(args) = args.subcommand_matches("web") {
-                super::web::handle(args, backend)?
+                super::web::handle(args, backend, dtype)?
             } else {
                 None
             };

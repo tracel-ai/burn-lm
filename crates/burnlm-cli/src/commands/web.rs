@@ -15,7 +15,11 @@ pub(crate) fn create() -> clap::Command {
         .subcommand(clap::Command::new("stop").about("Stop web client"))
 }
 
-pub(crate) fn handle(args: &clap::ArgMatches, backend: &str) -> super::HandleCommandResult {
+pub(crate) fn handle(
+    args: &clap::ArgMatches,
+    backend: &str,
+    dtype: &str,
+) -> super::HandleCommandResult {
     let action = match args.subcommand_name() {
         Some(cmd) => cmd,
         None => {
@@ -24,18 +28,19 @@ pub(crate) fn handle(args: &clap::ArgMatches, backend: &str) -> super::HandleCom
         }
     };
     match action {
-        "start" => start_web(backend),
+        "start" => start_web(backend, dtype),
         "stop" => stop_web(),
         _ => Err(anyhow::format_err!("Error: command unknown {action}")),
     }
 }
 
-fn start_web(backend: &str) -> super::HandleCommandResult {
+fn start_web(backend: &str, dtype: &str) -> super::HandleCommandResult {
     println!("Starting containerized services...",);
     up_docker_compose()?;
     // write mprocs file from template
     let template = std::fs::read_to_string(MPROC_WEB_TEMPLATE).unwrap();
     let script = template.replace("{{BACKEND}}", &backend.to_string());
+    let script = script.replace("{{DTYPE}}", &dtype.to_string());
     std::fs::create_dir_all("tmp").expect("directory should be created");
     let mut file = std::fs::File::create(MPROC_WEB_CONFIG).unwrap();
     file.write_all(script.as_bytes()).unwrap();

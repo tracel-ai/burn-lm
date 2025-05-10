@@ -376,7 +376,7 @@ impl Llama3BaseServer<InferenceBackend> {
         let load_stats = self.load(config)?;
         let prompt = self.prompt(messages)?;
         let seed = match config.seed {
-            0 => rand::thread_rng().gen::<u64>(),
+            0 => rand::rng().random::<u64>(),
             s => s,
         };
         let mut sampler = if config.temperature > 0.0 {

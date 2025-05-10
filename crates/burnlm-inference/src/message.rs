@@ -96,12 +96,7 @@ mod tests {
             "[end]",
             "Hello [end] there [start] world"
         ),
-        case::same_marker(
-            "abcXdefXghi",
-            "X",
-            "X",
-            "def"
-        )
+        case::same_marker("abcXdefXghi", "X", "X", "def")
     )]
     fn test_cleanup(initial_content: &str, start: &str, end: &str, expected_content: &str) {
         let mut msg = Message {

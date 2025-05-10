@@ -91,7 +91,11 @@ pub(crate) fn create() -> clap::Command {
     root
 }
 
-pub(crate) fn handle(args: &clap::ArgMatches, backend: &str) -> super::HandleCommandResult {
+pub(crate) fn handle(
+    args: &clap::ArgMatches,
+    backend: &str,
+    dtype: &str,
+) -> super::HandleCommandResult {
     let plugin_name = match args.subcommand_name() {
         Some(cmd) => cmd,
         None => {
@@ -120,7 +124,7 @@ pub(crate) fn handle(args: &clap::ArgMatches, backend: &str) -> super::HandleCom
     spin_msg.end(false);
 
     // create chat shell
-    let app_name = format!("({backend}) chat|{}", plugin.model_name());
+    let app_name = format!("({backend}-{dtype}) chat|{}", plugin.model_name());
     let delim = "> ";
     let handler = |args: MessageCommand, ctx: &mut ChatContext| -> cloop::ShellResult {
         match args {

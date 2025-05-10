@@ -1,4 +1,3 @@
-
 pub(crate) fn create() -> clap::Command {
     let mut root = clap::Command::new("server").about("Run a simple OpenAI API compatible server");
     let run = clap::Command::new("run")
@@ -15,13 +14,17 @@ pub(crate) fn create() -> clap::Command {
     root
 }
 
-pub(crate) fn handle(args: &clap::ArgMatches, backend: &str) -> super::HandleCommandResult {
+pub(crate) fn handle(
+    args: &clap::ArgMatches,
+    backend: &str,
+    dtype: &str,
+) -> super::HandleCommandResult {
     match args.subcommand_name() {
         Some("run") => {
             let run_args = args.subcommand_matches("run").unwrap();
             let port = run_args.get_one::<u16>("port").unwrap();
             let port_string = port.to_string();
-            let inference_feature = format!("burnlm-inference/{}", backend);
+            let inference_feature = format!("burnlm-inference/{backend},burnlm-inference/{dtype}");
             let common_args = vec![
                 "--release",
                 "--package",
@@ -34,14 +37,7 @@ pub(crate) fn handle(args: &clap::ArgMatches, backend: &str) -> super::HandleCom
             ];
             let mut build_args = vec!["build"];
             build_args.extend(common_args.clone());
-            let mut watch_args = vec![
-                "watch",
-                "-q",
-                "-c",
-                "-w",
-                "crates/",
-                "-x"
-            ];
+            let mut watch_args = vec!["watch", "-q", "-c", "-w", "crates/", "-x"];
             let mut run_args = vec!["run"];
             run_args.extend(common_args.clone());
             run_args.extend(vec!["--", "run", "--port", &port_string]);

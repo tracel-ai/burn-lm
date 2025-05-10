@@ -1,3 +1,5 @@
+#![recursion_limit = "256"]
+
 use rand::Rng;
 use serde::Deserialize;
 use std::sync::{Arc, Mutex};
@@ -17,7 +19,7 @@ pub struct TinyLlamaServerConfig {
     #[config(default = 0.9)]
     pub top_p: f64,
     /// Temperature value for controlling randomness in sampling.
-    #[config(default = 0.6)]
+    #[config(default = 0.1)]
     pub temperature: f64,
     /// Maximum sequence length for input text.
     #[config(default = 1024)]

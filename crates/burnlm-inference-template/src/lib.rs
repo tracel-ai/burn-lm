@@ -1,3 +1,5 @@
+#![recursion_limit = "256"]
+
 use burnlm_inference::*;
 
 // This is where you can declare the configuration parameters for
@@ -14,7 +16,7 @@ use burnlm_inference::*;
 #[inference_server_config]
 pub struct ParrotServerConfig {
     /// Temperature value for controlling randomness in sampling.
-    #[config(default = 0.6)]
+    #[config(default = 0.1)]
     pub temperature: f64,
 }
 

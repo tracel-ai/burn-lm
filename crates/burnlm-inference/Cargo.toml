@@ -6,8 +6,6 @@ license.workspace = true
 readme.workspace = true
 
 [features]
-default = ["burn/default"]
-
 # Feature flag to deactivate the default backend.
 selected-backend = []
 
@@ -15,8 +13,29 @@ candle-accelerate = ["burn/candle", "burn/accelerate", "selected-backend"]
 candle-cpu = ["burn/candle", "selected-backend"]
 candle-cuda = ["burn/candle-cuda", "selected-backend"]
 candle-metal = ["burn/candle", "burn/metal", "selected-backend"]
-cuda = ["burn/cuda", "burn/fusion", "selected-backend"]
-rocm = ["burn/rocm", "selected-backend"]
+
+cuda = [
+    "burn/cuda",
+    # TODO: Autotune increases the global memory needs like crazy and makes the model panic.
+    #
+    #       Also there is a bug, since autotune runs for fusion when this setting is deactivated.
+    #
+    #       The reason it takes more memory is that we re-allocate the weights to run autotune for each 
+    #       micro-benchmark.
+    "burn/default",
+    # The compilation cache really help for the CLI.
+    "burn/compilation-cache",
+    "selected-backend",
+]
+# The compilation cache really help for the CLI.
+rocm = [
+    "burn/rocm",
+    "burn/fusion",
+    "burn/autotune",
+    "burn/compilation-cache",
+    "selected-backend",
+]
+
 libtorch = ["burn/tch", "selected-backend"]
 libtorch-cpu = ["burn/tch", "selected-backend"]
 ndarray = ["burn/ndarray"]
@@ -47,4 +66,3 @@ tracing-subscriber = { workspace = true }
 
 [dev-dependencies]
 rstest = { workspace = true }
-

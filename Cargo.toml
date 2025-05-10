@@ -23,10 +23,12 @@ license = "MIT OR Apache-2.0"
 readme = "README.md"
 
 [workspace.dependencies]
-# NOTE: autotune and fusion are disabled without default features
-# (and autotune is not correctly propagated to cuda if manually enabled)
-burn = { version = "0.17.0", default-features = false, features = ["std"] }
-burn-import = { version = "0.17.0" }
+# For dev we use the local version of burn
+burn = { path = "../burn/crates/burn", features = ["std"], default-features = false }
+burn-import = { path = "../burn/crates/burn-import" }
+# For release, but right now we need new features that are not released in Burn yet.
+# burn = { version = "0.17.0", default-features = false, features = ["std"] }
+# burn-import = { version = "0.17.0" }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
@@ -83,7 +85,7 @@ tempfile = "3.16"
 lazy_static = "1.5"
 
 # Random & Bytes manipulation
-rand = "0.9"
+rand = { version = "0.9", default-features = false }
 base64 = { version = "0.22" }
 rustc-hash = { version = "1.1" }
 
@@ -96,11 +98,6 @@ tokenizers = { version = "0.19", default-features = false, features = ["onig"] }
 
 ### For xtask crate ###
 tracel-xtask = { version = "=1.1.8" }
-
-# For dev we use the latest burn revision
-[patch.crates-io]
-burn = { git = "https://github.com/tracel-ai/burn", branch = "main" }
-burn-import = { git = "https://github.com/tracel-ai/burn", branch = "main" }
 
 [profile.dev]
 debug = 0 # Speed up compilation time and not necessary.

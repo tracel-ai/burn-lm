@@ -4,39 +4,43 @@ use std::process::{exit, Command};
 use yansi::Paint;
 
 const BURNLM_SUPERVISER_RESTART_EXIT_CODE: i32 = 8;
-const BURNLM_BACKEND_ENVVAR: &str = "BURNLM_BACKEND";
-const DEFAULT_BURN_BACKEND: &str = "wgpu";
 
 fn main() {
     println!();
     // retrieve backend
     let mut exit_code = BURNLM_SUPERVISER_RESTART_EXIT_CODE;
-    let mut backend = match std::env::var(BURNLM_BACKEND_ENVVAR) {
-        Ok(backend) => backend,
-        Err(_) => {
-            let hint = format!(
-                "╭──────────────────────────────────────────────────────────────────────────╮
-│ 💡 Hint: No environment variable 'BURNLM_BACKEND' defined. Using default │
-│ Burn backend which is '{}'. To get a list of all supported backends on │
-│ this platform use 'cargo burnlm backends'.                               │
-╰──────────────────────────────────────────────────────────────────────────╯
-",
-                DEFAULT_BURN_BACKEND
-            );
-            print!("{}", hint.bright_yellow().bold());
-            DEFAULT_BURN_BACKEND.to_string()
-        }
-    };
-    backend = backend.to_lowercase();
     // build and run arguments
-    let inference_feature = format!("burnlm-inference/{}", backend);
+    let mut args = std::env::args();
+
+    let mut backend = None;
+    let mut dtype = None;
+
+    // We manually parse the settings in the command line that might change the features flags to
+    // be activated.
+    while let Some(arg) = args.next() {
+        if arg.contains("--backend") || arg.contains("-b") {
+            backend = Some(args.next().expect("A backend must be set"));
+        }
+        if arg.contains("--dtype") || arg.contains("-d") {
+            dtype = Some(args.next().expect("A dtype must be set"));
+        }
+
+        if backend.is_some() && dtype.is_some() {
+            break;
+        }
+    }
+
+    let backend = backend.unwrap_or("ndarray".to_string());
+    let dtype = dtype.unwrap_or("f32".to_string());
+
+    let features = format!("{backend},{dtype}");
+
     let common_args = vec![
         "--release",
+        "--features",
+        features.as_str(),
         "--bin",
         "burnlm-cli",
-        "--no-default-features",
-        "--features",
-        &inference_feature,
         "--quiet",
         "--color",
         "always",
@@ -44,6 +48,7 @@ fn main() {
     let mut build_args = vec!["build"];
     build_args.extend(common_args.clone());
     let mut run_args = vec!["run"];
+
     run_args.extend(common_args);
     run_args.push("--");
     let passed_args: Vec<String> = std::env::args().skip(1).collect();
@@ -75,7 +80,6 @@ fn main() {
         sp.stop_with_message(completion_msg);
         // execute burnlm
         let run_status = Command::new("cargo")
-            .env(BURNLM_BACKEND_ENVVAR, backend.clone())
             .args(&run_args)
             .status()
             .expect("burnlm command should execute successfully");

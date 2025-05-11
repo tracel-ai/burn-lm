@@ -5,6 +5,27 @@ version.workspace = true
 license.workspace = true
 readme.workspace = true
 
+[features]
+candle-accelerate = ["burnlm-inference/candle-accelerate"]
+candle-cpu = ["burnlm-inference/candle-cpu"]
+candle-cuda = ["burnlm-inference/candle-cuda"]
+candle-metal = ["burnlm-inference/candle-metal"]
+
+f16 = ["burnlm-inference/f16"]
+bf16 = ["burnlm-inference/f16"]
+cuda = ["burnlm-inference/cuda"]
+rocm = ["burnlm-inference/rocm"]
+wgpu = ["burnlm-inference/wgpu"]
+vulkan = ["burnlm-inference/vulkan"]
+
+libtorch-cuda = ["burnlm-inference/libtorch"]
+libtorch-cpu = ["burnlm-inference/libtorch-cpu"]
+
+ndarray = ["burnlm-inference/ndarray"]
+ndarray-blas-openblas = ["burnlm-inference/ndarray-blas-openblas"]
+ndarray-blas-accelerate = ["burnlm-inference/ndarray-blas-accelerate"]
+ndarray-blas-netlib = ["burnlm-inference/ndarray-blas-netlib"]
+
 [dependencies]
 burnlm-inference = { path = "../burnlm-inference" }
 burnlm-registry = { path = "../burnlm-registry" }

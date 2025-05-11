@@ -624,7 +624,16 @@ impl<B: Backend> TextGenerationState<B> {
             for tokens in receiver.iter() {
                 let num_tokens = tokens.shape().num_elements();
                 let total_num_tokens = num_generated_clone.load(Ordering::Relaxed) + num_tokens;
-                if stop_tokens.clone().equal(tokens).any().into_scalar() {
+                if stop_tokens
+                    .clone()
+                    .equal(tokens)
+                    .any()
+                    .into_data()
+                    .convert::<u8>()
+                    .as_slice::<u8>()
+                    .unwrap()[0]
+                    == 1
+                {
                     state_clone.store(true, Ordering::Relaxed);
                 }
                 num_generated_clone.store(total_num_tokens, Ordering::Relaxed);

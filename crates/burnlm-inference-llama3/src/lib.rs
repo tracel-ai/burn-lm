@@ -1,3 +1,5 @@
+#![recursion_limit = "256"]
+
 use rand::Rng;
 use serde::Deserialize;
 use std::sync::{Arc, Mutex};
@@ -31,13 +33,13 @@ pub struct Llama3ServerConfig {
     #[config(default = 0.9)]
     pub top_p: f64,
     /// Temperature value for controlling randomness in sampling.
-    #[config(default = 0.6)]
+    #[config(default = 0.1)]
     pub temperature: f64,
     /// Maximum sequence length for input text.
     #[config(default = 1024)]
     pub max_seq_len: usize,
     /// The number of new tokens to generate (i.e., the number of generation steps to take).
-    #[config(default = 128, openwebui_param = "max_tokens")]
+    #[config(default = 512, openwebui_param = "max_tokens")]
     pub sample_len: usize,
     /// The seed to use when generating random samples. If it is 0 then a random seed is used for each inference.
     #[config(default = 0)]
@@ -376,7 +378,7 @@ impl Llama3BaseServer<InferenceBackend> {
         let load_stats = self.load(config)?;
         let prompt = self.prompt(messages)?;
         let seed = match config.seed {
-            0 => rand::thread_rng().gen::<u64>(),
+            0 => rand::rng().random::<u64>(),
             s => s,
         };
         let mut sampler = if config.temperature > 0.0 {

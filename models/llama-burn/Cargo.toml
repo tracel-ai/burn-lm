@@ -23,7 +23,7 @@ wgpu = ["burn/wgpu"]
 import = ["burn-import"]
 
 [dependencies]
-burn = { workspace = true }
+burn = { workspace = true, features = ["std"] }
 burn-import = { workspace = true, optional = true }
 itertools = { version = "0.12.1", default-features = false, features = [
     "use_alloc",
@@ -42,10 +42,9 @@ rustc-hash = { workspace = true, optional = true }
 # SentencePiece tokenizer (tiny llama / llama 2)
 tokenizers = { workspace = true, features = ["onig"], optional = true }
 
-rand = { version = "0.8.5", default-features = false, features = [
+rand = { workspace = true, default-features = false, features = [
     "std_rng",
 ] } # std_rng is for no_std
 
 [dev-dependencies]
-burn = { workspace = true }
 clap = { version = "4.5.4", features = ["derive"] }

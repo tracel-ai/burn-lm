@@ -6,31 +6,52 @@ license.workspace = true
 readme.workspace = true
 
 [features]
-# Don't define a default feature ! Keep this commented
-# We use a build script to set the default feature to make sure that
-# only one backend feature is enabled.
-# using --no-default-features does not cut it here because we always need
-# at least one and only one backend feature set.
-# default = []
+# Feature flag to deactivate the default backend.
+selected-backend = []
 
-candle-accelerate = ["burn/candle", "burn/accelerate"]
-candle-cpu = ["burn/candle"]
-candle-cuda = ["burn/candle-cuda"]
-candle-metal = ["burn/candle", "burn/metal"]
-cuda = ["burn/cuda", "burn/fusion"]
-rocm = ["burn/rocm"]
-libtorch = ["burn/tch"]
-libtorch-cpu = ["burn/tch"]
+candle-accelerate = ["burn/candle", "burn/accelerate", "selected-backend"]
+candle-cpu = ["burn/candle", "selected-backend"]
+candle-cuda = ["burn/candle-cuda", "selected-backend"]
+candle-metal = ["burn/candle", "burn/metal", "selected-backend"]
+
+cuda = [
+    "burn/cuda",
+    # TODO: Autotune increases the global memory needs like crazy and makes the model panic.
+    #
+    #       Also there is a bug, since autotune runs for fusion when this setting is deactivated.
+    #
+    #       The reason it takes more memory is that we re-allocate the weights to run autotune for each 
+    #       micro-benchmark.
+    "burn/default",
+    # The compilation cache really help for the CLI.
+    "burn/compilation-cache",
+    "selected-backend",
+]
+# The compilation cache really help for the CLI.
+rocm = [
+    "burn/rocm",
+    "burn/fusion",
+    "burn/autotune",
+    "burn/compilation-cache",
+    "selected-backend",
+]
+
+libtorch = ["burn/tch", "selected-backend"]
+libtorch-cpu = ["burn/tch", "selected-backend"]
 ndarray = ["burn/ndarray"]
-ndarray-blas-accelerate = ["burn/ndarray", "burn/accelerate"]
-ndarray-blas-netlib = ["burn/ndarray", "burn/blas-netlib"]
-ndarray-blas-openblas = ["burn/ndarray", "burn/openblas"]
-wgpu = ["burn/wgpu", "burn/autotune"]
-vulkan = ["burn/vulkan", "burn/autotune", "burn/fusion"]
-wgpu-cpu = ["burn/wgpu", "burn/autotune", "burn/fusion"]
+ndarray-blas-accelerate = ["ndarray", "burn/accelerate"]
+ndarray-blas-netlib = ["ndarray", "burn/blas-netlib"]
+ndarray-blas-openblas = ["ndarray", "burn/openblas"]
+wgpu = ["burn/wgpu", "selected-backend"]
+vulkan = ["burn/vulkan", "selected-backend"]
+wgpu-cpu = ["burn/wgpu", "selected-backend"]
+
+f16 = []
+bf16 = []
+f32 = []
 
 [dependencies]
-burn = { workspace = true, features = ["wgpu", "autotune"] }
+burn = { workspace = true, default-features = false, features = ["ndarray"] }
 llama-burn = { path = "../../models/llama-burn" }
 burnlm-macros = { path = "../burnlm-macros" }
 

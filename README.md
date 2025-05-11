@@ -28,16 +28,6 @@ Type `help` to get a list of commands.
 
 # Usage
 
-## Burn Backend
-
-Select a Burn backend with the environment variable `BURNLM_BACKEND`.
-
-The list of available backends for your platform can be obtained with:
-
-```sh
-cargo burnlm backends
-```
-
 ## Models management
 
 The list of installed models is displayed with:

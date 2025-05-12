@@ -49,6 +49,11 @@ pub(crate) enum BackendValues {
     #[strum(to_string = "vulkan")]
     Vulkan,
 
+    // Metal -----------------------------------------------------------------
+    #[cfg(target_os = "macos")]
+    #[strum(to_string = "metal")]
+    Metal,
+
     // wgpu ------------------------------------------------------------------
     #[strum(to_string = "wgpu")]
     Wgpu,

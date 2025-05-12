@@ -20,6 +20,8 @@ pub(crate) fn handle() -> super::HandleCommandResult {
             "[2]CUDA"
         } else if backend_string.starts_with("rocm") {
             "[2]ROCm"
+        } else if backend_string.starts_with("metal") {
+            "[2]Metal"
         } else if backend_string.starts_with("ndarray") {
             "[4]ndarray"
         } else if backend_string.starts_with("libtorch") {

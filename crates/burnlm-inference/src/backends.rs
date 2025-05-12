@@ -122,19 +122,21 @@ pub mod burn_backend_types {
     pub const NAME: &str = "libtorch-cpu";
 }
 
-// WebGPU (default) ----------------------------------------------------------
+// WebGPU --------------------------------------------------------------------
 
-#[cfg(any(feature = "wgpu", feature = "vulkan",))]
+#[cfg(any(feature = "wgpu", feature = "vulkan", feature = "metal"))]
 pub mod burn_backend_types {
     use super::*;
     use burn::backend::wgpu::{Wgpu, WgpuDevice};
     pub type InferenceBackend = Wgpu<ElemType>;
     pub type InferenceDevice = WgpuDevice;
     pub const INFERENCE_DEVICE: InferenceDevice = WgpuDevice::DefaultDevice;
-    #[cfg(all(feature = "wgpu", not(feature = "vulkan")))]
+    #[cfg(all(feature = "wgpu", not(feature = "vulkan"), not(feature = "metal")))]
     pub const NAME: &str = "wgpu";
     #[cfg(feature = "vulkan")]
     pub const NAME: &str = "vulkan";
+    #[cfg(feature = "metal")]
+    pub const NAME: &str = "metal";
 }
 
 #[cfg(feature = "wgpu-cpu")]

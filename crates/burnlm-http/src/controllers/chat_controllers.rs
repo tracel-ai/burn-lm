@@ -1,9 +1,8 @@
 use crate::{errors::ServerResult, schemas::model_schemas::ModelSchema};
-use axum::async_trait;
 use burnlm_inference::InferencePlugin;
 
-#[async_trait]
-pub trait ChatController {
+#[trait_variant::make(ChatController: Send)]
+pub trait LocalChatController {
     async fn get_plugin(
         &mut self,
         name: &str,

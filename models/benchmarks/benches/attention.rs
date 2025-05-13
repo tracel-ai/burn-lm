@@ -5,7 +5,7 @@ use burn::{
 use burn_common::benchmark::{run_benchmark, Benchmark, BenchmarkResult};
 use llama_burn::transformer::{KeyValueCache, MultiHeadAttention, MultiHeadAttentionConfig};
 
-pub struct BinaryBenchmark<B: Backend> {
+pub struct AttentionBenchmark<B: Backend> {
     seq_length: usize,
     batch_size: usize,
     d_model: usize,
@@ -15,7 +15,7 @@ pub struct BinaryBenchmark<B: Backend> {
     rope: RotaryEncoding<B>,
 }
 
-impl<B: Backend> Benchmark for BinaryBenchmark<B> {
+impl<B: Backend> Benchmark for AttentionBenchmark<B> {
     type Args = (Tensor<B, 3>, KeyValueCache<B>);
 
     fn name(&self) -> String {
@@ -62,7 +62,7 @@ fn bench<B: Backend>(device: &B::Device) -> Vec<BenchmarkResult> {
 
     let attn = MultiHeadAttentionConfig::new(d_model, n_heads, n_heads).init(device);
     let rope = RotaryEncodingConfig::new(seq_length * 2, d_model / n_heads).init(device);
-    let benchmark = BinaryBenchmark::<B> {
+    let benchmark = AttentionBenchmark::<B> {
         batch_size,
         n_heads,
         seq_length,

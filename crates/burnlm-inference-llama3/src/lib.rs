@@ -33,7 +33,7 @@ pub struct Llama3ServerConfig {
     #[config(default = 0.9)]
     pub top_p: f64,
     /// Temperature value for controlling randomness in sampling.
-    #[config(default = 0.1)]
+    #[config(default = 0.0)]
     pub temperature: f64,
     /// Maximum sequence length for input text.
     #[config(default = 1024)]

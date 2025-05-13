@@ -1,5 +1,7 @@
 
 
+
+
 [package]
 authors = ["Tracel Technologies Inc."]
 categories = ["science"]
@@ -55,3 +57,20 @@ llama-burn = { path = "../llama-burn" }
 [[bench]]
 harness = false
 name = "attention"
+
+[[bench]]
+harness = false
+name = "transformer_block"
+
+[[bench]]
+harness = false
+name = "embedding"
+
+[[bench]]
+harness = false
+name = "transformer"
+
+
+[patch.crates-io]
+burn = { path = "../../burn//crates/burn", default-features = false }
+burn-common = { path = "../../burn//crates/burn/crates/burn-common", default-features = false }

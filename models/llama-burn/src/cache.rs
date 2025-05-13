@@ -18,7 +18,7 @@ impl<B: Backend> AutoregressiveCache<B> {
         device: &Device<B>,
     ) -> Self {
         Self {
-            cache: Some(Tensor::empty(
+            cache: Some(Tensor::zeros(
                 [max_batch_size, num_heads, max_seq_len, d_model],
                 device,
             )),
@@ -35,7 +35,7 @@ impl<B: Backend> AutoregressiveCache<B> {
 
         core::mem::drop(old_cache);
 
-        self.cache = Some(Tensor::empty(shape, &device));
+        self.cache = Some(Tensor::zeros(shape, &device));
         self.cur_seq_len = 0;
     }
 

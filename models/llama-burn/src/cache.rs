@@ -1,6 +1,6 @@
 use burn::tensor::{backend::Backend, Device, Tensor};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct AutoregressiveCache<B: Backend> {
     /// Tensor cache with shape `[batch_size, num_heads, seq_len, d_model]`
     cache: Tensor<B, 4>,

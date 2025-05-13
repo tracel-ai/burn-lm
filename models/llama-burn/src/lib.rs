@@ -3,7 +3,9 @@ pub mod llama;
 pub mod pretrained;
 pub mod sampling;
 pub mod tokenizer;
-mod transformer;
+
+/// Transformer model for Llama.
+pub mod transformer;
 
 #[cfg(test)]
 mod tests {

@@ -23,7 +23,7 @@ wgpu = ["burn/wgpu"]
 import = ["burn-import"]
 
 [dependencies]
-burn = { workspace = true, features = ["std"] }
+burn = { workspace = true, features = ["std"], default-features = false }
 burn-import = { workspace = true, optional = true }
 itertools = { version = "0.12.1", default-features = false, features = [
     "use_alloc",

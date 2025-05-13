@@ -4,17 +4,7 @@
 # https://doc.rust-lang.org/cargo/reference/resolver.html#feature-resolver-version-2
 resolver = "2"
 
-members = [
-    "crates/burnlm",
-    "crates/burnlm-cli",
-    "crates/burnlm-http",
-    "crates/burnlm-inference",
-    "crates/burnlm-inference-*",
-    "crates/burnlm-macros",
-    "crates/burnlm-registry",
-    "models/llama-burn",
-    "xtask",
-]
+members = ["crates/*", "models/benchmarks", "models/llama-burn", "xtask"]
 
 [workspace.package]
 edition = "2021"
@@ -24,7 +14,13 @@ readme = "README.md"
 
 [workspace.dependencies]
 # For dev we use the local version of burn
-burn = { path = "../burn/crates/burn", features = ["std"], default-features = false }
+burn = { path = "../burn/crates/burn", features = [
+    "std",
+], default-features = false }
+burn-common = { path = "../burn/crates/burn-common", features = [
+    "std",
+], default-features = false }
+
 burn-import = { path = "../burn/crates/burn-import" }
 # For release, but right now we need new features that are not released in Burn yet.
 # burn = { version = "0.17.0", default-features = false, features = ["std"] }

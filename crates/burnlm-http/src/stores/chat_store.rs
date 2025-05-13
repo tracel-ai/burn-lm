@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use axum::async_trait;
 use burnlm_inference::InferencePlugin;
 use burnlm_registry::Registry;
 
@@ -31,7 +30,6 @@ impl ChatStore {
     }
 }
 
-#[async_trait]
 impl ChatController for ChatStore {
     async fn list_models(&self) -> ServerResult<Vec<ModelSchema>> {
         let mut models = vec![];

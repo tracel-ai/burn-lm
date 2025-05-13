@@ -186,17 +186,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "async-trait"
-version = "0.1.88"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e539d3fca749fcee5236ab05e93a52867dd549cc157c8cb7f99595f3cedffdb5"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.101",
-]
-
-[[package]]
 name = "atomic_float"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -233,14 +222,14 @@ dependencies = [
 
 [[package]]
 name = "axum"
-version = "0.7.9"
+version = "0.8.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "edca88bc138befd0323b20752846e6587272d3b03b0343c8ea28a6f819e6e71f"
+checksum = "021e862c184ae977658b36c4500f7feac3221ca5da43e3f25bd04ab6c79a29b5"
 dependencies = [
- "async-trait",
- "axum-core 0.4.5",
+ "axum-core",
  "axum-macros",
  "bytes",
+ "form_urlencoded",
  "futures-util",
  "http",
  "http-body",
@@ -248,7 +237,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "itoa",
- "matchit 0.7.3",
+ "matchit",
  "memchr",
  "mime",
  "percent-encoding",
@@ -261,55 +250,6 @@ dependencies = [
  "sync_wrapper",
  "tokio",
  "tower",
- "tower-layer",
- "tower-service",
- "tracing",
-]
-
-[[package]]
-name = "axum"
-version = "0.8.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "021e862c184ae977658b36c4500f7feac3221ca5da43e3f25bd04ab6c79a29b5"
-dependencies = [
- "axum-core 0.5.2",
- "bytes",
- "futures-util",
- "http",
- "http-body",
- "http-body-util",
- "itoa",
- "matchit 0.8.4",
- "memchr",
- "mime",
- "percent-encoding",
- "pin-project-lite",
- "rustversion",
- "serde",
- "serde_json",
- "serde_path_to_error",
- "sync_wrapper",
- "tower",
- "tower-layer",
- "tower-service",
-]
-
-[[package]]
-name = "axum-core"
-version = "0.4.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "09f2bd6146b97ae3359fa0cc6d6b376d9539582c7b4220f041a33ec24c226199"
-dependencies = [
- "async-trait",
- "bytes",
- "futures-util",
- "http",
- "http-body",
- "http-body-util",
- "mime",
- "pin-project-lite",
- "rustversion",
- "sync_wrapper",
  "tower-layer",
  "tower-service",
  "tracing",
@@ -332,13 +272,14 @@ dependencies = [
  "sync_wrapper",
  "tower-layer",
  "tower-service",
+ "tracing",
 ]
 
 [[package]]
 name = "axum-macros"
-version = "0.4.2"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "57d123550fa8d071b7255cb0cc04dc302baa6c8c4a79f55701552684d8399bce"
+checksum = "604fde5e028fea851ce1d8570bbdc034bec850d157f7569d10f347d06808c05c"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -869,7 +810,7 @@ dependencies = [
 name = "burnlm-http"
 version = "0.0.1"
 dependencies = [
- "axum 0.7.9",
+ "axum",
  "burn",
  "burnlm-inference",
  "burnlm-registry",
@@ -889,6 +830,7 @@ dependencies = [
  "tower-http",
  "tracing",
  "tracing-subscriber",
+ "trait-variant",
  "utoipa",
  "utoipa-swagger-ui",
 ]
@@ -1477,6 +1419,7 @@ dependencies = [
 [[package]]
 name = "cubecl"
 version = "0.6.0"
+source = "git+https://github.com/tracel-ai/cubecl?rev=c151fd5efb5614efbeedebed05e10291181be8cf#c151fd5efb5614efbeedebed05e10291181be8cf"
 dependencies = [
  "cubecl-core",
  "cubecl-cuda",
@@ -1493,6 +1436,7 @@ dependencies = [
 [[package]]
 name = "cubecl-common"
 version = "0.6.0"
+source = "git+https://github.com/tracel-ai/cubecl?rev=c151fd5efb5614efbeedebed05e10291181be8cf#c151fd5efb5614efbeedebed05e10291181be8cf"
 dependencies = [
  "bytemuck",
  "derive-new 0.6.0",
@@ -1515,6 +1459,7 @@ dependencies = [
 [[package]]
 name = "cubecl-core"
 version = "0.6.0"
+source = "git+https://github.com/tracel-ai/cubecl?rev=c151fd5efb5614efbeedebed05e10291181be8cf#c151fd5efb5614efbeedebed05e10291181be8cf"
 dependencies = [
  "bitflags 2.9.0",
  "bytemuck",
@@ -1537,6 +1482,7 @@ dependencies = [
 [[package]]
 name = "cubecl-cpp"
 version = "0.6.0"
+source = "git+https://github.com/tracel-ai/cubecl?rev=c151fd5efb5614efbeedebed05e10291181be8cf#c151fd5efb5614efbeedebed05e10291181be8cf"
 dependencies = [
  "bytemuck",
  "cubecl-common",
@@ -1550,6 +1496,7 @@ dependencies = [
 [[package]]
 name = "cubecl-cuda"
 version = "0.6.0"
+source = "git+https://github.com/tracel-ai/cubecl?rev=c151fd5efb5614efbeedebed05e10291181be8cf#c151fd5efb5614efbeedebed05e10291181be8cf"
 dependencies = [
  "bytemuck",
  "cubecl-common",
@@ -1566,6 +1513,7 @@ dependencies = [
 [[package]]
 name = "cubecl-hip"
 version = "0.6.0"
+source = "git+https://github.com/tracel-ai/cubecl?rev=c151fd5efb5614efbeedebed05e10291181be8cf#c151fd5efb5614efbeedebed05e10291181be8cf"
 dependencies = [
  "bytemuck",
  "cubecl-common",
@@ -1592,6 +1540,7 @@ dependencies = [
 [[package]]
 name = "cubecl-ir"
 version = "0.6.0"
+source = "git+https://github.com/tracel-ai/cubecl?rev=c151fd5efb5614efbeedebed05e10291181be8cf#c151fd5efb5614efbeedebed05e10291181be8cf"
 dependencies = [
  "cubecl-common",
  "cubecl-macros-internal",
@@ -1609,6 +1558,7 @@ dependencies = [
 [[package]]
 name = "cubecl-linalg"
 version = "0.6.0"
+source = "git+https://github.com/tracel-ai/cubecl?rev=c151fd5efb5614efbeedebed05e10291181be8cf#c151fd5efb5614efbeedebed05e10291181be8cf"
 dependencies = [
  "bytemuck",
  "cubecl-common",
@@ -1624,6 +1574,7 @@ dependencies = [
 [[package]]
 name = "cubecl-macros"
 version = "0.6.0"
+source = "git+https://github.com/tracel-ai/cubecl?rev=c151fd5efb5614efbeedebed05e10291181be8cf#c151fd5efb5614efbeedebed05e10291181be8cf"
 dependencies = [
  "cubecl-common",
  "darling",
@@ -1638,6 +1589,7 @@ dependencies = [
 [[package]]
 name = "cubecl-macros-internal"
 version = "0.6.0"
+source = "git+https://github.com/tracel-ai/cubecl?rev=c151fd5efb5614efbeedebed05e10291181be8cf#c151fd5efb5614efbeedebed05e10291181be8cf"
 dependencies = [
  "darling",
  "proc-macro2",
@@ -1648,6 +1600,7 @@ dependencies = [
 [[package]]
 name = "cubecl-opt"
 version = "0.6.0"
+source = "git+https://github.com/tracel-ai/cubecl?rev=c151fd5efb5614efbeedebed05e10291181be8cf#c151fd5efb5614efbeedebed05e10291181be8cf"
 dependencies = [
  "cubecl-common",
  "cubecl-ir",
@@ -1663,6 +1616,7 @@ dependencies = [
 [[package]]
 name = "cubecl-random"
 version = "0.6.0"
+source = "git+https://github.com/tracel-ai/cubecl?rev=c151fd5efb5614efbeedebed05e10291181be8cf#c151fd5efb5614efbeedebed05e10291181be8cf"
 dependencies = [
  "cubecl-common",
  "cubecl-core",
@@ -1677,6 +1631,7 @@ dependencies = [
 [[package]]
 name = "cubecl-reduce"
 version = "0.6.0"
+source = "git+https://github.com/tracel-ai/cubecl?rev=c151fd5efb5614efbeedebed05e10291181be8cf#c151fd5efb5614efbeedebed05e10291181be8cf"
 dependencies = [
  "cubecl-core",
  "cubecl-runtime",
@@ -1689,6 +1644,7 @@ dependencies = [
 [[package]]
 name = "cubecl-runtime"
 version = "0.6.0"
+source = "git+https://github.com/tracel-ai/cubecl?rev=c151fd5efb5614efbeedebed05e10291181be8cf#c151fd5efb5614efbeedebed05e10291181be8cf"
 dependencies = [
  "async-channel",
  "bytemuck",
@@ -1712,6 +1668,7 @@ dependencies = [
 [[package]]
 name = "cubecl-spirv"
 version = "0.6.0"
+source = "git+https://github.com/tracel-ai/cubecl?rev=c151fd5efb5614efbeedebed05e10291181be8cf#c151fd5efb5614efbeedebed05e10291181be8cf"
 dependencies = [
  "bitflags 2.9.0",
  "cubecl-common",
@@ -1727,6 +1684,7 @@ dependencies = [
 [[package]]
 name = "cubecl-std"
 version = "0.6.0"
+source = "git+https://github.com/tracel-ai/cubecl?rev=c151fd5efb5614efbeedebed05e10291181be8cf#c151fd5efb5614efbeedebed05e10291181be8cf"
 dependencies = [
  "cubecl-core",
  "cubecl-runtime",
@@ -1737,6 +1695,7 @@ dependencies = [
 [[package]]
 name = "cubecl-wgpu"
 version = "0.6.0"
+source = "git+https://github.com/tracel-ai/cubecl?rev=c151fd5efb5614efbeedebed05e10291181be8cf#c151fd5efb5614efbeedebed05e10291181be8cf"
 dependencies = [
  "ash",
  "async-channel",
@@ -3651,12 +3610,6 @@ checksum = "8263075bb86c5a1b1427b5ae862e8889656f126e9f77c484496e8b47cf5c5558"
 dependencies = [
  "regex-automata 0.1.10",
 ]
-
-[[package]]
-name = "matchit"
-version = "0.7.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0e7465ac9959cc2b1404e8e2367b43684a6d13790fe23056cc8c6c5a6b7bcb94"
 
 [[package]]
 name = "matchit"
@@ -6420,6 +6373,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "trait-variant"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "70977707304198400eb4835a78f6a9f928bf41bba420deb8fdb175cd965d77a7"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.101",
+]
+
+[[package]]
 name = "try-lock"
 version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6630,7 +6594,7 @@ version = "9.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d29519b3c485df6b13f4478ac909a491387e9ef70204487c3b64b53749aec0be"
 dependencies = [
- "axum 0.8.4",
+ "axum",
  "base64 0.22.1",
  "mime_guess",
  "regex",

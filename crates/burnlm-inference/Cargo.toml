@@ -27,15 +27,18 @@ cuda = [
     "burn/compilation-cache",
     "selected-backend",
 ]
-# The compilation cache really help for the CLI.
 rocm = [
     "burn/rocm",
     "burn/fusion",
     "burn/autotune",
+    # The compilation cache really help for the CLI.
     "burn/compilation-cache",
     "selected-backend",
 ]
-
+metal = [
+    "burn/metal",
+    "selected-backend",
+]
 libtorch = ["burn/tch", "selected-backend"]
 libtorch-cpu = ["burn/tch", "selected-backend"]
 ndarray = ["burn/ndarray"]

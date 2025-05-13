@@ -17,6 +17,7 @@ cuda = ["burnlm-inference/cuda"]
 rocm = ["burnlm-inference/rocm"]
 wgpu = ["burnlm-inference/wgpu"]
 vulkan = ["burnlm-inference/vulkan"]
+metal = ["burnlm-inference/metal"]
 
 libtorch-cuda = ["burnlm-inference/libtorch"]
 libtorch-cpu = ["burnlm-inference/libtorch-cpu"]

@@ -30,7 +30,7 @@ impl StatEntry {
             | StatEntry::ModelDownloadingDuration(duration)
             | StatEntry::TotalDuration(duration)
             | StatEntry::TokensPerSecond(_, duration)
-            | StatEntry::ModelLoadingDuration(duration) => Some(duration.clone()),
+            | StatEntry::ModelLoadingDuration(duration) => Some(*duration),
             _ => None,
         }
     }

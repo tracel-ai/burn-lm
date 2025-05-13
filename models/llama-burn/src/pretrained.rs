@@ -68,7 +68,7 @@ mod downloader {
             let file_name = model_dir.join(&file_base_name);
             if file_name.exists() {
                 std::fs::remove_file(file_name)
-                    .expect(&format!("should delete model file '{file_base_name}'"));
+                    .unwrap_or_else(|_| panic!("should delete model file '{file_base_name}'"));
             }
             Ok(())
         }

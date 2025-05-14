@@ -53,14 +53,14 @@ impl<B: Backend> AutoregressiveCache<B> {
                 seq_len..self.max_seq_len,
                 0..d_model,
             ]);
-            cache = cache.slice_assign(
+            cache = cache.clone().slice_assign(
                 [0..batch_size, 0..num_heads, 0..self.cur_seq_len, 0..d_model],
                 prev_slice,
             );
             new_seq_len = self.max_seq_len;
         }
 
-        cache = cache.slice_assign(
+        cache = cache.clone().slice_assign(
             [
                 0..batch_size,
                 0..num_heads,

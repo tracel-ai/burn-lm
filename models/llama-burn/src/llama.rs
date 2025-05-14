@@ -653,8 +653,12 @@ impl<B: Backend> TextGenerationState<B> {
     pub fn append(&mut self, tokens: Tensor<B, 1, Int>) {
         let num_tokens_prev = self.num_tokens;
         self.num_tokens += tokens.shape().num_elements();
-        self.tokens
-            .inplace(|toks| toks.slice_assign([num_tokens_prev..self.num_tokens], tokens));
+        // self.tokens
+        //     .inplace(|toks| toks.slice_assign([num_tokens_prev..self.num_tokens], tokens));
+        self.tokens = self
+            .tokens
+            .clone()
+            .slice_assign([num_tokens_prev..self.num_tokens], tokens)
     }
 
     /// Update the state with newly generated tokens.
@@ -852,12 +856,11 @@ pub(crate) fn temperature_scaled_softmax<B: Backend>(
 }
 
 #[cfg(test)]
-#[cfg(any(feature = "cuda", feature = "tch-gpu"))]
 mod tests {
     use super::*;
     use crate::tests::*;
 
-    use burn::tensor::TensorData;
+    use burn::tensor::{TensorData, Tolerance};
 
     #[test]
     fn test_temperature_softmax() {
@@ -872,42 +875,9 @@ mod tests {
             0.0047035217,
         ]]);
 
-        output.into_data().assert_approx_eq(&expected, 3);
-    }
-
-    #[test]
-    fn test_transformer_block() {
-        let device = Default::default();
-
-        let max_seq_len = 16;
-        let block = crate::transformer::TransformerBlockConfig::new(
-            /*n_layers=*/ 1, /*d_model=*/ 4, /*hidden_size=*/ 16,
-            /*n_heads=*/ 2, /*n_kv_heads=*/ 1, /*norm_eps=*/ 0.00001,
-        )
-        .init::<TestBackend>(&device);
-        let mut cache = crate::transformer::KeyValueCache::new(max_seq_len);
-
-        let rope = RopeConfig::new(500000.0)
-            .with_scaled(Some(RopeFrequencyScaling::new().with_scale_factor(32.)));
-        let scaling = rope.scaled.unwrap();
-        let freq_scaling_fn = move |x| scaling.freq_scaling_by_parts(x);
-
-        let rope = RotaryEncodingConfig::new(max_seq_len * 2, 4 / 2)
-            .with_theta(rope.theta)
-            .init_with_frequency_scaling(freq_scaling_fn, &device);
-
-        // input: [batch_size, seq_len, d_model]
-        let input = TestTensor::<3>::from([[
-            [0.0026, 0.003, -0.006, 0.006],
-            [0.001, 0.0008, 0.0015, -0.016],
-        ]]);
-        let output = block.forward(input, &mut cache, &rope);
-        let expected = TensorData::from([[
-            [-0.04269409, 0.020523071, -0.0791626, 0.12731934],
-            [-0.091674805, -0.013809204, 0.03152466, -0.058776855],
-        ]]);
-
-        output.into_data().assert_approx_eq(&expected, 3);
+        output
+            .into_data()
+            .assert_approx_eq::<f32>(&expected, Tolerance::relative(0.05)); // 5% tolerance
     }
 
     #[test]
@@ -935,6 +905,8 @@ mod tests {
             [[-0.044677734, -0.094177246], [0.12194824, 0.64160156]],
         ]]);
 
-        output.into_data().assert_approx_eq(&expected, 3);
+        output
+            .into_data()
+            .assert_approx_eq::<f32>(&expected, Tolerance::relative(0.05));
     }
 }

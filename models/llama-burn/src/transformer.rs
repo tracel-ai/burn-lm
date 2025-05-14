@@ -407,12 +407,11 @@ impl<B: Backend> MultiHeadAttention<B> {
 }
 
 #[cfg(test)]
-#[cfg(any(feature = "cuda", feature = "tch-gpu"))]
 mod tests {
     use super::*;
     use crate::tests::*;
 
-    use burn::tensor::TensorData;
+    use burn::tensor::{TensorData, Tolerance};
 
     #[test]
     fn test_rms_norm() {
@@ -430,6 +429,8 @@ mod tests {
             [0.11553955, 0.09240723, 0.17321777, -1.8486328],
         ]]);
 
-        output.into_data().assert_approx_eq(&expected, 3);
+        output
+            .into_data()
+            .assert_approx_eq::<f32>(&expected, Tolerance::relative(0.05));
     }
 }

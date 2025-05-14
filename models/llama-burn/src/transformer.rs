@@ -411,7 +411,11 @@ mod tests {
     use super::*;
     use crate::tests::*;
 
-    use burn::tensor::{TensorData, Tolerance};
+    use burn::{
+        module::{ModuleWiper, WipeStrategy},
+        nn::RotaryEncodingConfig,
+        tensor::{ElementConversion, TensorData, Tolerance},
+    };
 
     #[test]
     fn test_rms_norm() {
@@ -432,5 +436,70 @@ mod tests {
         output
             .into_data()
             .assert_approx_eq::<f32>(&expected, Tolerance::relative(0.05));
+    }
+
+    #[test]
+    fn test_transformer() {
+        let device: Device<TestBackend> = Default::default();
+        let config = TransformerConfig::new(8, 2, 8, 16, 2, 1);
+        let transformer: Transformer<TestBackend> = config.init(&device);
+
+        let batch_size = 2;
+        let seq_length = 2;
+
+        let mut caches = (0..config.n_layers)
+            .map(|_| {
+                KeyValueCache::new(
+                    batch_size,
+                    config.n_heads,
+                    seq_length,
+                    config.d_model,
+                    &device,
+                )
+            })
+            .collect();
+
+        let rope = RotaryEncodingConfig::new(seq_length * 2, config.d_model / config.n_heads)
+            .init(&device);
+        let input = Tensor::arange(0..(batch_size * seq_length) as i64, &device)
+            .reshape([batch_size, seq_length]);
+
+        let mut wiper = ModuleWiper::<TestBackend>::new(
+            WipeStrategy::Arange(Some(burn::module::WipeNormalization::Uniform {
+                min: 0.elem(),
+                max: 5.elem(),
+            })),
+            WipeStrategy::Arange(None),
+        );
+
+        let transformer = transformer.map(&mut wiper);
+
+        let output = transformer.forward(input, &mut caches, &rope);
+
+        let expected = TensorData::from([
+            [
+                [
+                    56.37573, 57.77283, 59.169933, 60.567043, 61.964146, 63.361248, 64.758354,
+                    66.15546,
+                ],
+                [
+                    56.374626, 57.77171, 59.168793, 60.56588, 61.962963, 63.360046, 64.75713,
+                    66.15422,
+                ],
+            ],
+            [
+                [
+                    56.374252, 57.771328, 59.168407, 60.565487, 61.962566, 63.359642, 64.75672,
+                    66.1538,
+                ],
+                [
+                    56.37408, 57.771156, 59.168232, 60.565304, 61.96238, 63.359455, 64.75653,
+                    66.15361,
+                ],
+            ],
+        ]);
+        output
+            .into_data()
+            .assert_approx_eq::<f32>(&expected, Tolerance::relative(0.001));
     }
 }

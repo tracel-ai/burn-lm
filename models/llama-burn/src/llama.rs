@@ -107,6 +107,20 @@ impl LlamaConfig {
             )
     }
 
+    /// Llama-3.2-3B configuration for testing..
+    pub fn llama3_2_1b_test() -> Self {
+        // hidden_size = 8192; vocab_size = bytes == 255
+        Self::new(128, 255, "test".to_string())
+            .with_d_model(64)
+            .with_num_hidden_layers(2)
+            .with_num_attention_heads(4)
+            .with_num_key_value_heads(Some(2))
+            .with_rope(
+                RopeConfig::new(500000.0)
+                    .with_scaled(Some(RopeFrequencyScaling::new().with_scale_factor(32.))),
+            )
+    }
+
     /// Llama-3.2-1B configuration.
     pub fn llama3_2_1b(tokenizer_path: &str) -> Self {
         // hidden_size = 8192; vocab_size = 128256
@@ -757,13 +771,14 @@ impl<B: Backend, T: Tokenizer> Llama<B, T> {
         let num_tokens = state.num_tokens_generated();
         let tokens = state
             .tokens
-            .slice([prompt_len..prompt_len + num_tokens - 1]) // -1 to ignore stop token
+            .slice([prompt_len..prompt_len + num_tokens - 1])
             .into_data()
             .iter::<B::IntElem>()
             .map(|t| t.elem::<u32>())
             .collect::<Vec<_>>();
 
         let generated = self.tokenizer.decode(tokens);
+
         GenerationOutput {
             text: generated,
             tokens: num_tokens,
@@ -858,9 +873,12 @@ pub(crate) fn temperature_scaled_softmax<B: Backend>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tests::*;
+    use crate::{tests::*, tokenizer::byte::ByteTokenizer};
 
-    use burn::tensor::{TensorData, Tolerance};
+    use burn::{
+        module::{ModuleWiper, WipeStrategy},
+        tensor::{TensorData, Tolerance},
+    };
 
     #[test]
     fn test_temperature_softmax() {
@@ -908,5 +926,28 @@ mod tests {
         output
             .into_data()
             .assert_approx_eq::<f32>(&expected, Tolerance::relative(0.05));
+    }
+
+    #[test]
+    fn test_llama3_2_3b_test() {
+        let device: Device<TestBackend> = Default::default();
+        let config = LlamaConfig::llama3_2_1b_test();
+        let mut llama = config.init::<TestBackend, ByteTokenizer>(&device).unwrap();
+
+        let mut wiper = ModuleWiper::<TestBackend>::new(
+            WipeStrategy::Random {
+                seed: 0,
+                min: (-1).elem(),
+                max: 1.elem(),
+            },
+            WipeStrategy::Arange(None),
+        );
+
+        llama.model = llama.model.map(&mut wiper);
+
+        let result = llama.generate("This is a test", 64, 0.0, &mut Sampler::Argmax);
+        let expected = "[187, 114, 51, 146, 146, 250, 112, 224, 192, 99, 132, 0, 0, 180, 192, 99, 19, 114, 19, 174, 0, 180, 192, 131, 132, 19, 99, 114, 131, 132, 249, 146, 82, 28, 226, 226, 148, 84, 19, 192, 83, 99, 19, 249, 19, 251, 222, 19, 192, 180, 192, 180, 192, 0, 180, 192, 146, 20, 0, 180, 192, 180]";
+
+        assert_eq!(result.text, expected);
     }
 }

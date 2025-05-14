@@ -1,5 +1,5 @@
 [profiling]
-logger = { file = "/tmp/profiling.log", level = "disabled" }
+logger = { file = "/tmp/profiling.log", level = "minimal" }
 
 [autotune]
 logger = { file = "/tmp/autotune.log", level = "minimal" }

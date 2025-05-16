@@ -1,8 +1,4 @@
 
-
-
-
-
 [package]
 authors = ["Tracel Technologies Inc."]
 categories = ["science"]
@@ -70,8 +66,3 @@ name = "embedding"
 [[bench]]
 harness = false
 name = "transformer"
-
-
-[patch.crates-io]
-burn = { path = "../../burn//crates/burn", default-features = false }
-burn-common = { path = "../../burn//crates/burn/crates/burn-common", default-features = false }

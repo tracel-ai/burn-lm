@@ -876,7 +876,7 @@ mod tests {
     use crate::{tests::*, tokenizer::byte::ByteTokenizer};
 
     use burn::{
-        module::{ModuleWiper, WipeStrategy},
+        module::Reinitializer,
         tensor::{TensorData, Tolerance},
     };
 
@@ -898,6 +898,18 @@ mod tests {
             .assert_approx_eq::<f32>(&expected, Tolerance::relative(0.05)); // 5% tolerance
     }
 
+    #[test]
+    fn test_arange() {
+        let tensor = Tensor::<TestBackend, 1, Int>::arange(0..8, &Default::default());
+
+        let val1 = tensor.clone().slice([0..1]);
+        let val2 = tensor.clone().slice([1..2]);
+        let val3 = tensor.slice([2..3]);
+
+        val1.into_data().assert_eq(&TensorData::from([0]), false);
+        val2.into_data().assert_eq(&TensorData::from([1]), false);
+        val3.into_data().assert_eq(&TensorData::from([2]), false);
+    }
     #[test]
     fn test_rope() {
         let device = Default::default();
@@ -934,16 +946,9 @@ mod tests {
         let config = LlamaConfig::llama3_2_1b_test();
         let mut llama = config.init::<TestBackend, ByteTokenizer>(&device).unwrap();
 
-        let mut wiper = ModuleWiper::<TestBackend>::new(
-            WipeStrategy::Random {
-                seed: 0,
-                min: (-1).elem(),
-                max: 1.elem(),
-            },
-            WipeStrategy::Arange(None),
-        );
-
-        llama.model = llama.model.map(&mut wiper);
+        llama.model = Reinitializer::new()
+            .random_float(0, -1.0, 1.0)
+            .apply(llama.model);
 
         let result = llama.generate("This is a test", 64, 0.0, &mut Sampler::Argmax);
         let expected = "[187, 114, 51, 146, 146, 250, 112, 224, 192, 99, 132, 0, 0, 180, 192, 99, 19, 114, 19, 174, 0, 180, 192, 131, 132, 19, 99, 114, 131, 132, 249, 146, 82, 28, 226, 226, 148, 84, 19, 192, 83, 99, 19, 249, 19, 251, 222, 19, 192, 180, 192, 180, 192, 0, 180, 192, 146, 20, 0, 180, 192, 180]";

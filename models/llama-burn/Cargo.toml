@@ -16,7 +16,8 @@ tiny = ["dep:tokenizers"]
 # Example feature flags (backend selection)
 tch-cpu = ["burn/tch"]
 tch-gpu = ["burn/tch"]
-cuda = ["burn/cuda"]
+cuda = ["burn/cuda", "burn/default"]
+#"burn/autotune-checks"]
 wgpu = ["burn/wgpu"]
 
 # To import pytorch weights

@@ -412,9 +412,9 @@ mod tests {
     use crate::tests::*;
 
     use burn::{
-        module::{ModuleWiper, WipeStrategy},
+        module::Reinitializer,
         nn::RotaryEncodingConfig,
-        tensor::{ElementConversion, TensorData, Tolerance},
+        tensor::{TensorData, Tolerance},
     };
 
     #[test]
@@ -464,15 +464,9 @@ mod tests {
         let input = Tensor::arange(0..(batch_size * seq_length) as i64, &device)
             .reshape([batch_size, seq_length]);
 
-        let mut wiper = ModuleWiper::<TestBackend>::new(
-            WipeStrategy::Arange(Some(burn::module::WipeNormalization::Uniform {
-                min: 0.elem(),
-                max: 5.elem(),
-            })),
-            WipeStrategy::Arange(None),
-        );
-
-        let transformer = transformer.map(&mut wiper);
+        let transformer = Reinitializer::new()
+            .range_float(0.0, 5.0)
+            .apply(transformer);
 
         let output = transformer.forward(input, &mut caches, &rope);
 

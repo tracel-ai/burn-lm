@@ -915,16 +915,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "burnlm-inference-template"
-version = "0.0.1"
-dependencies = [
- "burn",
- "burnlm-inference",
- "rand 0.9.1",
- "serde",
-]
-
-[[package]]
 name = "burnlm-llama"
 version = "0.1.0"
 dependencies = [
@@ -954,13 +944,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "burnlm-parrot"
+version = "0.0.1"
+dependencies = [
+ "burn",
+ "burnlm-inference",
+ "rand 0.9.1",
+ "serde",
+]
+
+[[package]]
 name = "burnlm-registry"
 version = "0.0.1"
 dependencies = [
  "burnlm-inference",
- "burnlm-inference-template",
  "burnlm-llama",
  "burnlm-macros",
+ "burnlm-parrot",
 ]
 
 [[package]]

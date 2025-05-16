@@ -667,12 +667,8 @@ impl<B: Backend> TextGenerationState<B> {
     pub fn append(&mut self, tokens: Tensor<B, 1, Int>) {
         let num_tokens_prev = self.num_tokens;
         self.num_tokens += tokens.shape().num_elements();
-        // self.tokens
-        //     .inplace(|toks| toks.slice_assign([num_tokens_prev..self.num_tokens], tokens));
-        self.tokens = self
-            .tokens
-            .clone()
-            .slice_assign([num_tokens_prev..self.num_tokens], tokens)
+        self.tokens
+            .inplace(|toks| toks.slice_assign([num_tokens_prev..self.num_tokens], tokens));
     }
 
     /// Update the state with newly generated tokens.

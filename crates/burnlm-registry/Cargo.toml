@@ -15,4 +15,4 @@ burnlm-llama = { path = "../burnlm-llama", features = [
     "llama3",
     "tiny",
 ] }
-burnlm-inference-template = { path = "../burnlm-inference-template" }
+burnlm-parrot = { path = "../burnlm-parrot" }

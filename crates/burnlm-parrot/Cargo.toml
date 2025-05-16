@@ -1,5 +1,5 @@
 [package]
-name = "burnlm-inference-template"
+name = "burnlm-parrot"
 edition.workspace = true
 version.workspace = true
 license.workspace = true
@@ -11,4 +11,3 @@ burnlm-inference = { path = "../burnlm-inference" }
 
 rand = { workspace = true }
 serde = { workspace = true }
-

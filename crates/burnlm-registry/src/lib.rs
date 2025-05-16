@@ -25,12 +25,12 @@ pub type DynClients = HashMap<&'static str, Box<dyn InferencePlugin>>;
         server_type = "Llama323bInstructServer<InferenceBackend>",
     ),
     server(
-        crate_namespace = "burnlm_inference_template",
-        server_type = "ParrotServer<InferenceBackend>",
-    ),
-    server(
         crate_namespace = "burnlm_llama::server::tiny",
         server_type = "TinyLlamaServer<InferenceBackend>",
+    ),
+    server(
+        crate_namespace = "burnlm_parrot",
+        server_type = "ParrotServer<InferenceBackend>",
     )
 )]
 #[derive(Debug)]

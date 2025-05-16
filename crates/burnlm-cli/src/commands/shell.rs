@@ -108,13 +108,16 @@ pub(crate) fn handle(backend: &str, dtype: &str) -> anyhow::Result<()> {
             }
         };
 
-        let mut shell = cloop::Shell::new(
-            format!("{app_name}{delim}"),
-            ShellContext::default(),
-            ShellEditor::new(editor.clone()),
-            parser.clone(),
-            handler,
-        );
+        let mut shell = {
+            ShellContext::default();
+            cloop::Shell::new(
+                format!("{app_name}{delim}"),
+                (),
+                ShellEditor::new(editor.clone()),
+                parser.clone(),
+                handler,
+            )
+        };
 
         shell.run().unwrap();
     }

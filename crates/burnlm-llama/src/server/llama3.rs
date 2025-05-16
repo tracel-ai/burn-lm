@@ -1,17 +1,16 @@
-#![recursion_limit = "256"]
-
 use rand::Rng;
 use serde::Deserialize;
 use std::sync::{Arc, Mutex};
 
-use burn::prelude::Backend;
-use burnlm_inference::*;
-use llama_burn::{
-    llama::{self, Llama},
+use crate::{
+    self as llama,
     pretrained::{self, ModelMeta},
     sampling::{Sampler, TopP},
     tokenizer::Tiktoken,
+    Llama,
 };
+use burn::prelude::Backend;
+use burnlm_inference::*;
 
 #[derive(Clone, Debug, Default)]
 /// Llama-3 model variants to load.

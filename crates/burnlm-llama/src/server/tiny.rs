@@ -1,17 +1,16 @@
-#![recursion_limit = "256"]
-
 use rand::Rng;
 use serde::Deserialize;
 use std::sync::{Arc, Mutex};
 
-use burn::prelude::Backend;
-use burnlm_inference::*;
-use llama_burn::{
-    llama::{self, Llama},
+use crate::{
+    self as llama,
     pretrained::{self, ModelMeta},
     sampling::{Sampler, TopP},
     tokenizer::SentiencePieceTokenizer,
+    Llama,
 };
+use burn::prelude::Backend;
+use burnlm_inference::*;
 
 #[inference_server_config]
 pub struct TinyLlamaServerConfig {

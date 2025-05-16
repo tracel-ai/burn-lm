@@ -3,7 +3,7 @@ use burn::{
     tensor::{backend::Backend, Distribution, Element, Tensor},
 };
 use burn_common::benchmark::{run_benchmark, Benchmark, BenchmarkResult};
-use llama_burn::transformer::{KeyValueCache, MultiHeadAttention, MultiHeadAttentionConfig};
+use burnlm_llama::transformer::{KeyValueCache, MultiHeadAttention, MultiHeadAttentionConfig};
 
 pub struct AttentionBenchmark<B: Backend> {
     seq_length: usize,

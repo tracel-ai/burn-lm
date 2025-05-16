@@ -39,8 +39,8 @@ fn start_web(backend: &str, dtype: &str) -> super::HandleCommandResult {
     up_docker_compose()?;
     // write mprocs file from template
     let template = std::fs::read_to_string(MPROC_WEB_TEMPLATE).unwrap();
-    let script = template.replace("{{BACKEND}}", &backend.to_string());
-    let script = script.replace("{{DTYPE}}", &dtype.to_string());
+    let script = template.replace("{{BACKEND}}", backend);
+    let script = script.replace("{{DTYPE}}", dtype);
     std::fs::create_dir_all("tmp").expect("directory should be created");
     let mut file = std::fs::File::create(MPROC_WEB_CONFIG).unwrap();
     file.write_all(script.as_bytes()).unwrap();

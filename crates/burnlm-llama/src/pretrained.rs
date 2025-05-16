@@ -18,7 +18,7 @@ mod downloader {
             dirs::home_dir()
                 .expect("Should be able to get home directory")
                 .join(".cache")
-                .join("llama-burn")
+                .join("llama")
                 .join(self.name)
         }
 

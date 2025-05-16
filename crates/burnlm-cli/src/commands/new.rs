@@ -116,7 +116,7 @@ pub fn add_inference_server_registration<P: AsRef<std::path::Path>>(
         // to last registry entry.
         // Indeed we cannot let a trailing command for the last entry because
         // cargo format removes it.
-        Some(rel_idx) => start_index + rel_idx - "\n".bytes().len(),
+        Some(rel_idx) => start_index + rel_idx - "\n".len(),
         None => {
             return Err(anyhow::format_err!(
                 "Could not find the closing )] for the inference_server_registry attribute."

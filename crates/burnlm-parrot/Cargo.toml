@@ -1,5 +1,5 @@
 [package]
-name = "burnlm-inference-tinyllama"
+name = "burnlm-parrot"
 edition.workspace = true
 version.workspace = true
 license.workspace = true
@@ -8,8 +8,6 @@ readme.workspace = true
 [dependencies]
 burn = { workspace = true }
 burnlm-inference = { path = "../burnlm-inference" }
-llama-burn = { path = "../../models/llama-burn", features = ["tiny"] }
 
 rand = { workspace = true }
 serde = { workspace = true }
-

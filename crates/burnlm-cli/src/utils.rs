@@ -124,7 +124,7 @@ pub(crate) fn run_process(
 
 /// Display stats from a completion
 pub fn display_stats(completion: &Completion) {
-    let stats = format!("{}", completion.stats.display_stats());
+    let stats = completion.stats.display_stats().to_string();
     let fmt_stats = stats.italic();
     println!("{fmt_stats}");
 }

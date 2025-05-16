@@ -10,6 +10,9 @@ burnlm-inference = { path = "../burnlm-inference" }
 burnlm-macros = { path = "../burnlm-macros" }
 
 # plugins
-burnlm-inference-llama3 = { path = "../burnlm-inference-llama3" }
-burnlm-inference-template = { path = "../burnlm-inference-template" }
-burnlm-inference-tinyllama = { path = "../burnlm-inference-tinyllama" }
+burnlm-llama = { path = "../burnlm-llama", features = [
+    "inference-server",
+    "llama3",
+    "tiny",
+] }
+burnlm-parrot = { path = "../burnlm-parrot" }

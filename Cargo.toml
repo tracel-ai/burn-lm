@@ -4,7 +4,7 @@
 # https://doc.rust-lang.org/cargo/reference/resolver.html#feature-resolver-version-2
 resolver = "2"
 
-members = ["crates/*", "models/benchmarks", "models/llama-burn", "xtask"]
+members = ["crates/*", "benchmarks", "xtask"]
 
 [workspace.package]
 edition = "2021"

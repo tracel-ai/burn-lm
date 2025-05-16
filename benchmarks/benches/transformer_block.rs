@@ -3,7 +3,7 @@ use burn::{
     tensor::{backend::Backend, Distribution, Element, Tensor},
 };
 use burn_common::benchmark::{run_benchmark, Benchmark, BenchmarkResult};
-use llama_burn::transformer::{KeyValueCache, TransformerBlock, TransformerBlockConfig};
+use burnlm_llama::transformer::{KeyValueCache, TransformerBlock, TransformerBlockConfig};
 
 pub struct TransformerBlockBenchmark<B: Backend> {
     seq_length: usize,

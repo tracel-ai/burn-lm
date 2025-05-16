@@ -122,9 +122,9 @@ async fn handle_streaming_response(
                 let loading_stats = tokio::task::spawn_blocking({
                     let plugin = plugin.clone();
                     move || {
-                        plugin
-                            .load()
-                            .expect(&format!("model '{}' should load", plugin.model_name()))
+                        plugin.load().unwrap_or_else(|_| {
+                            panic!("model '{}' should load", plugin.model_name())
+                        })
                     }
                 })
                 .await

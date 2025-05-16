@@ -1,9 +1,14 @@
+#![recursion_limit = "256"]
+
 pub(crate) mod cache;
 pub mod pretrained;
 pub mod sampling;
 pub mod tokenizer;
 
 mod base;
+
+#[cfg(feature = "inference-server")]
+pub mod server;
 
 /// Transformer model for Llama.
 pub mod transformer;

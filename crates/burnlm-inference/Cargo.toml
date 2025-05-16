@@ -52,7 +52,6 @@ f32 = []
 
 [dependencies]
 burn = { workspace = true, default-features = false, features = ["ndarray"] }
-burnlm-llama = { path = "../burnlm-llama" }
 burnlm-macros = { path = "../burnlm-macros" }
 
 clap = { workspace = true }

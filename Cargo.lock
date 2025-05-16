@@ -902,7 +902,6 @@ name = "burnlm-inference"
 version = "0.0.1"
 dependencies = [
  "burn",
- "burnlm-llama",
  "burnlm-macros",
  "clap",
  "comfy-table",
@@ -916,33 +915,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "burnlm-inference-llama3"
-version = "0.0.1"
-dependencies = [
- "burn",
- "burnlm-inference",
- "burnlm-llama",
- "rand 0.9.1",
- "serde",
-]
-
-[[package]]
 name = "burnlm-inference-template"
 version = "0.0.1"
 dependencies = [
  "burn",
  "burnlm-inference",
- "rand 0.9.1",
- "serde",
-]
-
-[[package]]
-name = "burnlm-inference-tinyllama"
-version = "0.0.1"
-dependencies = [
- "burn",
- "burnlm-inference",
- "burnlm-llama",
  "rand 0.9.1",
  "serde",
 ]
@@ -954,6 +931,7 @@ dependencies = [
  "base64 0.22.1",
  "burn",
  "burn-import",
+ "burnlm-inference",
  "clap",
  "dirs 5.0.1",
  "itertools 0.12.1",
@@ -980,9 +958,8 @@ name = "burnlm-registry"
 version = "0.0.1"
 dependencies = [
  "burnlm-inference",
- "burnlm-inference-llama3",
  "burnlm-inference-template",
- "burnlm-inference-tinyllama",
+ "burnlm-llama",
  "burnlm-macros",
 ]
 

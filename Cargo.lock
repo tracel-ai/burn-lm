@@ -875,7 +875,6 @@ dependencies = [
  "axum",
  "burn",
  "burnlm-inference",
- "burnlm-llama",
  "burnlm-registry",
  "chrono",
  "clap",

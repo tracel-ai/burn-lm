@@ -41,7 +41,7 @@ pub(crate) fn handle(
             let mut run_args = vec!["run"];
             run_args.extend(common_args.clone());
             run_args.extend(vec!["--", "run", "--port", &port_string]);
-            let run_args = format!("{}", run_args.join(" "));
+            let run_args = run_args.join(" ").to_string();
             watch_args.push(&run_args);
             let mut spin_msg = super::SpinningMessage::new(
                 &format!("compiling {backend} server..."),

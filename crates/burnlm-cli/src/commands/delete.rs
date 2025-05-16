@@ -11,7 +11,7 @@ pub(crate) fn create() -> clap::Command {
     let mut reg_entries: Vec<_> = registry
         .get()
         .iter()
-        .filter(|(_, p)| deletable(*p))
+        .filter(|(_, p)| deletable(p))
         .collect();
     reg_entries.sort_by_key(|(key, ..)| *key);
     for (_name, plugin) in reg_entries {
@@ -30,7 +30,7 @@ pub(crate) fn handle(args: &clap::ArgMatches) -> super::HandleCommandResult {
             let mut candidates: Vec<(String, fn() -> InferenceResult<Option<Stats>>)> = registry
                 .get()
                 .iter()
-                .filter(|(_, p)| deletable(*p))
+                .filter(|(_, p)| deletable(p))
                 .map(|(n, p)| (n.to_string(), p.deleter().unwrap()))
                 .collect();
             candidates.sort_by(|(n1, ..), (n2, ..)| n1.cmp(n2));

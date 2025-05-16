@@ -21,12 +21,12 @@ impl Tokenizer for ByteTokenizer {
         } else {
             vec![]
         };
-        let content = text.bytes().into_iter().map(|b| b as u32);
+        let content = text.bytes().map(|b| b as u32);
 
         bos_token
             .into_iter()
             .chain(content)
-            .chain(eos_token.into_iter())
+            .chain(eos_token)
             .collect()
     }
 

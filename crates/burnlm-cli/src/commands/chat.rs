@@ -173,7 +173,7 @@ pub(crate) fn handle(
         }
     };
 
-    println!("");
+    println!();
     let mut shell = cloop::Shell::new(
         format!("{app_name}{delim}"),
         ChatContext::new(),

@@ -65,7 +65,7 @@ impl SpinningMessage {
         let now = std::time::Instant::now();
         let spinner = spinners::Spinner::new(
             spinners::Spinners::Bounce,
-            start_msg.bright_black().to_string().into(),
+            start_msg.bright_black().to_string(),
         );
         Self {
             end_message: end_msg.to_owned(),
@@ -86,9 +86,9 @@ impl SpinningMessage {
             let elapsed_msg = format!("({:.3}s)", elapsed);
             let completion_msg = format!(
                 "{} {} {}",
-                "✓".bright_green().bold().to_string(),
-                self.end_message.bright_black().bold().to_string(),
-                elapsed_msg.bright_black().italic().to_string(),
+                "✓".bright_green().bold(),
+                self.end_message.bright_black().bold(),
+                elapsed_msg.bright_black().italic(),
             );
             self.spinner.stop_with_message(completion_msg);
         }

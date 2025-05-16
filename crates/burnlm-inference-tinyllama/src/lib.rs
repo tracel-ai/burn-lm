@@ -6,11 +6,11 @@ use std::sync::{Arc, Mutex};
 
 use burn::prelude::Backend;
 use burnlm_inference::*;
-use llama_burn::{
-    llama::{self, Llama},
+use llama::{
     pretrained::{self, ModelMeta},
     sampling::{Sampler, TopP},
     tokenizer::SentiencePieceTokenizer,
+    Llama,
 };
 
 #[inference_server_config]

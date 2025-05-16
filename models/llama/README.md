@@ -1,6 +1,6 @@
 # Llama Burn
 
-<img src="./assets/llama-burn.jpeg" alt="An image of a llama surrounded by fiery colors and a gust of fire" width="500px"/>
+<img src="./assets/llama.jpeg" alt="An image of a llama surrounded by fiery colors and a gust of fire" width="500px"/>
 
 The popular Llama LLM is here!
 
@@ -18,7 +18,7 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-llama-burn = { git = "https://github.com/tracel-ai/models", package = "llama-burn", default-features = false }
+llama = { git = "https://github.com/tracel-ai/models", package = "llama", default-features = false }
 ```
 
 If you want to use Llama 3 or TinyLlama (including pre-trained weights if default features are
@@ -30,14 +30,14 @@ active), enable the corresponding feature flag.
 
 ```toml
 [dependencies]
-llama-burn = { git = "https://github.com/tracel-ai/models", package = "llama-burn", features = ["llama3"] }
+llama = { git = "https://github.com/tracel-ai/models", package = "llama", features = ["llama3"] }
 ```
 
 #### TinyLlama
 
 ```toml
 [dependencies]
-llama-burn = { git = "https://github.com/tracel-ai/models", package = "llama-burn", features = ["tiny"] }
+llama = { git = "https://github.com/tracel-ai/models", package = "llama", features = ["tiny"] }
 ```
 
 ### Example Usage

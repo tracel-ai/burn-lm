@@ -1,7 +1,7 @@
 [package]
 authors = ["guillaumelagrange <lagrange.guillaume.1@gmail.com>"]
 license = "MIT OR Apache-2.0"
-name = "llama-burn"
+name = "llama"
 version = "0.1.0"
 edition = "2021"
 description = "Llama 3 large language model with Burn"

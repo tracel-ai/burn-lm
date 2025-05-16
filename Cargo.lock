@@ -352,7 +352,7 @@ dependencies = [
  "burn",
  "burn-common",
  "burnbench",
- "llama-burn",
+ "llama",
 ]
 
 [[package]]
@@ -880,7 +880,7 @@ dependencies = [
  "clap",
  "dotenvy",
  "lazy_static",
- "llama-burn",
+ "llama",
  "rand 0.9.1",
  "rstest 0.24.0",
  "serde",
@@ -905,7 +905,7 @@ dependencies = [
  "burnlm-macros",
  "clap",
  "comfy-table",
- "llama-burn",
+ "llama",
  "rstest 0.24.0",
  "serde",
  "serde_json",
@@ -921,7 +921,7 @@ version = "0.0.1"
 dependencies = [
  "burn",
  "burnlm-inference",
- "llama-burn",
+ "llama",
  "rand 0.9.1",
  "serde",
 ]
@@ -942,7 +942,7 @@ version = "0.0.1"
 dependencies = [
  "burn",
  "burnlm-inference",
- "llama-burn",
+ "llama",
  "rand 0.9.1",
  "serde",
 ]
@@ -3590,7 +3590,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b4ce301924b7887e9d637144fdade93f9dfff9b60981d4ac161db09720d39aa5"
 
 [[package]]
-name = "llama-burn"
+name = "llama"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",

@@ -880,7 +880,7 @@ mod tests {
     fn test_temperature_softmax() {
         let tensor = TestTensor::<2>::from([[21.3125, 19.859375, 19.0625, 18.75, 18.171875]]);
 
-        let output = crate::llama::temperature_scaled_softmax(tensor, 0.6);
+        let output = crate::base::temperature_scaled_softmax(tensor, 0.6);
         let expected = TensorData::from([[
             0.8691406,
             0.07836914,

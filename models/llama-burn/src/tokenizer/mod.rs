@@ -1,4 +1,5 @@
 pub mod base;
+pub mod byte;
 pub use base::*;
 
 #[cfg(feature = "llama3")]

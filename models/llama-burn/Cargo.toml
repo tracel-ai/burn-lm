@@ -16,14 +16,18 @@ tiny = ["dep:tokenizers"]
 # Example feature flags (backend selection)
 tch-cpu = ["burn/tch"]
 tch-gpu = ["burn/tch"]
-cuda = ["burn/cuda"]
+cuda = ["burn/cuda", "burn/default"]
+#"burn/autotune-checks"]
 wgpu = ["burn/wgpu"]
 
 # To import pytorch weights
 import = ["burn-import"]
 
 [dependencies]
-burn = { workspace = true, features = ["std"] }
+burn = { workspace = true, features = [
+    "std",
+    "ndarray",
+], default-features = false }
 burn-import = { workspace = true, optional = true }
 itertools = { version = "0.12.1", default-features = false, features = [
     "use_alloc",

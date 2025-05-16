@@ -1,6 +1,6 @@
 use burn::tensor::{backend::Backend, Device, Tensor};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct AutoregressiveCache<B: Backend> {
     /// Tensor cache with shape `[batch_size, num_heads, seq_len, d_model]`
     cache: Tensor<B, 4>,
@@ -26,7 +26,14 @@ impl<B: Backend> AutoregressiveCache<B> {
 
     /// Reset the cache state.
     pub fn reset(&mut self) {
-        self.cache = Tensor::empty(self.cache.shape(), &self.cache.device());
+        let shape = self.cache.shape();
+        let device = self.cache.device();
+
+        self.cache.inplace(|cache| {
+            core::mem::drop(cache);
+            Tensor::empty(shape, &device)
+        });
+
         self.cur_seq_len = 0;
     }
 
@@ -34,6 +41,7 @@ impl<B: Backend> AutoregressiveCache<B> {
         let [batch_size, num_heads, seq_len, d_model] = tensor.dims();
         let mut new_seq_len = self.cur_seq_len + seq_len;
 
+        // TODO: This is extremely non-efficient.
         if new_seq_len > self.max_seq_len {
             self.cur_seq_len = self.max_seq_len - seq_len;
             let prev_slice = self.cache.clone().slice([
@@ -42,22 +50,26 @@ impl<B: Backend> AutoregressiveCache<B> {
                 seq_len..self.max_seq_len,
                 0..d_model,
             ]);
-            self.cache = self.cache.clone().slice_assign(
-                [0..batch_size, 0..num_heads, 0..self.cur_seq_len, 0..d_model],
-                prev_slice,
-            );
+            self.cache.inplace(|cache| {
+                cache.slice_assign(
+                    [0..batch_size, 0..num_heads, 0..self.cur_seq_len, 0..d_model],
+                    prev_slice,
+                )
+            });
             new_seq_len = self.max_seq_len;
         }
 
-        self.cache = self.cache.clone().slice_assign(
-            [
-                0..batch_size,
-                0..num_heads,
-                self.cur_seq_len..new_seq_len,
-                0..d_model,
-            ],
-            tensor,
-        );
+        self.cache.inplace(|cache| {
+            cache.slice_assign(
+                [
+                    0..batch_size,
+                    0..num_heads,
+                    self.cur_seq_len..new_seq_len,
+                    0..d_model,
+                ],
+                tensor,
+            )
+        });
 
         self.cur_seq_len += seq_len;
 

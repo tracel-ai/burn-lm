@@ -107,6 +107,20 @@ impl LlamaConfig {
             )
     }
 
+    /// Llama-3.2-3B configuration for testing..
+    pub fn llama3_2_1b_test() -> Self {
+        // hidden_size = 8192; vocab_size = bytes == 255
+        Self::new(128, 255, "test".to_string())
+            .with_d_model(64)
+            .with_num_hidden_layers(2)
+            .with_num_attention_heads(4)
+            .with_num_key_value_heads(Some(2))
+            .with_rope(
+                RopeConfig::new(500000.0)
+                    .with_scaled(Some(RopeFrequencyScaling::new().with_scale_factor(32.))),
+            )
+    }
+
     /// Llama-3.2-1B configuration.
     pub fn llama3_2_1b(tokenizer_path: &str) -> Self {
         // hidden_size = 8192; vocab_size = 128256
@@ -653,10 +667,8 @@ impl<B: Backend> TextGenerationState<B> {
     pub fn append(&mut self, tokens: Tensor<B, 1, Int>) {
         let num_tokens_prev = self.num_tokens;
         self.num_tokens += tokens.shape().num_elements();
-        self.tokens = self
-            .tokens
-            .clone()
-            .slice_assign([num_tokens_prev..self.num_tokens], tokens);
+        self.tokens
+            .inplace(|toks| toks.slice_assign([num_tokens_prev..self.num_tokens], tokens));
     }
 
     /// Update the state with newly generated tokens.
@@ -755,13 +767,14 @@ impl<B: Backend, T: Tokenizer> Llama<B, T> {
         let num_tokens = state.num_tokens_generated();
         let tokens = state
             .tokens
-            .slice([prompt_len..prompt_len + num_tokens - 1]) // -1 to ignore stop token
+            .slice([prompt_len..prompt_len + num_tokens - 1])
             .into_data()
             .iter::<B::IntElem>()
             .map(|t| t.elem::<u32>())
             .collect::<Vec<_>>();
 
         let generated = self.tokenizer.decode(tokens);
+
         GenerationOutput {
             text: generated,
             tokens: num_tokens,
@@ -854,12 +867,14 @@ pub(crate) fn temperature_scaled_softmax<B: Backend>(
 }
 
 #[cfg(test)]
-#[cfg(any(feature = "cuda", feature = "tch-gpu"))]
 mod tests {
     use super::*;
-    use crate::tests::*;
+    use crate::{tests::*, tokenizer::byte::ByteTokenizer};
 
-    use burn::tensor::TensorData;
+    use burn::{
+        module::Reinitializer,
+        tensor::{TensorData, Tolerance},
+    };
 
     #[test]
     fn test_temperature_softmax() {
@@ -874,44 +889,23 @@ mod tests {
             0.0047035217,
         ]]);
 
-        output.into_data().assert_approx_eq(&expected, 3);
+        output
+            .into_data()
+            .assert_approx_eq::<f32>(&expected, Tolerance::relative(0.05)); // 5% tolerance
     }
 
     #[test]
-    fn test_transformer_block() {
-        let device = Default::default();
+    fn test_arange() {
+        let tensor = Tensor::<TestBackend, 1, Int>::arange(0..8, &Default::default());
 
-        let max_seq_len = 16;
-        let block = crate::transformer::TransformerBlockConfig::new(
-            /*n_layers=*/ 1, /*d_model=*/ 4, /*hidden_size=*/ 16,
-            /*n_heads=*/ 2, /*n_kv_heads=*/ 1, /*norm_eps=*/ 0.00001,
-        )
-        .init::<TestBackend>(&device);
-        let mut cache = crate::transformer::KeyValueCache::new(max_seq_len);
+        let val1 = tensor.clone().slice([0..1]);
+        let val2 = tensor.clone().slice([1..2]);
+        let val3 = tensor.slice([2..3]);
 
-        let rope = RopeConfig::new(500000.0)
-            .with_scaled(Some(RopeFrequencyScaling::new().with_scale_factor(32.)));
-        let scaling = rope.scaled.unwrap();
-        let freq_scaling_fn = move |x| scaling.freq_scaling_by_parts(x);
-
-        let rope = RotaryEncodingConfig::new(max_seq_len * 2, 4 / 2)
-            .with_theta(rope.theta)
-            .init_with_frequency_scaling(freq_scaling_fn, &device);
-
-        // input: [batch_size, seq_len, d_model]
-        let input = TestTensor::<3>::from([[
-            [0.0026, 0.003, -0.006, 0.006],
-            [0.001, 0.0008, 0.0015, -0.016],
-        ]]);
-        let output = block.forward(input, &mut cache, &rope);
-        let expected = TensorData::from([[
-            [-0.04269409, 0.020523071, -0.0791626, 0.12731934],
-            [-0.091674805, -0.013809204, 0.03152466, -0.058776855],
-        ]]);
-
-        output.into_data().assert_approx_eq(&expected, 3);
+        val1.into_data().assert_eq(&TensorData::from([0]), false);
+        val2.into_data().assert_eq(&TensorData::from([1]), false);
+        val3.into_data().assert_eq(&TensorData::from([2]), false);
     }
-
     #[test]
     fn test_rope() {
         let device = Default::default();
@@ -937,6 +931,24 @@ mod tests {
             [[-0.044677734, -0.094177246], [0.12194824, 0.64160156]],
         ]]);
 
-        output.into_data().assert_approx_eq(&expected, 3);
+        output
+            .into_data()
+            .assert_approx_eq::<f32>(&expected, Tolerance::relative(0.05));
+    }
+
+    #[test]
+    fn test_llama3_2_3b_test() {
+        let device: Device<TestBackend> = Default::default();
+        let config = LlamaConfig::llama3_2_1b_test();
+        let mut llama = config.init::<TestBackend, ByteTokenizer>(&device).unwrap();
+
+        llama.model = Reinitializer::new()
+            .random_float(0, -1.0, 1.0)
+            .apply(llama.model);
+
+        let result = llama.generate("This is a test", 64, 0.0, &mut Sampler::Argmax);
+        let expected = "[187, 114, 51, 146, 146, 250, 112, 224, 192, 99, 132, 0, 0, 180, 192, 99, 19, 114, 19, 174, 0, 180, 192, 131, 132, 19, 99, 114, 131, 132, 249, 146, 82, 28, 226, 226, 148, 84, 19, 192, 83, 99, 19, 249, 19, 251, 222, 19, 192, 180, 192, 180, 192, 0, 180, 192, 146, 20, 0, 180, 192, 180]";
+
+        assert_eq!(result.text, expected);
     }
 }

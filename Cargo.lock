@@ -352,7 +352,7 @@ dependencies = [
  "burn",
  "burn-common",
  "burnbench",
- "llama",
+ "burnlm-llama",
 ]
 
 [[package]]
@@ -875,12 +875,12 @@ dependencies = [
  "axum",
  "burn",
  "burnlm-inference",
+ "burnlm-llama",
  "burnlm-registry",
  "chrono",
  "clap",
  "dotenvy",
  "lazy_static",
- "llama",
  "rand 0.9.1",
  "rstest 0.24.0",
  "serde",
@@ -902,10 +902,10 @@ name = "burnlm-inference"
 version = "0.0.1"
 dependencies = [
  "burn",
+ "burnlm-llama",
  "burnlm-macros",
  "clap",
  "comfy-table",
- "llama",
  "rstest 0.24.0",
  "serde",
  "serde_json",
@@ -921,7 +921,7 @@ version = "0.0.1"
 dependencies = [
  "burn",
  "burnlm-inference",
- "llama",
+ "burnlm-llama",
  "rand 0.9.1",
  "serde",
 ]
@@ -942,9 +942,26 @@ version = "0.0.1"
 dependencies = [
  "burn",
  "burnlm-inference",
- "llama",
+ "burnlm-llama",
  "rand 0.9.1",
  "serde",
+]
+
+[[package]]
+name = "burnlm-llama"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "burn",
+ "burn-import",
+ "clap",
+ "dirs 5.0.1",
+ "itertools 0.12.1",
+ "rand 0.9.1",
+ "rustc-hash 1.1.0",
+ "serde",
+ "tiktoken-rs",
+ "tokenizers",
 ]
 
 [[package]]
@@ -3588,23 +3605,6 @@ name = "litrs"
 version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b4ce301924b7887e9d637144fdade93f9dfff9b60981d4ac161db09720d39aa5"
-
-[[package]]
-name = "llama"
-version = "0.1.0"
-dependencies = [
- "base64 0.22.1",
- "burn",
- "burn-import",
- "clap",
- "dirs 5.0.1",
- "itertools 0.12.1",
- "rand 0.9.1",
- "rustc-hash 1.1.0",
- "serde",
- "tiktoken-rs",
- "tokenizers",
-]
 
 [[package]]
 name = "lock_api"

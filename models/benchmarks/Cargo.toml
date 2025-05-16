@@ -47,8 +47,7 @@ burn = { workspace = true, default-features = false, features = [
 ] }
 burn-common = { workspace = true, default-features = false }
 burnbench = { git = "https://github.com/tracel-ai/burn-bench" }
-
-llama = { path = "../llama" }
+burnlm-llama = { path = "../../crates/burnlm-llama" }
 
 [[bench]]
 harness = false

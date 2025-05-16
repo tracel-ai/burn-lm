@@ -7,7 +7,7 @@ readme.workspace = true
 
 [dependencies]
 burn = { workspace = true }
-llama = { path = "../../models/llama" }
+burnlm-llama = { path = "../burnlm-llama" }
 burnlm-inference = { path = "../burnlm-inference" }
 burnlm-registry = { path = "../burnlm-registry" }
 

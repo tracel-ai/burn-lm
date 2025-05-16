@@ -6,7 +6,8 @@ use std::sync::{Arc, Mutex};
 
 use burn::prelude::Backend;
 use burnlm_inference::*;
-use llama::{
+use burnlm_llama::{
+    self as llama,
     pretrained::{self, ModelMeta},
     sampling::{Sampler, TopP},
     tokenizer::SentiencePieceTokenizer,

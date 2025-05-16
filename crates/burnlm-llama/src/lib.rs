@@ -20,11 +20,7 @@ pub use base::*;
 
 #[cfg(test)]
 mod tests {
-    #[cfg(not(any(
-        feature = "test-cuda",
-        feature = "test-wgpu",
-        feature = "test-libtorch"
-    )))]
+    #[cfg(any(not(feature = "test-non-default"), feature = "test-ndarray"))]
     pub type TestBackend = burn::backend::NdArray<f32, i32>;
 
     #[cfg(feature = "test-cuda")]

@@ -18,9 +18,21 @@ tiny = ["dep:tokenizers"]
 import = ["burn-import"]
 
 # Feature flags for testing
-test-libtorch = ["burn/tch"]
-test-cuda = ["burn/cuda", "burn/default", "burn/autotune-checks"]
-test-wgpu = ["burn/wgpu", "burn/default", "burn/autotune-checks"]
+test-non-default = []
+test-ndarray = ["burn/ndarray"]
+test-libtorch = ["burn/tch", "test-non-default"]
+test-cuda = [
+    "burn/cuda",
+    "burn/default",
+    "burn/autotune-checks",
+    "test-non-default",
+]
+test-wgpu = [
+    "burn/wgpu",
+    "burn/default",
+    "burn/autotune-checks",
+    "test-non-default",
+]
 
 [dependencies]
 burn = { workspace = true, features = [

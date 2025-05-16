@@ -240,7 +240,6 @@ mod tests {
             .init(&device);
 
         let output = mha.forward(input, &mut cache, &rope);
-        println!("{output}");
         let expected = TensorData::from([
             [
                 [
@@ -290,7 +289,6 @@ mod tests {
             ],
         ]);
 
-        println!("{output}");
         output
             .into_data()
             .assert_approx_eq::<f32>(&expected, Tolerance::balanced());

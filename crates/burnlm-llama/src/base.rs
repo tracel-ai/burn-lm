@@ -26,9 +26,10 @@ use {
 };
 
 use crate::{
+    nn::attention::KeyValueCache,
     sampling::Sampler,
     tokenizer::Tokenizer,
-    transformer::{KeyValueCache, Transformer, TransformerConfig},
+    transformer::{Transformer, TransformerConfig},
 };
 
 #[cfg(feature = "pretrained")]

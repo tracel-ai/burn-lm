@@ -5,6 +5,9 @@ pub mod pretrained;
 pub mod sampling;
 pub mod tokenizer;
 
+/// Neural network components.
+pub mod nn;
+
 mod base;
 
 #[cfg(feature = "inference-server")]
@@ -17,13 +20,19 @@ pub use base::*;
 
 #[cfg(test)]
 mod tests {
-    #[cfg(not(any(feature = "cuda", feature = "wgpu", feature = "tch-gpu")))]
+    #[cfg(not(any(
+        feature = "test-cuda",
+        feature = "test-wgpu",
+        feature = "test-libtorch"
+    )))]
     pub type TestBackend = burn::backend::NdArray<f32, i32>;
 
-    #[cfg(feature = "cuda")]
+    #[cfg(feature = "test-cuda")]
     pub type TestBackend = burn::backend::Cuda<f32, i32>;
-    #[cfg(feature = "tch-gpu")]
+    #[cfg(feature = "test-libtorch")]
     pub type TestBackend = burn::backend::LibTorch<f32>;
+    #[cfg(feature = "test-wgpu")]
+    pub type TestBackend = burn::backend::Wgpu<f32, i32>;
 
     pub type TestTensor<const D: usize> = burn::tensor::Tensor<TestBackend, D>;
 }

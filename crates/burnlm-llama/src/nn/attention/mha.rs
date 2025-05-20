@@ -4,7 +4,7 @@ use burn::{
     tensor::activation::softmax,
 };
 
-use crate::cache::AutoregressiveCache;
+use super::kv_cache::KeyValueCache;
 
 /// Configuration to create a [multi-head attention](MultiHeadAttention) module.
 #[derive(Config)]
@@ -42,7 +42,35 @@ impl<B: Backend> MultiHeadAttention<B> {
     /// - key: `[batch_size, seq_length_2, d_model]`
     /// - value: `[batch_size, seq_length_2, d_model]`
     /// - output: `[batch_size, seq_length_1, d_model]`
-    pub fn forward(
+    pub fn forward_masked(&self, input: Tensor<B, 3>, rope: &RotaryEncoding<B>) -> Tensor<B, 3> {
+        let device = input.device();
+        let [batch_size, seq_len, hidden_size] = input.dims();
+
+        let (q, k, v) = self.forward_projection(input);
+
+        let q = rope.apply(q, seq_len);
+        let k = rope.apply(k, seq_len);
+
+        let mask = if seq_len > 1 {
+            let mask = Tensor::<B, 2, Bool>::tril_mask([seq_len, seq_len], 0, &device);
+            Some(mask.unsqueeze::<4>())
+        } else {
+            None
+        };
+
+        let output = self.forward_attention(q, k, v, mask, batch_size, seq_len, hidden_size);
+        self.wo.forward(output)
+    }
+
+    /// Applies the forward pass on the input tensors.
+    ///
+    /// # Shapes
+    ///
+    /// - query: `[batch_size, seq_length_1, d_model]`
+    /// - key: `[batch_size, seq_length_2, d_model]`
+    /// - value: `[batch_size, seq_length_2, d_model]`
+    /// - output: `[batch_size, seq_length_1, d_model]`
+    pub fn forward_cache(
         &self,
         input: Tensor<B, 3>,
         cache: &mut KeyValueCache<B>,
@@ -50,6 +78,41 @@ impl<B: Backend> MultiHeadAttention<B> {
     ) -> Tensor<B, 3> {
         let device = input.device();
         let [batch_size, seq_len, hidden_size] = input.dims();
+
+        let (q, k, v) = self.forward_projection(input);
+
+        // Sequence start position can be deduced from the number of cached items
+        let cache_seq_len = cache.len();
+
+        let q = rope.apply(q, cache_seq_len);
+        let k = rope.apply(k, cache_seq_len);
+
+        // Key-value caching
+        let (k, v) = cache.forward(k, v);
+
+        let mask = if seq_len > 1 {
+            let cache_seq_len = cache.len();
+            let mask = Tensor::<B, 2, Bool>::tril_mask(
+                [seq_len, cache_seq_len],
+                (cache_seq_len - seq_len) as i64, // offset
+                &device,
+            );
+
+            Some(mask.unsqueeze::<4>())
+        } else {
+            None
+        };
+
+        let output = self.forward_attention(q, k, v, mask, batch_size, seq_len, hidden_size);
+
+        self.wo.forward(output)
+    }
+
+    fn forward_projection(
+        &self,
+        input: Tensor<B, 3>,
+    ) -> (Tensor<B, 4>, Tensor<B, 4>, Tensor<B, 4>) {
+        let [batch_size, seq_len, _hidden_size] = input.dims();
 
         let q = self.wq.forward(input.clone());
         let k = self.wk.forward(input.clone());
@@ -66,16 +129,19 @@ impl<B: Backend> MultiHeadAttention<B> {
             .reshape([batch_size, seq_len, self.n_kv_heads, self.head_dim])
             .swap_dims(1, 2);
 
-        // Sequence start position can be deduced from the number of cached items
-        let cache_seq_len = cache.len();
+        (q, k, v)
+    }
 
-        let q = rope.apply(q, cache_seq_len);
-        let k = rope.apply(k, cache_seq_len);
-
-        // Key-value caching
-        let (k, v) = cache.forward(k, v);
-
-        // Repeat key/value heads if num_kv_heads < num_heads
+    fn forward_attention(
+        &self,
+        q: Tensor<B, 4>,
+        k: Tensor<B, 4>,
+        v: Tensor<B, 4>,
+        mask: Option<Tensor<B, 4, Bool>>,
+        batch_size: usize,
+        seq_len: usize,
+        hidden_size: usize,
+    ) -> Tensor<B, 3> {
         let k = self.repeat_kv(k);
         let v = self.repeat_kv(v);
 
@@ -84,28 +150,16 @@ impl<B: Backend> MultiHeadAttention<B> {
             .matmul(k.swap_dims(2, 3))
             .div_scalar((self.head_dim as f32).sqrt());
 
-        // Matrix of scores is of size [seqlen, cache_len + seqlen], and the only masked entries are
-        // (i, j) for j > cache_len + i, since row i corresponds to token cache_len + i.
-        // NOTE: we could possibly improve the mask generation by caching masks for different sequence lengths,
-        // though it is probably not necessary at this time.
-        if seq_len > 1 {
-            let cache_seq_len = cache.len();
-            let mask = Tensor::<B, 2, Bool>::tril_mask(
-                [seq_len, cache_seq_len],
-                (cache_seq_len - seq_len) as i64, // offset
-                &device,
-            );
-            scores = scores.mask_fill(mask.unsqueeze::<4>(), f32::NEG_INFINITY);
+        if let Some(mask) = mask {
+            scores = scores.mask_fill(mask, f32::NEG_INFINITY);
         }
 
         let scores = softmax(scores, 3);
-
-        // Output [batch_size, num_heads, seq_len, head_dim]
         let output = scores.matmul(v);
-        let output = output
+
+        output
             .swap_dims(1, 2)
-            .reshape([batch_size, seq_len, hidden_size]);
-        self.wo.forward(output)
+            .reshape([batch_size, seq_len, hidden_size])
     }
 
     /// Repeats a key or value tensor for grouped query attention.
@@ -153,60 +207,6 @@ impl MultiHeadAttentionConfig {
     }
 }
 
-/// Key-value cache for autoregressive models.
-#[derive(Debug, Clone)]
-pub struct KeyValueCache<B: Backend> {
-    key: AutoregressiveCache<B>,
-    value: AutoregressiveCache<B>,
-}
-
-impl<B: Backend> KeyValueCache<B> {
-    /// Create a new [key-value cache](KeyValueCache).
-    pub fn new(
-        max_batch_size: usize,
-        num_heads: usize,
-        max_seq_len: usize,
-        d_model: usize,
-        device: &Device<B>,
-    ) -> Self {
-        Self {
-            key: AutoregressiveCache::new(max_batch_size, num_heads, max_seq_len, d_model, device),
-            value: AutoregressiveCache::new(
-                max_batch_size,
-                num_heads,
-                max_seq_len,
-                d_model,
-                device,
-            ),
-        }
-    }
-
-    /// Computes the complete keys and values.
-    pub fn forward(
-        &mut self,
-        key: Tensor<B, 4>,
-        value: Tensor<B, 4>,
-    ) -> (Tensor<B, 4>, Tensor<B, 4>) {
-        let k = self.key.forward(key);
-        let v = self.value.forward(value);
-        (k, v)
-    }
-
-    /// Returns the cached sequence length.
-    pub fn len(&self) -> usize {
-        // We can assume key and value have the same length
-        self.key.len()
-    }
-
-    /// Reset key-value cache.
-    /// Use between different contexts (i.e., for each new prompt).
-    #[allow(dead_code)]
-    pub fn reset(&mut self) {
-        self.key.reset();
-        self.value.reset();
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -214,7 +214,7 @@ mod tests {
     use burn::{module::Reinitializer, nn::RotaryEncodingConfig, tensor::Tolerance};
 
     #[test]
-    pub fn test_attention() {
+    pub fn test_attention_empty_cache() {
         let seq_length = 3;
         let batch_size = 2;
         let config = MultiHeadAttentionConfig::new(32, 2, 2);
@@ -239,8 +239,99 @@ mod tests {
         let rope = RotaryEncodingConfig::new(seq_length * 2, config.d_model / config.n_heads)
             .init(&device);
 
-        let output = mha.forward(input, &mut cache, &rope);
-        let expected = TensorData::from([
+        let output = mha.forward_cache(input, &mut cache, &rope);
+        let expected = arange_mha_expacted_value();
+
+        output
+            .into_data()
+            .assert_approx_eq::<f32>(&expected, Tolerance::balanced());
+    }
+
+    #[test]
+    pub fn test_attention_masked() {
+        let seq_length = 3;
+        let batch_size = 2;
+        let config = MultiHeadAttentionConfig::new(32, 2, 2);
+        let device: Device<TestBackend> = Default::default();
+        let mha = config.init::<TestBackend>(&device);
+
+        let mha = Reinitializer::new().random_float(0, -2.0, 2.0).apply(mha);
+
+        let shape = Shape::from([batch_size, seq_length, config.d_model]);
+        let input = Tensor::arange(0..shape.num_elements() as i64, &device)
+            .reshape(shape)
+            .float();
+
+        let rope = RotaryEncodingConfig::new(seq_length * 2, config.d_model / config.n_heads)
+            .init(&device);
+
+        let output = mha.forward_masked(input, &rope);
+        let expected = arange_mha_expacted_value();
+
+        output
+            .into_data()
+            .assert_approx_eq::<f32>(&expected, Tolerance::balanced());
+    }
+
+    #[test]
+    pub fn test_attention_decoding() {
+        let seq_length = 3;
+        let batch_size = 2;
+        let config = MultiHeadAttentionConfig::new(32, 2, 2);
+        let device: Device<TestBackend> = Default::default();
+        let mha = config.init::<TestBackend>(&device);
+
+        let mha = Reinitializer::new().random_float(0, -2.0, 2.0).apply(mha);
+
+        let shape = Shape::from([batch_size, seq_length, config.d_model]);
+        let input = Tensor::arange(0..shape.num_elements() as i64, &device)
+            .reshape(shape)
+            .float();
+
+        let rope = RotaryEncodingConfig::new(seq_length * 2, config.d_model / config.n_heads)
+            .init(&device);
+
+        let mut cache = KeyValueCache::new(
+            batch_size,
+            config.n_heads,
+            seq_length,
+            config.d_model,
+            &device,
+        );
+
+        let out_1 = mha.forward_cache(
+            input
+                .clone()
+                .slice([0..batch_size, 0..1, 0..config.d_model]),
+            &mut cache,
+            &rope,
+        );
+        let out_2 = mha.forward_cache(
+            input
+                .clone()
+                .slice([0..batch_size, 1..2, 0..config.d_model]),
+            &mut cache,
+            &rope,
+        );
+        let out_3 = mha.forward_cache(
+            input
+                .clone()
+                .slice([0..batch_size, 2..3, 0..config.d_model]),
+            &mut cache,
+            &rope,
+        );
+
+        let output = Tensor::cat(vec![out_1, out_2, out_3], 1);
+
+        let expected = arange_mha_expacted_value();
+
+        output
+            .into_data()
+            .assert_approx_eq::<f32>(&expected, Tolerance::balanced());
+    }
+
+    fn arange_mha_expacted_value() -> TensorData {
+        TensorData::from([
             [
                 [
                     1370.383, 307.15445, -1173.6564, -384.0224, 710.8423, 120.73452, 1430.4589,
@@ -287,10 +378,6 @@ mod tests {
                     -6539.253, 10143.456, 7205.976, -18132.396,
                 ],
             ],
-        ]);
-
-        output
-            .into_data()
-            .assert_approx_eq::<f32>(&expected, Tolerance::balanced());
+        ])
     }
 }

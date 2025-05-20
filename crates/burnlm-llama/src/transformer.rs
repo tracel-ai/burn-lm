@@ -156,7 +156,7 @@ impl<B: Backend> TransformerBlock<B> {
         let h = input.clone()
             + self
                 .attention
-                .forward(self.attention_norm.forward(input), cache, rope);
+                .forward_cache(self.attention_norm.forward(input), cache, rope);
         h.clone() + self.feed_forward.forward(self.ffn_norm.forward(h))
     }
 }

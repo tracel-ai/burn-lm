@@ -12,9 +12,6 @@ mod base;
 #[cfg(feature = "inference-server")]
 pub mod server;
 
-/// Transformer model for Llama.
-pub mod transformer;
-
 pub use base::*;
 
 #[cfg(test)]

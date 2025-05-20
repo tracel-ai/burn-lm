@@ -3,12 +3,14 @@ use burn::{
     module::Module,
     nn::{
         Embedding, EmbeddingConfig, Linear, LinearConfig, RmsNorm, RmsNormConfig, RotaryEncoding,
-        SwiGlu, SwiGluConfig,
     },
     tensor::{backend::Backend, Device, Int, Tensor},
 };
 
-use crate::nn::attention::*;
+use crate::nn::{
+    attention::*,
+    fftn::{FeedForward, FeedForwardConfig},
+};
 
 /// Configuration to create a Llama [decoder-only transformer](Transformer).
 #[derive(Config)]
@@ -158,50 +160,6 @@ impl<B: Backend> TransformerBlock<B> {
                 .attention
                 .forward_cache(self.attention_norm.forward(input), cache, rope);
         h.clone() + self.feed_forward.forward(self.ffn_norm.forward(h))
-    }
-}
-
-/// Configuration to create a [feed-forward transformation network](FeedForward).
-#[derive(Config)]
-pub struct FeedForwardConfig {
-    /// The size of the model.
-    pub d_model: usize,
-    /// The size of the hidden inner features.
-    pub hidden_size: usize,
-}
-
-impl FeedForwardConfig {
-    /// Initialize a new [feed-forward transformation network](FeedForward).
-    pub fn init<B: Backend>(&self, device: &Device<B>) -> FeedForward<B> {
-        let swiglu = SwiGluConfig::new(self.d_model, self.hidden_size)
-            .with_bias(false)
-            .init(device);
-        let w2 = LinearConfig::new(self.hidden_size, self.d_model)
-            .with_bias(false)
-            .init(device);
-
-        FeedForward { swiglu, w2 }
-    }
-}
-
-/// Feed-forward transformation network.
-#[derive(Module, Debug)]
-pub struct FeedForward<B: Backend> {
-    // Swish gated linear unit with trainable parameters.
-    swiglu: SwiGlu<B>,
-    /// Outer linear.
-    w2: Linear<B>,
-}
-
-impl<B: Backend> FeedForward<B> {
-    /// Applies the forward pass on the input tensor.
-    ///
-    /// # Shapes
-    ///
-    /// - input: `[batch_size, seq_length, d_model]`
-    /// - output: `[batch_size, seq_length, d_model]`
-    pub fn forward(&self, input: Tensor<B, 3>) -> Tensor<B, 3> {
-        self.w2.forward(self.swiglu.forward(input))
     }
 }
 

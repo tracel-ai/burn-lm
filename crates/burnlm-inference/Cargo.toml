@@ -22,6 +22,7 @@ cuda = [
     #
     #       The reason it takes more memory is that we re-allocate the weights to run autotune for each 
     #       micro-benchmark.
+    "burn/autotune",
     "burn/default",
     # The compilation cache really help for the CLI.
     "burn/compilation-cache",

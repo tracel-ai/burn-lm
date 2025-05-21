@@ -1,6 +1,6 @@
 use std::ops::Range;
 
-use burn::tensor::{backend::Backend, Device, Tensor};
+use burn::tensor::{backend::Backend, Device, Shape, Tensor};
 
 #[derive(Debug, Clone)]
 /// Cache that keeps track of a tensor state in an autoregressive decoding process.
@@ -45,54 +45,62 @@ impl<const D: usize, B: Backend> AutoregressiveCache<B, D> {
     pub fn append(&mut self, tokens: Tensor<B, D>) -> Tensor<B, D> {
         let shape = tokens.shape();
         let seq_len_input = shape.dims[self.seq_dim];
-        let mut new_seq_len = self.cur_seq_len + seq_len_input;
 
-        if new_seq_len > self.max_seq_len {
-            self.cur_seq_len = self.max_seq_len - seq_len_input;
-
-            let mut slices_prev = Vec::with_capacity(shape.dims.len());
-            let mut slices_curr = Vec::with_capacity(shape.dims.len());
-
-            for (i, shape) in shape.dims.iter().enumerate() {
-                if i == self.seq_dim {
-                    slices_prev.push(seq_len_input..self.max_seq_len);
-                    slices_curr.push(0..self.cur_seq_len);
-                } else {
-                    slices_prev.push(0..*shape);
-                    slices_curr.push(0..*shape);
-                }
-            }
-
-            let prev_slice = self
-                .cache
-                .clone()
-                .slice::<D, [Range<usize>; D]>(slices_prev.try_into().unwrap());
-
-            let new_cache = Tensor::empty(self.cache.shape(), &self.cache.device());
-            self.cache = new_cache.slice_assign::<D>(slices_curr.try_into().unwrap(), prev_slice);
-            new_seq_len = self.max_seq_len;
+        if self.cur_seq_len + seq_len_input > self.max_seq_len {
+            self.shrink(&shape);
         }
 
-        let mut slices_assign = Vec::with_capacity(shape.dims.len());
-        let mut slices_output = Vec::with_capacity(shape.dims.len());
+        let new_seq_len = self.cur_seq_len + seq_len_input;
+
+        let mut indices_added_tokens = Vec::with_capacity(shape.dims.len());
+        let mut indices_output = Vec::with_capacity(shape.dims.len());
 
         for (i, shape) in shape.dims.iter().enumerate() {
             if i == self.seq_dim {
-                slices_assign.push(self.cur_seq_len..new_seq_len);
-                slices_output.push(0..self.cur_seq_len + seq_len_input);
+                indices_added_tokens.push(self.cur_seq_len..new_seq_len);
+                indices_output.push(0..new_seq_len);
             } else {
-                slices_assign.push(0..*shape);
-                slices_output.push(0..*shape);
+                indices_added_tokens.push(0..*shape);
+                indices_output.push(0..*shape);
             }
         }
-        self.cache
-            .inplace(|cache| cache.slice_assign::<D>(slices_assign.try_into().unwrap(), tokens));
+        self.cache.inplace(|cache| {
+            cache.slice_assign::<D>(indices_added_tokens.try_into().unwrap(), tokens)
+        });
 
         self.cur_seq_len += seq_len_input;
 
         self.cache
             .clone()
-            .slice::<D, [Range<usize>; D]>(slices_output.try_into().unwrap())
+            .slice::<D, [Range<usize>; D]>(indices_output.try_into().unwrap())
+    }
+
+    /// Shrink the cache to fit in `max_seq_len` while making place for the new tokens being
+    /// decoded.
+    fn shrink(&mut self, shape_tokens: &Shape) {
+        let seq_len_input = shape_tokens.dims[self.seq_dim];
+        self.cur_seq_len = self.max_seq_len - seq_len_input;
+
+        let mut slices_prev = Vec::with_capacity(shape_tokens.dims.len());
+        let mut slices_curr = Vec::with_capacity(shape_tokens.dims.len());
+
+        for (i, shape) in shape_tokens.dims.iter().enumerate() {
+            if i == self.seq_dim {
+                slices_prev.push(seq_len_input..self.max_seq_len);
+                slices_curr.push(0..self.cur_seq_len);
+            } else {
+                slices_prev.push(0..*shape);
+                slices_curr.push(0..*shape);
+            }
+        }
+
+        let prev_slice = self
+            .cache
+            .clone()
+            .slice::<D, [Range<usize>; D]>(slices_prev.try_into().unwrap());
+
+        let new_cache = Tensor::empty(self.cache.shape(), &self.cache.device());
+        self.cache = new_cache.slice_assign::<D>(slices_curr.try_into().unwrap(), prev_slice);
     }
 
     /// Returns the cached sequence length.

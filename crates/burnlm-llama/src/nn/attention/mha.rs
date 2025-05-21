@@ -85,6 +85,12 @@ impl<B: Backend> MultiHeadAttention<B> {
         // Sequence start position can be deduced from the number of cached items
         let cache_seq_len = cache.len();
 
+        let cache_seq_len = if cache_seq_len + seq_len > cache.max_seq_len() {
+            cache.max_seq_len() - seq_len
+        } else {
+            cache_seq_len
+        };
+
         let q = rope.apply(q, cache_seq_len);
         let k = rope.apply(k, cache_seq_len);
 

@@ -50,6 +50,12 @@ impl<B: Backend> KeyValueCache<B> {
         self.key.len()
     }
 
+    /// TODO
+    pub fn max_seq_len(&self) -> usize {
+        // We can assume key and value have the same length
+        self.key.max_seq_len
+    }
+
     /// Reset key-value cache.
     /// Use between different contexts (i.e., for each new prompt).
     #[allow(dead_code)]

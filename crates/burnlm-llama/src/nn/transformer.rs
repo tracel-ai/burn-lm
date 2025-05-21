@@ -82,6 +82,7 @@ pub struct Transformer<B: Backend> {
 pub struct TransformerCache<B: Backend> {
     layers: Vec<KeyValueCache<B>>,
     device: Device<B>,
+    max_seq_len: usize,
 }
 
 impl<B: Backend> TransformerCache<B> {
@@ -101,6 +102,7 @@ impl<B: Backend> TransformerCache<B> {
         Self {
             layers: cache,
             device: device.clone(),
+            max_seq_len: config.max_seq_len,
         }
     }
 
@@ -110,6 +112,12 @@ impl<B: Backend> TransformerCache<B> {
         }
 
         let cache_seq_len_next = self.layers[0].len() + seq_len;
+
+        let cache_seq_len_next = if cache_seq_len_next > self.max_seq_len {
+            self.max_seq_len
+        } else {
+            cache_seq_len_next
+        };
 
         let mask = Tensor::<B, 2, Bool>::tril_mask(
             [seq_len, cache_seq_len_next],

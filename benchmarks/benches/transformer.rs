@@ -3,19 +3,20 @@ use burn::{
     tensor::{backend::Backend, Distribution, Element, Int, Tensor},
 };
 use burn_common::benchmark::{run_benchmark, Benchmark, BenchmarkResult};
-use burnlm_llama::transformer::{KeyValueCache, Transformer, TransformerConfig};
+use burnlm_llama::nn::transformer::{Transformer, TransformerCache, TransformerConfig};
 
 pub struct TransformerBenchmark<B: Backend> {
     seq_length: usize,
     batch_size: usize,
     config: Config,
+    config_transformer: TransformerConfig,
     device: B::Device,
     transformer: Transformer<B>,
     rope: RotaryEncoding<B>,
 }
 
 impl<B: Backend> Benchmark for TransformerBenchmark<B> {
-    type Args = (Tensor<B, 2, Int>, Vec<KeyValueCache<B>>);
+    type Args = (Tensor<B, 2, Int>, TransformerCache<B>);
 
     fn name(&self) -> String {
         format!(
@@ -30,8 +31,9 @@ impl<B: Backend> Benchmark for TransformerBenchmark<B> {
         vec![vec![self.batch_size, self.seq_length, self.config.d_model]]
     }
 
-    fn execute(&self, (input, mut caches): Self::Args) {
-        self.transformer.forward(input, &mut caches, &self.rope);
+    fn execute(&self, (input, mut cache): Self::Args) {
+        self.transformer
+            .forward(input, &mut cache, &self.rope, None);
     }
 
     fn prepare(&self) -> Self::Args {
@@ -42,19 +44,9 @@ impl<B: Backend> Benchmark for TransformerBenchmark<B> {
         )
         .int();
 
-        let caches = (0..self.config.n_layers)
-            .map(|_| {
-                KeyValueCache::new(
-                    self.batch_size,
-                    self.config.n_heads,
-                    self.seq_length,
-                    self.config.d_model,
-                    &self.device,
-                )
-            })
-            .collect();
+        let cache = TransformerCache::new(&self.config_transformer, self.batch_size, &self.device);
 
-        (input, caches)
+        (input, cache)
     }
 
     fn sync(&self) {
@@ -109,21 +101,22 @@ fn bench<B: Backend>(device: &B::Device) -> Vec<BenchmarkResult> {
             name: "llama-8B",
         },
     ] {
-        let transformer = TransformerConfig::new(
+        let config_transformer = TransformerConfig::new(
             config.vocab_size,
             config.n_layers,
             config.d_model,
             config.hidden_size,
             config.n_heads,
             config.n_heads_kv,
-        )
-        .init(device);
+        );
+        let transformer = config_transformer.init(device);
         let rope =
             RotaryEncodingConfig::new(seq_length * 2, config.d_model / config.n_heads).init(device);
         let benchmark = TransformerBenchmark::<B> {
             batch_size,
             seq_length,
             config,
+            config_transformer,
             device: device.clone(),
             transformer,
             rope,

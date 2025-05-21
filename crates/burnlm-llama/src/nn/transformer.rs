@@ -78,7 +78,7 @@ pub struct Transformer<B: Backend> {
     output: Linear<B>,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct TransformerCache<B: Backend> {
     layers: Vec<KeyValueCache<B>>,
     device: Device<B>,

@@ -3,7 +3,10 @@ use burn::{
     tensor::{backend::Backend, Distribution, Element, Tensor},
 };
 use burn_common::benchmark::{run_benchmark, Benchmark, BenchmarkResult};
-use burnlm_llama::transformer::{KeyValueCache, TransformerBlock, TransformerBlockConfig};
+use burnlm_llama::nn::{
+    attention::KeyValueCache,
+    transformer::{TransformerBlock, TransformerBlockConfig},
+};
 
 pub struct TransformerBlockBenchmark<B: Backend> {
     seq_length: usize,
@@ -31,7 +34,7 @@ impl<B: Backend> Benchmark for TransformerBlockBenchmark<B> {
     }
 
     fn execute(&self, (input, mut cache): Self::Args) {
-        self.block.forward(input, &mut cache, &self.rope);
+        self.block.forward(input, &mut cache, &self.rope, None);
     }
 
     fn prepare(&self) -> Self::Args {

@@ -3,7 +3,7 @@ use burn::{
     tensor::{backend::Backend, Distribution, Element, Tensor},
 };
 use burn_common::benchmark::{run_benchmark, Benchmark, BenchmarkResult};
-use burnlm_llama::transformer::{KeyValueCache, MultiHeadAttention, MultiHeadAttentionConfig};
+use burnlm_llama::nn::attention::{KeyValueCache, MultiHeadAttention, MultiHeadAttentionConfig};
 
 pub struct AttentionBenchmark<B: Backend> {
     seq_length: usize,
@@ -27,7 +27,7 @@ impl<B: Backend> Benchmark for AttentionBenchmark<B> {
     }
 
     fn execute(&self, (input, mut cache): Self::Args) {
-        self.attn.forward(input, &mut cache, &self.rope);
+        self.attn.forward_cache(input, &mut cache, &self.rope, None);
     }
 
     fn prepare(&self) -> Self::Args {

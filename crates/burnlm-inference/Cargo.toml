@@ -16,13 +16,6 @@ candle-metal = ["burn/candle", "burn/metal", "selected-backend"]
 
 cuda = [
     "burn/cuda",
-    # TODO: Autotune increases the global memory needs like crazy and makes the model panic.
-    #
-    #       Also there is a bug, since autotune runs for fusion when this setting is deactivated.
-    #
-    #       The reason it takes more memory is that we re-allocate the weights to run autotune for each 
-    #       micro-benchmark.
-    "burn/autotune",
     "burn/default",
     # The compilation cache really help for the CLI.
     "burn/compilation-cache",
@@ -30,8 +23,7 @@ cuda = [
 ]
 rocm = [
     "burn/rocm",
-    "burn/fusion",
-    "burn/autotune",
+    "burn/default",
     # The compilation cache really help for the CLI.
     "burn/compilation-cache",
     "selected-backend",

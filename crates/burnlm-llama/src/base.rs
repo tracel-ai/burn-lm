@@ -26,8 +26,7 @@ use {
 };
 
 use crate::{
-    nn::attention::KeyValueCache,
-    nn::transformer::{Transformer, TransformerConfig},
+    nn::transformer::{Transformer, TransformerCache, TransformerConfig},
     sampling::Sampler,
     tokenizer::Tokenizer,
 };
@@ -424,7 +423,7 @@ impl LlamaConfig {
     ) -> Result<Llama<B, T>, String> {
         let tokenizer = T::new(&self.tokenizer)?;
         let num_key_value_heads = self.num_key_value_heads.unwrap_or(self.num_attention_heads);
-        let model = TransformerConfig::new(
+        let config = TransformerConfig::new(
             self.vocab_size,
             self.num_hidden_layers,
             self.d_model,
@@ -433,20 +432,10 @@ impl LlamaConfig {
             num_key_value_heads,
         )
         .with_max_seq_len(self.max_seq_len)
-        .with_norm_eps(self.norm_eps)
-        .init(device);
+        .with_norm_eps(self.norm_eps);
 
-        let cache = (0..self.num_hidden_layers)
-            .map(|_| {
-                KeyValueCache::new(
-                    self.max_batch_size,
-                    num_key_value_heads,
-                    self.max_seq_len,
-                    self.d_model / self.num_attention_heads,
-                    device,
-                )
-            })
-            .collect::<Vec<_>>();
+        let model = config.init(device);
+        let cache = TransformerCache::new(&config, self.max_batch_size, device);
 
         let rope = RotaryEncodingConfig::new(
             self.max_seq_len * 2,
@@ -699,7 +688,7 @@ pub struct Llama<B: Backend, T: Tokenizer> {
     /// Llama decoder-only transformer.
     pub model: Transformer<B>,
     /// Key-value cache for each transformer block.
-    pub cache: Vec<KeyValueCache<B>>,
+    pub cache: TransformerCache<B>,
     /// Rotary positional encoding (RoPE).
     pub rope: RotaryEncoding<B>,
     pub device: Device<B>,
@@ -744,7 +733,11 @@ impl<B: Backend, T: Tokenizer> Llama<B, T> {
                 .clone()
                 .select(0, input_pos.clone())
                 .reshape([1, -1]);
-            let logits = self.model.forward(x, &mut self.cache, &self.rope);
+
+            let [_, seq_len] = x.dims();
+            let mask = self.cache.mask_attn(seq_len);
+
+            let logits = self.model.forward(x, &mut self.cache, &self.rope, mask);
 
             let [batch_size, seq_len, _vocab_size] = logits.dims();
             let mut next_token_logits = logits
@@ -756,7 +749,6 @@ impl<B: Backend, T: Tokenizer> Llama<B, T> {
             };
 
             let next_token = sampler.sample(next_token_logits).squeeze(0);
-
             // Update with the new generated token
             state.update(next_token);
 
@@ -818,7 +810,7 @@ impl<B: Backend, T: Tokenizer> Llama<B, T> {
 
     /// Reset the model state (used between generations)
     pub fn reset(&mut self) {
-        self.cache.iter_mut().for_each(|cache| cache.reset());
+        self.cache.reset()
     }
 }
 

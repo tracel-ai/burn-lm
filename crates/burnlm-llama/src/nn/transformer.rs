@@ -4,7 +4,7 @@ use burn::{
     nn::{
         Embedding, EmbeddingConfig, Linear, LinearConfig, RmsNorm, RmsNormConfig, RotaryEncoding,
     },
-    tensor::{backend::Backend, Device, Int, Tensor},
+    tensor::{backend::Backend, Bool, Device, Int, Tensor},
 };
 
 use crate::nn::{
@@ -78,17 +78,65 @@ pub struct Transformer<B: Backend> {
     output: Linear<B>,
 }
 
+#[derive(Debug)]
+pub struct TransformerCache<B: Backend> {
+    layers: Vec<KeyValueCache<B>>,
+    device: Device<B>,
+}
+
+impl<B: Backend> TransformerCache<B> {
+    pub fn new(config: &TransformerConfig, max_batch_size: usize, device: &Device<B>) -> Self {
+        let cache = (0..config.n_layers)
+            .map(|_| {
+                KeyValueCache::new(
+                    max_batch_size,
+                    config.n_kv_heads,
+                    config.max_seq_len,
+                    config.d_model / config.n_heads,
+                    device,
+                )
+            })
+            .collect::<Vec<_>>();
+
+        Self {
+            layers: cache,
+            device: device.clone(),
+        }
+    }
+
+    pub fn mask_attn(&self, seq_len: usize) -> Option<Tensor<B, 4, Bool>> {
+        if seq_len <= 1 {
+            return None;
+        }
+
+        let cache_seq_len_next = self.layers[0].len() + seq_len;
+
+        let mask = Tensor::<B, 2, Bool>::tril_mask(
+            [seq_len, cache_seq_len_next],
+            (cache_seq_len_next - seq_len) as i64, // offset
+            &self.device,
+        );
+
+        Some(mask.unsqueeze::<4>())
+    }
+
+    pub fn reset(&mut self) {
+        self.layers.iter_mut().for_each(|cache| cache.reset());
+    }
+}
+
 impl<B: Backend> Transformer<B> {
     pub fn forward(
         &self,
         input: Tensor<B, 2, Int>,
-        cache: &mut Vec<KeyValueCache<B>>,
+        cache: &mut TransformerCache<B>,
         rope: &RotaryEncoding<B>,
+        mask: Option<Tensor<B, 4, Bool>>,
     ) -> Tensor<B, 3> {
         let mut h = self.tok_embeddings.forward(input);
 
-        for (layer, c) in self.layers.iter().zip(cache.iter_mut()) {
-            h = layer.forward(h, c, rope);
+        for (layer, c) in self.layers.iter().zip(cache.layers.iter_mut()) {
+            h = layer.forward(h, c, rope, mask.clone());
         }
 
         let h = self.norm.forward(h);
@@ -154,11 +202,12 @@ impl<B: Backend> TransformerBlock<B> {
         input: Tensor<B, 3>,
         cache: &mut KeyValueCache<B>,
         rope: &RotaryEncoding<B>,
+        mask: Option<Tensor<B, 4, Bool>>,
     ) -> Tensor<B, 3> {
         let h = input.clone()
             + self
                 .attention
-                .forward_cache(self.attention_norm.forward(input), cache, rope);
+                .forward_cache(self.attention_norm.forward(input), cache, rope, mask);
         h.clone() + self.feed_forward.forward(self.ffn_norm.forward(h))
     }
 }
@@ -204,17 +253,7 @@ mod tests {
         let batch_size = 2;
         let seq_length = 2;
 
-        let mut caches = (0..config.n_layers)
-            .map(|_| {
-                KeyValueCache::new(
-                    batch_size,
-                    config.n_heads,
-                    seq_length,
-                    config.d_model,
-                    &device,
-                )
-            })
-            .collect();
+        let mut cache = TransformerCache::new(&config, batch_size, &device);
 
         let rope = RotaryEncodingConfig::new(seq_length * 2, config.d_model / config.n_heads)
             .init(&device);
@@ -225,7 +264,8 @@ mod tests {
             .range_float(0.0, 5.0)
             .apply(transformer);
 
-        let output = transformer.forward(input, &mut caches, &rope);
+        let mask = cache.mask_attn(seq_length);
+        let output = transformer.forward(input, &mut cache, &rope, mask);
 
         let expected = TensorData::from([
             [

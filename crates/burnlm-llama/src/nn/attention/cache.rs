@@ -47,7 +47,6 @@ impl<const D: usize, B: Backend> AutoregressiveCache<B, D> {
         let seq_len_input = shape.dims[self.seq_dim];
         let mut new_seq_len = self.cur_seq_len + seq_len_input;
 
-        // TODO: This is extremely non-efficient.
         if new_seq_len > self.max_seq_len {
             self.cur_seq_len = self.max_seq_len - seq_len_input;
 
@@ -57,7 +56,7 @@ impl<const D: usize, B: Backend> AutoregressiveCache<B, D> {
             for (i, shape) in shape.dims.iter().enumerate() {
                 if i == self.seq_dim {
                     slices_prev.push(seq_len_input..self.max_seq_len);
-                    slices_curr.push(0..self.max_seq_len);
+                    slices_curr.push(0..self.cur_seq_len);
                 } else {
                     slices_prev.push(0..*shape);
                     slices_curr.push(0..*shape);
@@ -69,9 +68,8 @@ impl<const D: usize, B: Backend> AutoregressiveCache<B, D> {
                 .clone()
                 .slice::<D, [Range<usize>; D]>(slices_prev.try_into().unwrap());
 
-            self.cache.inplace(|cache| {
-                cache.slice_assign::<D>(slices_curr.try_into().unwrap(), prev_slice)
-            });
+            let new_cache = Tensor::empty(self.cache.shape(), &self.cache.device());
+            self.cache = new_cache.slice_assign::<D>(slices_curr.try_into().unwrap(), prev_slice);
             new_seq_len = self.max_seq_len;
         }
 

@@ -75,6 +75,7 @@ impl<B: Backend> MultiHeadAttention<B> {
         input: Tensor<B, 3>,
         cache: &mut KeyValueCache<B>,
         rope: &RotaryEncoding<B>,
+        mask: Option<Tensor<B, 4, Bool>>,
     ) -> Tensor<B, 3> {
         let device = input.device();
         let [batch_size, seq_len, hidden_size] = input.dims();
@@ -91,14 +92,20 @@ impl<B: Backend> MultiHeadAttention<B> {
         let (k, v) = cache.forward(k, v);
 
         let mask = if seq_len > 1 {
-            let cache_seq_len = cache.len();
-            let mask = Tensor::<B, 2, Bool>::tril_mask(
-                [seq_len, cache_seq_len],
-                (cache_seq_len - seq_len) as i64, // offset
-                &device,
-            );
+            match mask {
+                Some(mask) => Some(mask),
+                None => {
+                    // We ensure that the correct mask is applied
+                    let cache_seq_len = cache.len();
+                    let mask = Tensor::<B, 2, Bool>::tril_mask(
+                        [seq_len, cache_seq_len],
+                        (cache_seq_len - seq_len) as i64, // offset
+                        &device,
+                    );
 
-            Some(mask.unsqueeze::<4>())
+                    Some(mask.unsqueeze::<4>())
+                }
+            }
         } else {
             None
         };
@@ -239,7 +246,7 @@ mod tests {
         let rope = RotaryEncodingConfig::new(seq_length * 2, config.d_model / config.n_heads)
             .init(&device);
 
-        let output = mha.forward_cache(input, &mut cache, &rope);
+        let output = mha.forward_cache(input, &mut cache, &rope, None);
         let expected = arange_mha_expacted_value();
 
         output
@@ -305,6 +312,7 @@ mod tests {
                 .slice([0..batch_size, 0..1, 0..config.d_model]),
             &mut cache,
             &rope,
+            None,
         );
         let out_2 = mha.forward_cache(
             input
@@ -312,6 +320,7 @@ mod tests {
                 .slice([0..batch_size, 1..2, 0..config.d_model]),
             &mut cache,
             &rope,
+            None,
         );
         let out_3 = mha.forward_cache(
             input
@@ -319,6 +328,7 @@ mod tests {
                 .slice([0..batch_size, 2..3, 0..config.d_model]),
             &mut cache,
             &rope,
+            None,
         );
 
         let output = Tensor::cat(vec![out_1, out_2, out_3], 1);

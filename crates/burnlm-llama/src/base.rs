@@ -737,8 +737,9 @@ impl<B: Backend, T: Tokenizer> Llama<B, T> {
             let [_, seq_len] = x.dims();
             let (mask, num_removed) = self.cache.prepare(seq_len);
 
-            if let Some(num_removed) = num_removed {
-                self.rope.shift(num_removed);
+            if let Some(_num_removed) = num_removed {
+                // TODO
+                // self.rope.shift(num_removed);
             }
 
             let logits = self.model.forward(x, &mut self.cache, &self.rope, mask);

@@ -1,6 +1,6 @@
 use std::ops::Range;
 
-use burn::tensor::{backend::Backend, Device, Shape, Tensor};
+use burn::tensor::{backend::Backend, Device, Tensor};
 
 #[derive(Debug, Clone)]
 /// Cache that keeps track of a tensor state in an autoregressive decoding process.
@@ -8,17 +8,14 @@ pub(crate) struct AutoregressiveCache<B: Backend, const D: usize> {
     cache: Tensor<B, D>,
     seq_dim: usize,
     cur_seq_len: usize,
-    pub(crate) max_seq_len: usize,
 }
 
 impl<const D: usize, B: Backend> AutoregressiveCache<B, D> {
     /// Creates a new empty cache.
     pub fn new(shape: [usize; D], seq_dim: usize, device: &Device<B>) -> Self {
-        let max_seq_len = shape[seq_dim];
         Self {
             cache: Tensor::empty(shape, device),
             seq_dim,
-            max_seq_len,
             cur_seq_len: 0,
         }
     }
@@ -45,10 +42,6 @@ impl<const D: usize, B: Backend> AutoregressiveCache<B, D> {
     pub fn append(&mut self, tokens: Tensor<B, D>) -> Tensor<B, D> {
         let shape = tokens.shape();
         let seq_len_input = shape.dims[self.seq_dim];
-
-        if self.cur_seq_len + seq_len_input > self.max_seq_len {
-            self.shrink(&shape);
-        }
 
         let new_seq_len = self.cur_seq_len + seq_len_input;
 
@@ -77,16 +70,19 @@ impl<const D: usize, B: Backend> AutoregressiveCache<B, D> {
 
     /// Shrink the cache to fit in `max_seq_len` while making place for the new tokens being
     /// decoded.
-    fn shrink(&mut self, shape_tokens: &Shape) {
-        let seq_len_input = shape_tokens.dims[self.seq_dim];
-        self.cur_seq_len = self.max_seq_len - seq_len_input;
+    pub fn shrink(&mut self, num_removed: usize) {
+        let old_cur_seq_len = self.cur_seq_len;
+        self.cur_seq_len -= num_removed;
 
-        let mut slices_prev = Vec::with_capacity(shape_tokens.dims.len());
-        let mut slices_curr = Vec::with_capacity(shape_tokens.dims.len());
+        let shape = self.cache.shape();
+        let device = self.cache.device();
 
-        for (i, shape) in shape_tokens.dims.iter().enumerate() {
+        let mut slices_prev = Vec::with_capacity(shape.dims.len());
+        let mut slices_curr = Vec::with_capacity(shape.dims.len());
+
+        for (i, shape) in shape.dims.iter().enumerate() {
             if i == self.seq_dim {
-                slices_prev.push(seq_len_input..self.max_seq_len);
+                slices_prev.push(num_removed..old_cur_seq_len);
                 slices_curr.push(0..self.cur_seq_len);
             } else {
                 slices_prev.push(0..*shape);
@@ -94,17 +90,69 @@ impl<const D: usize, B: Backend> AutoregressiveCache<B, D> {
             }
         }
 
-        let prev_slice = self
-            .cache
-            .clone()
-            .slice::<D, [Range<usize>; D]>(slices_prev.try_into().unwrap());
+        self.cache.inplace(|cache| {
+            let prev_slice = cache.slice::<D, [Range<usize>; D]>(slices_prev.try_into().unwrap());
+            let new_cache = Tensor::empty(shape, &device);
 
-        let new_cache = Tensor::empty(self.cache.shape(), &self.cache.device());
-        self.cache = new_cache.slice_assign::<D>(slices_curr.try_into().unwrap(), prev_slice);
+            new_cache.slice_assign::<D>(slices_curr.try_into().unwrap(), prev_slice)
+        });
     }
 
     /// Returns the cached sequence length.
     pub fn len(&self) -> usize {
         self.cur_seq_len
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tests::TestBackend;
+
+    #[test]
+    fn test_autoregressive_cache() {
+        let device: Device<TestBackend> = Default::default();
+        let mut cache = AutoregressiveCache::<TestBackend, 2>::new([8, 8], 0, &device);
+
+        let tokens_1 = Tensor::<TestBackend, 2>::full([4, 8], 1.0, &device);
+        let tokens_2 = Tensor::<TestBackend, 2>::full([4, 8], 2.0, &device);
+
+        let received_1 = cache.append(tokens_1.clone());
+        assert_eq!(cache.len(), 4);
+        let received_2 = cache.append(tokens_2.clone());
+        assert_eq!(cache.len(), 8);
+
+        received_1.to_data().assert_eq(&tokens_1.to_data(), true);
+        received_2
+            .clone()
+            .slice(0..4)
+            .to_data()
+            .assert_eq(&tokens_1.to_data(), true);
+        received_2
+            .slice(4..8)
+            .to_data()
+            .assert_eq(&tokens_2.to_data(), true);
+
+        cache.shrink(2);
+        assert_eq!(cache.len(), 6);
+
+        let tokens_3 = Tensor::<TestBackend, 2>::full([2, 8], 3.0, &device);
+        let received_3 = cache.append(tokens_3.clone());
+        assert_eq!(cache.len(), 8);
+
+        received_3
+            .clone()
+            .slice(0..2)
+            .to_data()
+            .assert_eq(&tokens_1.slice(2..4).into_data(), true);
+        received_3
+            .clone()
+            .slice(2..6)
+            .to_data()
+            .assert_eq(&tokens_2.to_data(), true);
+        received_3
+            .slice(6..8)
+            .to_data()
+            .assert_eq(&tokens_3.to_data(), true);
     }
 }

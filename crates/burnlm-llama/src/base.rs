@@ -438,7 +438,7 @@ impl LlamaConfig {
         let cache = TransformerCache::new(&config, self.max_batch_size, device);
 
         let rope = RotaryEncodingConfig::new(
-            self.max_seq_len * 2,
+            self.max_seq_len * 5,
             self.d_model / self.num_attention_heads,
         )
         .with_theta(self.rope.theta);
@@ -735,7 +735,11 @@ impl<B: Backend, T: Tokenizer> Llama<B, T> {
                 .reshape([1, -1]);
 
             let [_, seq_len] = x.dims();
-            let mask = self.cache.mask_attn(seq_len);
+            let (mask, num_removed) = self.cache.prepare(seq_len);
+
+            if let Some(num_removed) = num_removed {
+                self.rope.shift(num_removed);
+            }
 
             let logits = self.model.forward(x, &mut self.cache, &self.rope, mask);
 

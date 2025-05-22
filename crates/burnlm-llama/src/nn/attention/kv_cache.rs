@@ -50,10 +50,9 @@ impl<B: Backend> KeyValueCache<B> {
         self.key.len()
     }
 
-    /// TODO
-    pub fn max_seq_len(&self) -> usize {
-        // We can assume key and value have the same length
-        self.key.max_seq_len
+    pub fn shrink(&mut self, num_removed: usize) {
+        self.key.shrink(num_removed);
+        self.value.shrink(num_removed);
     }
 
     /// Reset key-value cache.

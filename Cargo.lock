@@ -813,7 +813,6 @@ dependencies = [
 [[package]]
 name = "burnbench"
 version = "0.1.0"
-source = "git+https://github.com/tracel-ai/burn-bench#9d66398d2ad6ddaf253848e91654e922328e16d7"
 dependencies = [
  "arboard",
  "cfg-if",

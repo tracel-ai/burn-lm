@@ -35,10 +35,10 @@ pub struct Llama3ServerConfig {
     #[config(default = 0.0)]
     pub temperature: f64,
     /// Maximum sequence length for input text.
-    #[config(default = 4096)]
+    #[config(default = 256)]
     pub max_seq_len: usize,
     /// The number of new tokens to generate (i.e., the number of generation steps to take).
-    #[config(default = 1024, openwebui_param = "max_tokens")]
+    #[config(default = 128, openwebui_param = "max_tokens")]
     pub sample_len: usize,
     /// The seed to use when generating random samples. If it is 0 then a random seed is used for each inference.
     #[config(default = 0)]

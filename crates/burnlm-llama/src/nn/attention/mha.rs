@@ -83,16 +83,10 @@ impl<B: Backend> MultiHeadAttention<B> {
         let (q, k, v) = self.forward_projection(input);
 
         // Sequence start position can be deduced from the number of cached items
-        let cache_seq_len = cache.len();
+        let start_pos = cache.len();
 
-        let cache_seq_len = if cache_seq_len + seq_len > cache.max_seq_len() {
-            cache.max_seq_len() - seq_len
-        } else {
-            cache_seq_len
-        };
-
-        let q = rope.apply(q, cache_seq_len);
-        let k = rope.apply(k, cache_seq_len);
+        let q = rope.apply(q, start_pos);
+        let k = rope.apply(k, start_pos);
 
         // Key-value caching
         let (k, v) = cache.forward(k, v);

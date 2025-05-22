@@ -1,3 +1,3 @@
 fn main() {
-    burnbench::execute("benchmarks", "./");
+    burnbench::execute("benchmarks", ".");
 }

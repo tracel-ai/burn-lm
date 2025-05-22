@@ -2,8 +2,7 @@
 logger = { file = "/tmp/profiling.log", level = "disabled" }
 
 [autotune]
-logger = { file = "/tmp/autotune.log", level = "minimal" }
+logger = { file = "/tmp/autotune.log", level = "disabled" }
 
 [compilation]
-logger = { file = "/tmp/compilation.log", level = "basic" }
-cache = "target"
+logger = { file = "/tmp/compilation.log", level = "disabled" }

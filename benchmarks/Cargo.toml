@@ -1,4 +1,5 @@
 
+
 [package]
 authors = ["Tracel Technologies Inc."]
 categories = ["science"]
@@ -46,7 +47,8 @@ burn = { workspace = true, default-features = false, features = [
     "std",
 ] }
 burn-common = { workspace = true, default-features = false }
-burnbench = { git = "https://github.com/tracel-ai/burn-bench" }
+# burnbench = { git = "https://github.com/tracel-ai/burn-bench" }
+burnbench = { path = "../../burn-bench/burnbench" }
 burnlm-llama = { path = "../crates/burnlm-llama" }
 
 [[bench]]

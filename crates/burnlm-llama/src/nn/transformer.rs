@@ -83,6 +83,7 @@ pub struct TransformerCache<B: Backend> {
     layers: Vec<KeyValueCache<B>>,
     device: Device<B>,
     max_seq_len: usize,
+    curr_seq_len: usize,
 }
 
 impl<B: Backend> TransformerCache<B> {
@@ -103,25 +104,34 @@ impl<B: Backend> TransformerCache<B> {
             layers: cache,
             device: device.clone(),
             max_seq_len: config.max_seq_len,
+            curr_seq_len: 0,
         }
     }
 
-    pub fn mask_attn(&self, seq_len: usize) -> Option<Tensor<B, 4, Bool>> {
+    pub fn prepare(&mut self, seq_len: usize) -> (Option<Tensor<B, 4, Bool>>, Option<usize>) {
+        self.curr_seq_len += seq_len;
+        let mut num_removed_result = None;
+
+        if self.curr_seq_len > self.max_seq_len {
+            let num_removed = self.curr_seq_len - self.max_seq_len;
+            self.layers
+                .iter_mut()
+                .for_each(|cache| cache.shrink(num_removed));
+            self.curr_seq_len -= num_removed;
+            num_removed_result = Some(num_removed);
+        }
+
+        (self.mask_attn(seq_len), num_removed_result)
+    }
+
+    fn mask_attn(&self, seq_len: usize) -> Option<Tensor<B, 4, Bool>> {
         if seq_len <= 1 {
             return None;
         }
 
-        let cache_seq_len_next = self.layers[0].len() + seq_len;
-
-        let cache_seq_len_next = if cache_seq_len_next > self.max_seq_len {
-            self.max_seq_len
-        } else {
-            cache_seq_len_next
-        };
-
         let mask = Tensor::<B, 2, Bool>::tril_mask(
-            [seq_len, cache_seq_len_next],
-            (cache_seq_len_next - seq_len) as i64, // offset
+            [seq_len, self.curr_seq_len],
+            (self.curr_seq_len - seq_len) as i64, // offset
             &self.device,
         );
 
@@ -272,7 +282,7 @@ mod tests {
             .range_float(0.0, 5.0)
             .apply(transformer);
 
-        let mask = cache.mask_attn(seq_length);
+        let mask = cache.prepare(seq_length).0;
         let output = transformer.forward(input, &mut cache, &rope, mask);
 
         let expected = TensorData::from([

@@ -1,0 +1,116 @@
+[workspace]
+# Try
+# require version 2 to avoid "feature" additiveness for dev-dependencies
+# https://doc.rust-lang.org/cargo/reference/resolver.html#feature-resolver-version-2
+resolver = "2"
+
+members = ["crates/*", "benchmarks", "xtask"]
+
+[workspace.package]
+edition = "2021"
+version = "0.0.1"
+license = "MIT OR Apache-2.0"
+readme = "README.md"
+
+[workspace.dependencies]
+burn = { git = "https://github.com/tracel-ai/burn", features = [
+    "std",
+], default-features = false }
+burn-common = { git = "https://github.com/tracel-ai/burn", features = [
+    "std",
+], default-features = false }
+
+burn-import = { git = "https://github.com/tracel-ai/burn" }
+
+# For dev we use the local version of burn
+# burn = { path = "../burn/crates/burn", features = [
+#     "std",
+# ], default-features = false }
+# burn-common = { path = "../burn/crates/burn-common", features = [
+#     "std",
+# ], default-features = false }
+# 
+# burn-import = { path = "../burn/crates/burn-import" }
+# For release, but right now we need new features that are not released in Burn yet.
+# burn = { version = "0.17.0", default-features = false, features = ["std"] }
+# burn-import = { version = "0.17.0" }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Errors
+anyhow = "1"
+thiserror = "2"
+
+# Time
+chrono = { version = "0.4", features = ["serde"] }
+
+# Cli
+clap = { version = "4.5", features = ["derive", "cargo"] }
+cloop = "0.1.0"
+comfy-table = "7.1"
+dotenvy = "0.15"
+rustyline = { version = "15.0", features = ["custom-bindings", "derive"] }
+spinners = "4.1"
+yansi = "1.0"
+
+# Logging
+log = "0.4"
+tracing = { version = "0.1", features = ["log"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "registry"] }
+
+
+# Http & Async
+axum = { version = "0.8", features = ["macros"] }
+async-trait = "0.1.88"
+tokio = { version = "1.42", features = ["full"] }
+tokio-stream = "0.1"
+tower-http = { version = "0.6", features = [
+    "fs",
+    "cors",
+    "trace",
+    "request-id",
+] }
+utoipa = { version = "5.3", features = ["axum_extras"] }
+utoipa-swagger-ui = { version = "9.0", features = ["axum"] }
+
+
+# Macros & Derives
+darling = "0.20"
+syn = { version = "2", features = ["full"] }
+proc-macro2 = "1"
+quote = "1"
+strum = { version = "0.26", features = ["derive"] }
+
+# Files
+dirs = { version = "5" }
+tempfile = "3.16"
+
+# Init
+lazy_static = "1.5"
+
+# Random & Bytes manipulation
+rand = { version = "0.9", default-features = false }
+base64 = { version = "0.22" }
+rustc-hash = { version = "1.1" }
+
+# Tests
+rstest = "0.24"
+
+# Tokenizers
+tiktoken-rs = { version = "0.5" }
+tokenizers = { version = "0.19", default-features = false, features = ["onig"] }
+
+### For xtask crate ###
+tracel-xtask = { version = "=1.1.8" }
+
+[profile.dev]
+debug = 0 # Speed up compilation time and not necessary.
+
+[profile.launcher]
+# we want fast compile, we don't care about fast runtime performance here
+inherits = "dev"
+opt-level = 0
+lto = false
+incremental = true

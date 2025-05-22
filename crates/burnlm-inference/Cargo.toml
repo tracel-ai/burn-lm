@@ -1,0 +1,60 @@
+[package]
+name = "burnlm-inference"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+readme.workspace = true
+
+[features]
+# Feature flag to deactivate the default backend.
+selected-backend = []
+
+candle-accelerate = ["burn/candle", "burn/accelerate", "selected-backend"]
+candle-cpu = ["burn/candle", "selected-backend"]
+candle-cuda = ["burn/candle-cuda", "selected-backend"]
+candle-metal = ["burn/candle", "burn/metal", "selected-backend"]
+
+cuda = [
+    "burn/cuda",
+    "burn/default",
+    # The compilation cache really help for the CLI.
+    "burn/compilation-cache",
+    "selected-backend",
+]
+rocm = [
+    "burn/rocm",
+    "burn/default",
+    # The compilation cache really help for the CLI.
+    "burn/compilation-cache",
+    "selected-backend",
+]
+metal = ["burn/metal", "selected-backend"]
+libtorch = ["burn/tch", "selected-backend"]
+libtorch-cpu = ["burn/tch", "selected-backend"]
+ndarray = ["burn/ndarray"]
+ndarray-blas-accelerate = ["ndarray", "burn/accelerate"]
+ndarray-blas-netlib = ["ndarray", "burn/blas-netlib"]
+ndarray-blas-openblas = ["ndarray", "burn/openblas"]
+wgpu = ["burn/wgpu", "selected-backend"]
+vulkan = ["burn/vulkan", "burn/default", "selected-backend"]
+wgpu-cpu = ["burn/wgpu", "selected-backend"]
+
+f16 = []
+bf16 = []
+f32 = []
+
+[dependencies]
+burn = { workspace = true, default-features = false, features = ["ndarray"] }
+burnlm-macros = { path = "../burnlm-macros" }
+
+clap = { workspace = true }
+comfy-table = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+strum = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[dev-dependencies]
+rstest = { workspace = true }

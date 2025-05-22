@@ -1,0 +1,10 @@
+[package]
+name = "xtask"
+version = "1.0.0"
+edition = "2021"
+
+[dependencies]
+strum = { workspace = true }
+log = { workspace = true }
+tokio = { workspace = true }
+tracel-xtask = { workspace = true }

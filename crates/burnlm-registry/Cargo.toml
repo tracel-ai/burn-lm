@@ -1,0 +1,18 @@
+[package]
+name = "burnlm-registry"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+readme.workspace = true
+
+[dependencies]
+burnlm-inference = { path = "../burnlm-inference" }
+burnlm-macros = { path = "../burnlm-macros" }
+
+# plugins
+burnlm-llama = { path = "../burnlm-llama", features = [
+    "inference-server",
+    "llama3",
+    "tiny",
+] }
+burnlm-parrot = { path = "../burnlm-parrot" }

@@ -1,0 +1,37 @@
+[package]
+name = "burnlm-http"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+readme.workspace = true
+
+[dependencies]
+burn = { workspace = true }
+burnlm-inference = { path = "../burnlm-inference" }
+burnlm-registry = { path = "../burnlm-registry" }
+
+async-trait = { workspace = true }
+axum = { workspace = true }
+chrono = { workspace = true }
+clap = { workspace = true }
+dotenvy = { workspace = true }
+lazy_static = { workspace = true }
+rand = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+strum = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tokio-stream = { workspace = true }
+tower-http = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+utoipa = { workspace = true }
+utoipa-swagger-ui = { workspace = true }
+
+[dev-dependencies]
+rstest = { workspace = true }
+
+[[bin]]
+name = "burnlm-http"
+path = "src/bin/burnlm-http.rs"

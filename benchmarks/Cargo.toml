@@ -1,0 +1,67 @@
+
+
+[package]
+authors = ["Tracel Technologies Inc."]
+categories = ["science"]
+description = "Benchmarks of models"
+edition.workspace = true
+license.workspace = true
+name = "benchmarks"
+readme = "README.md"
+repository = "https://github.com/tracel-ai/burn-lm/tree/main/model/benchmarks"
+version = "0.1.0"
+
+[features]
+candle-accelerate = ["burn/candle", "burn/accelerate"]
+candle-cpu = ["burn/candle"]
+candle-cuda = ["burn/candle-cuda"]
+candle-metal = ["burn/candle", "burn/candle-metal"]
+cuda = ["burn/cuda"]
+cuda-fusion = ["cuda", "burn/fusion"]
+default = []
+rocm = ["burn/rocm"]
+rocm-fusion = ["rocm", "burn/fusion"]
+ndarray = ["burn/ndarray"]
+ndarray-blas-accelerate = ["ndarray", "burn/accelerate"]
+ndarray-blas-netlib = ["ndarray", "burn/blas-netlib"]
+ndarray-blas-openblas = ["ndarray", "burn/openblas"]
+ndarray-simd = ["ndarray", "burn/simd"]
+tch-cpu = ["burn/tch"]
+tch-cuda = ["burn/tch"]
+tch-metal = ["burn/tch"]
+wgpu = ["burn/wgpu", "burn/autotune"]
+wgpu-fusion = ["wgpu", "burn/fusion"]
+vulkan = ["burn/vulkan", "burn/autotune"]
+vulkan-fusion = ["vulkan", "burn/fusion"]
+metal = ["burn/metal", "burn/autotune"]
+metal-fusion = ["metal", "burn/fusion"]
+f32 = []
+f16 = []
+bf16 = []
+flex32 = []
+legacy-v16 = []
+
+[dependencies]
+burn = { workspace = true, default-features = false, features = [
+    "autotune",
+    "std",
+] }
+burn-common = { workspace = true, default-features = false }
+burnbench = { git = "https://github.com/tracel-ai/burn-bench" }
+burnlm-llama = { path = "../crates/burnlm-llama" }
+
+[[bench]]
+harness = false
+name = "attention"
+
+[[bench]]
+harness = false
+name = "transformer_block"
+
+[[bench]]
+harness = false
+name = "embedding"
+
+[[bench]]
+harness = false
+name = "transformer"

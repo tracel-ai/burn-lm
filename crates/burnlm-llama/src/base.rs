@@ -738,6 +738,7 @@ impl<B: Backend, T: Tokenizer> Llama<B, T> {
             let (mask, num_removed) = self.cache.prepare(seq_len);
 
             if let Some(_num_removed) = num_removed {
+                todo!("Support exceeding max seq length");
                 // TODO
                 // self.rope.shift(num_removed);
             }

@@ -62,7 +62,7 @@ Burn LM allows to chat with LLMs both in the terminal or in the browser.
 Start a chat session with a chosen model using the `chat` command:
 
 ```sh
-cargo chat llama32
+cargo burnlm chat llama32
 ```
 
 Some slash commands are available, you can get the list of them by typing `/help`

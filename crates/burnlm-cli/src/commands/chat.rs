@@ -73,7 +73,7 @@ impl ChatContext {
 }
 
 pub(crate) fn create() -> clap::Command {
-    let mut root = clap::Command::new("chat").about("Start a chat session with the choosen model");
+    let mut root = clap::Command::new("chat").about("Start a chat session with the chosen model");
     let registry = Registry::new();
     // Create a a subcommand for each registered model with its associated  flags
     let mut installed: Vec<_> = registry
@@ -153,7 +153,7 @@ pub(crate) fn handle(
                             crate::utils::display_stats(&answer);
                         }
                     }
-                    Err(err) => anyhow::bail!("An error occured: {err}"),
+                    Err(err) => anyhow::bail!("An error occurred: {err}"),
                 }
                 Ok(cloop::ShellAction::Continue)
             }

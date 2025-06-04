@@ -247,7 +247,7 @@ mod tests {
             .init(&device);
 
         let output = mha.forward_cache(input, &mut cache, &rope, None);
-        let expected = arange_mha_expacted_value();
+        let expected = arange_mha_expected_value();
 
         output
             .into_data()
@@ -273,7 +273,7 @@ mod tests {
             .init(&device);
 
         let output = mha.forward_masked(input, &rope);
-        let expected = arange_mha_expacted_value();
+        let expected = arange_mha_expected_value();
 
         output
             .into_data()
@@ -333,14 +333,14 @@ mod tests {
 
         let output = Tensor::cat(vec![out_1, out_2, out_3], 1);
 
-        let expected = arange_mha_expacted_value();
+        let expected = arange_mha_expected_value();
 
         output
             .into_data()
             .assert_approx_eq::<f32>(&expected, Tolerance::balanced());
     }
 
-    fn arange_mha_expacted_value() -> TensorData {
+    fn arange_mha_expected_value() -> TensorData {
         TensorData::from([
             [
                 [

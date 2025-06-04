@@ -54,7 +54,7 @@ pub struct ParrotServer<B: Backend> {
 impl InferenceServer for ParrotServer<InferenceBackend> {
     fn downloader(&mut self) -> Option<fn() -> InferenceResult<Option<Stats>>> {
         // Return a closure with code to download the model if available.
-        // Return none if there is no possiblity to download the model or if
+        // Return none if there is no possibility to download the model or if
         // this model does not need to be downloaded.
         None
     }
@@ -68,7 +68,7 @@ impl InferenceServer for ParrotServer<InferenceBackend> {
 
     fn deleter(&mut self) -> Option<fn() -> InferenceResult<Option<Stats>>> {
         // Return a closure with code to delete the model if applicable.
-        // Return none if there is no possiblity to delete the model or if
+        // Return none if there is no possibility to delete the model or if
         // this model does not need to be deleted.
         None
     }

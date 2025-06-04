@@ -389,7 +389,7 @@ impl Llama3BaseServer<InferenceBackend> {
             Some(arc_model) => {
                 let mut model = arc_model
                     .lock()
-                    .expect("shoud lock the model for inference");
+                    .expect("should lock the model for inference");
                 model.generate(&prompt, config.sample_len, config.temperature, &mut sampler)
             }
             None => return Err(InferenceError::ModelNotLoaded),

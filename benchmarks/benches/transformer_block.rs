@@ -1,11 +1,14 @@
 use burn::{
-    nn::{RotaryEncoding, RotaryEncodingConfig},
+    nn::RotaryEncodingConfig,
     tensor::{backend::Backend, Distribution, Element, Tensor},
 };
 use burn_common::benchmark::{run_benchmark, Benchmark, BenchmarkResult};
-use burnlm_llama::nn::{
-    attention::KeyValueCache,
-    transformer::{TransformerBlock, TransformerBlockConfig},
+use burnlm_llama::{
+    nn::{
+        attention::KeyValueCache,
+        transformer::{TransformerBlock, TransformerBlockConfig},
+    },
+    PositionalEncodingState,
 };
 
 pub struct TransformerBlockBenchmark<B: Backend> {
@@ -14,7 +17,7 @@ pub struct TransformerBlockBenchmark<B: Backend> {
     config: Config,
     device: B::Device,
     block: TransformerBlock<B>,
-    rope: RotaryEncoding<B>,
+    rope: PositionalEncodingState<B>,
 }
 
 impl<B: Backend> Benchmark for TransformerBlockBenchmark<B> {
@@ -116,7 +119,7 @@ fn bench<B: Backend>(device: &B::Device) -> Vec<BenchmarkResult> {
             config,
             device: device.clone(),
             block,
-            rope,
+            rope: PositionalEncodingState::new(rope),
         };
         let result = run_benchmark(benchmark);
         results.push(result);

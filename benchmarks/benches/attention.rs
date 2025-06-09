@@ -1,9 +1,12 @@
 use burn::{
-    nn::{RotaryEncoding, RotaryEncodingConfig},
+    nn::RotaryEncodingConfig,
     tensor::{backend::Backend, Distribution, Element, Tensor},
 };
 use burn_common::benchmark::{run_benchmark, Benchmark, BenchmarkResult};
-use burnlm_llama::nn::attention::{KeyValueCache, MultiHeadAttention, MultiHeadAttentionConfig};
+use burnlm_llama::{
+    nn::attention::{KeyValueCache, MultiHeadAttention, MultiHeadAttentionConfig},
+    PositionalEncodingState,
+};
 
 pub struct AttentionBenchmark<B: Backend> {
     seq_length: usize,
@@ -12,7 +15,7 @@ pub struct AttentionBenchmark<B: Backend> {
     n_heads: usize,
     device: B::Device,
     attn: MultiHeadAttention<B>,
-    rope: RotaryEncoding<B>,
+    rope: PositionalEncodingState<B>,
 }
 
 impl<B: Backend> Benchmark for AttentionBenchmark<B> {
@@ -69,7 +72,7 @@ fn bench<B: Backend>(device: &B::Device) -> Vec<BenchmarkResult> {
         d_model,
         device: device.clone(),
         attn,
-        rope,
+        rope: PositionalEncodingState::new(rope),
     };
 
     vec![run_benchmark(benchmark)]

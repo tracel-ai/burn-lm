@@ -450,6 +450,8 @@ impl LlamaConfig {
             rope.init(device)
         };
 
+        let rope = PositionalEncodingState::new(rope);
+
         Ok(Llama {
             tokenizer,
             model,
@@ -587,6 +589,7 @@ impl LlamaConfig {
     }
 }
 
+#[allow(dead_code)]
 fn check_context_length(max_seq_len: usize, max_context_len: usize) {
     assert!(
         max_seq_len <= max_context_len,
@@ -680,6 +683,74 @@ impl<B: Backend> TextGenerationState<B> {
     }
 }
 
+/// Tracks the state of rotary positional encodings during autoregressive inference.
+///
+/// Manages shifting of precomputed frequency tables when the sequence length exceeds
+/// the initially allocated range. Used to avoid recomputing RoPE values on-the-fly
+/// while maintaining correct positional alignment across decoding steps.
+#[derive(Debug)]
+pub struct PositionalEncodingState<B: Backend> {
+    /// Rotary positional encoding (RoPE).
+    pub rope: RotaryEncoding<B>,
+    /// RoPE maximum sequence length.
+    pub max_seq_len: usize,
+    /// The next position.
+    pub next_position: usize,
+    /// The current sequence length.
+    pub curr_seq_len: usize,
+    /// The index start offset.
+    pub start_offset: usize,
+}
+
+impl<B: Backend> PositionalEncodingState<B> {
+    pub fn new(rope: RotaryEncoding<B>) -> Self {
+        // Initial max position corresponds to the RoPE max seq len on initialization
+        let max_seq_len = rope.freq_complex.dims()[0];
+        Self {
+            rope,
+            max_seq_len,
+            next_position: 0,
+            curr_seq_len: 0,
+            start_offset: 0,
+        }
+    }
+
+    pub fn prepare(&mut self, seq_len: usize) {
+        self.curr_seq_len = seq_len;
+        self.next_position += seq_len;
+        if self.next_position > self.max_seq_len + self.start_offset {
+            let start = self.position();
+            self.rope.shift(start);
+            self.start_offset = start;
+        }
+    }
+
+    pub fn forward<const D: usize>(&self, x: Tensor<B, D>) -> Tensor<B, D> {
+        self.rope.forward(x)
+    }
+
+    pub fn apply<const D: usize>(&self, x: Tensor<B, D>) -> Tensor<B, D> {
+        self.rope.apply(x, self.index())
+    }
+
+    /// Returns the absolute sequence position since the beginning,
+    /// regardless of shifting.
+    pub fn position(&self) -> usize {
+        // The absolute sequence position should not include the current sequence
+        // input so we subtract to get the current generation position.
+        self.next_position - self.curr_seq_len
+    }
+
+    /// Returns the next index position for the pre-computed frequencies.
+    pub fn index(&self) -> usize {
+        let mut index = self.position();
+        if self.start_offset > 0 {
+            index -= self.start_offset
+        }
+        index
+    }
+}
+
 /// Meta Llama large language model and tokenizer.
 #[derive(Debug)]
 pub struct Llama<B: Backend, T: Tokenizer> {
@@ -690,7 +761,7 @@ pub struct Llama<B: Backend, T: Tokenizer> {
     /// Key-value cache for each transformer block.
     pub cache: TransformerCache<B>,
     /// Rotary positional encoding (RoPE).
-    pub rope: RotaryEncoding<B>,
+    pub rope: PositionalEncodingState<B>,
     pub device: Device<B>,
 }
 
@@ -735,13 +806,12 @@ impl<B: Backend, T: Tokenizer> Llama<B, T> {
                 .reshape([1, -1]);
 
             let [_, seq_len] = x.dims();
-            let (mask, num_removed) = self.cache.prepare(seq_len);
+            let mask = self.cache.prepare(seq_len);
 
-            if let Some(_num_removed) = num_removed {
-                todo!("Support exceeding max seq length");
-                // TODO
-                // self.rope.shift(num_removed);
-            }
+            // Right now we only move forward (greedy sampling), no earlier positions
+            // are revisited (e.g., beam search). So we can shift the RoPE values when
+            // exceeding the pre-computed positions.
+            self.rope.prepare(seq_len);
 
             let logits = self.model.forward(x, &mut self.cache, &self.rope, mask);
 
@@ -949,5 +1019,58 @@ mod tests {
         let expected = "[187, 114, 51, 146, 146, 250, 112, 224, 192, 99, 132, 0, 0, 180, 192, 99, 19, 114, 19, 174, 0, 180, 192, 131, 132, 19, 99, 114, 131, 132, 249, 146, 82, 28, 226, 226, 148, 84, 19, 192, 83, 99, 19, 249, 19, 251, 222, 19, 192, 180, 192, 180, 192, 0, 180, 192, 146, 20, 0, 180, 192, 180]";
 
         assert_eq!(result.text, expected);
+    }
+
+    #[test]
+    fn test_rope_shift() {
+        let device: Device<TestBackend> = Default::default();
+
+        let max_seq_len = 16;
+        let rope = RopeConfig::new(500000.0)
+            .with_scaled(Some(RopeFrequencyScaling::new().with_scale_factor(32.)));
+        let scaling = rope.scaled.unwrap();
+        let freq_scaling_fn = move |x| scaling.freq_scaling_by_parts(x);
+
+        let rope = RotaryEncodingConfig::new(max_seq_len, 4 / 2)
+            .with_theta(rope.theta)
+            .init_with_frequency_scaling::<TestBackend>(freq_scaling_fn, &device);
+
+        let mut rope = PositionalEncodingState::new(rope);
+        assert_eq!(rope.max_seq_len, max_seq_len);
+
+        // Input prompt
+        rope.prepare(14);
+        assert_eq!(rope.position(), 0);
+        assert_eq!(rope.index(), 0);
+
+        // Next token
+        rope.prepare(1);
+        assert_eq!(rope.position(), 14);
+        assert_eq!(rope.index(), 14);
+
+        // Next token
+        rope.prepare(1);
+        assert_eq!(rope.position(), 15);
+        assert_eq!(rope.index(), 15);
+
+        // Next prompt
+        rope.prepare(8); // should apply shift
+        assert_eq!(rope.position(), 16);
+        assert_eq!(rope.index(), 0);
+
+        // Next token
+        rope.prepare(1);
+        assert_eq!(rope.position(), 24);
+        assert_eq!(rope.index(), 8);
+
+        // Next prompt
+        rope.prepare(8);
+        assert_eq!(rope.position(), 25);
+        assert_eq!(rope.index(), 0);
+
+        // Next token
+        rope.prepare(1);
+        assert_eq!(rope.position(), 33);
+        assert_eq!(rope.index(), 8);
     }
 }

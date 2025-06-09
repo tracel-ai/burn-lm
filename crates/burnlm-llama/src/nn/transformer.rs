@@ -1,15 +1,16 @@
 use burn::{
     config::Config,
     module::Module,
-    nn::{
-        Embedding, EmbeddingConfig, Linear, LinearConfig, RmsNorm, RmsNormConfig, RotaryEncoding,
-    },
+    nn::{Embedding, EmbeddingConfig, Linear, LinearConfig, RmsNorm, RmsNormConfig},
     tensor::{backend::Backend, Bool, Device, Int, Tensor},
 };
 
-use crate::nn::{
-    attention::*,
-    fftn::{FeedForward, FeedForwardConfig},
+use crate::{
+    nn::{
+        attention::*,
+        fftn::{FeedForward, FeedForwardConfig},
+    },
+    PositionalEncodingState,
 };
 
 /// Configuration to create a Llama [decoder-only transformer](Transformer).
@@ -108,20 +109,17 @@ impl<B: Backend> TransformerCache<B> {
         }
     }
 
-    pub fn prepare(&mut self, seq_len: usize) -> (Option<Tensor<B, 4, Bool>>, Option<usize>) {
+    pub fn prepare(&mut self, seq_len: usize) -> Option<Tensor<B, 4, Bool>> {
         self.curr_seq_len += seq_len;
-        let mut num_removed_result = None;
-
         if self.curr_seq_len > self.max_seq_len {
             let num_removed = self.curr_seq_len - self.max_seq_len;
             self.layers
                 .iter_mut()
                 .for_each(|cache| cache.shrink(num_removed));
             self.curr_seq_len -= num_removed;
-            num_removed_result = Some(num_removed);
         }
 
-        (self.mask_attn(seq_len), num_removed_result)
+        self.mask_attn(seq_len)
     }
 
     fn mask_attn(&self, seq_len: usize) -> Option<Tensor<B, 4, Bool>> {
@@ -148,7 +146,7 @@ impl<B: Backend> Transformer<B> {
         &self,
         input: Tensor<B, 2, Int>,
         cache: &mut TransformerCache<B>,
-        rope: &RotaryEncoding<B>,
+        rope: &PositionalEncodingState<B>,
         mask: Option<Tensor<B, 4, Bool>>,
     ) -> Tensor<B, 3> {
         let mut h = self.tok_embeddings.forward(input);
@@ -219,7 +217,7 @@ impl<B: Backend> TransformerBlock<B> {
         &self,
         input: Tensor<B, 3>,
         cache: &mut KeyValueCache<B>,
-        rope: &RotaryEncoding<B>,
+        rope: &PositionalEncodingState<B>,
         mask: Option<Tensor<B, 4, Bool>>,
     ) -> Tensor<B, 3> {
         let h = input.clone()
@@ -275,6 +273,8 @@ mod tests {
 
         let rope = RotaryEncodingConfig::new(seq_length * 2, config.d_model / config.n_heads)
             .init(&device);
+        let rope = PositionalEncodingState::new(rope);
+
         let input = Tensor::arange(0..(batch_size * seq_length) as i64, &device)
             .reshape([batch_size, seq_length]);
 
@@ -282,7 +282,7 @@ mod tests {
             .range_float(0.0, 5.0)
             .apply(transformer);
 
-        let mask = cache.prepare(seq_length).0;
+        let mask = cache.prepare(seq_length);
         let output = transformer.forward(input, &mut cache, &rope, mask);
 
         let expected = TensorData::from([

@@ -4,6 +4,8 @@ use burn::{
     tensor::activation::softmax,
 };
 
+use crate::PositionalEncodingState;
+
 use super::kv_cache::KeyValueCache;
 
 /// Configuration to create a [multi-head attention](MultiHeadAttention) module.
@@ -34,7 +36,10 @@ pub struct MultiHeadAttention<B: Backend> {
 }
 
 impl<B: Backend> MultiHeadAttention<B> {
-    /// Applies the forward pass on the input tensors.
+    /// Applies masked self-attention in a non-cached (non-incremental) setting.
+    ///
+    /// This function is intended for scenarios where the entire input sequence
+    /// is available.
     ///
     /// # Shapes
     ///
@@ -48,8 +53,9 @@ impl<B: Backend> MultiHeadAttention<B> {
 
         let (q, k, v) = self.forward_projection(input);
 
-        let q = rope.apply(q, seq_len);
-        let k = rope.apply(k, seq_len);
+        // Start position is 0
+        let q = rope.forward(q);
+        let k = rope.forward(k);
 
         let mask = if seq_len > 1 {
             let mask = Tensor::<B, 2, Bool>::tril_mask([seq_len, seq_len], 0, &device);
@@ -74,7 +80,7 @@ impl<B: Backend> MultiHeadAttention<B> {
         &self,
         input: Tensor<B, 3>,
         cache: &mut KeyValueCache<B>,
-        rope: &RotaryEncoding<B>,
+        rope: &PositionalEncodingState<B>,
         mask: Option<Tensor<B, 4, Bool>>,
     ) -> Tensor<B, 3> {
         let device = input.device();
@@ -82,11 +88,8 @@ impl<B: Backend> MultiHeadAttention<B> {
 
         let (q, k, v) = self.forward_projection(input);
 
-        // Sequence start position can be deduced from the number of cached items
-        let start_pos = cache.len();
-
-        let q = rope.apply(q, start_pos);
-        let k = rope.apply(k, start_pos);
+        let q = rope.apply(q);
+        let k = rope.apply(k);
 
         // Key-value caching
         let (k, v) = cache.forward(k, v);
@@ -245,6 +248,7 @@ mod tests {
 
         let rope = RotaryEncodingConfig::new(seq_length * 2, config.d_model / config.n_heads)
             .init(&device);
+        let rope = PositionalEncodingState::new(rope);
 
         let output = mha.forward_cache(input, &mut cache, &rope, None);
         let expected = arange_mha_expected_value();
@@ -297,6 +301,7 @@ mod tests {
 
         let rope = RotaryEncodingConfig::new(seq_length * 2, config.d_model / config.n_heads)
             .init(&device);
+        let rope = PositionalEncodingState::new(rope);
 
         let mut cache = KeyValueCache::new(
             batch_size,

@@ -37,8 +37,8 @@ impl<const D: usize, B: Backend> AutoregressiveCache<B, D> {
     ///
     /// # Shapes
     ///
-    /// - input:  [batch_size, num_heads, seq_len_input, d_model]
-    /// - output: [batch_size, num_heads, seq_len_previous + seq_len_input, d_model]
+    /// - input:  `[batch_size, num_heads, seq_len_input, d_model]`
+    /// - output: `[batch_size, num_heads, seq_len_previous + seq_len_input, d_model]`
     pub fn append(&mut self, tokens: Tensor<B, D>) -> Tensor<B, D> {
         let shape = tokens.shape();
         let seq_len_input = shape.dims[self.seq_dim];

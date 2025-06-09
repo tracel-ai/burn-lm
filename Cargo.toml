@@ -13,14 +13,14 @@ license = "MIT OR Apache-2.0"
 readme = "README.md"
 
 [workspace.dependencies]
-burn = { git = "https://github.com/tracel-ai/burn", features = [
+burn = { git = "https://github.com/tracel-ai/burn", rev = "9ae90ac3fe0d3baadf93f4a430b0524d6202db0a", features = [
     "std",
 ], default-features = false }
-burn-common = { git = "https://github.com/tracel-ai/burn", features = [
+burn-common = { git = "https://github.com/tracel-ai/burn", rev = "9ae90ac3fe0d3baadf93f4a430b0524d6202db0a", features = [
     "std",
 ], default-features = false }
 
-burn-import = { git = "https://github.com/tracel-ai/burn" }
+burn-import = { git = "https://github.com/tracel-ai/burn", rev = "9ae90ac3fe0d3baadf93f4a430b0524d6202db0a"}
 
 # For dev we use the local version of burn
 # burn = { path = "../burn/crates/burn", features = [
@@ -29,7 +29,7 @@ burn-import = { git = "https://github.com/tracel-ai/burn" }
 # burn-common = { path = "../burn/crates/burn-common", features = [
 #     "std",
 # ], default-features = false }
-# 
+
 # burn-import = { path = "../burn/crates/burn-import" }
 # For release, but right now we need new features that are not released in Burn yet.
 # burn = { version = "0.17.0", default-features = false, features = ["std"] }

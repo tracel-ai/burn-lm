@@ -19,7 +19,8 @@ pub struct TransformerBenchmark<B: Backend> {
 }
 
 impl<B: Backend> Benchmark for TransformerBenchmark<B> {
-    type Args = (Tensor<B, 2, Int>, TransformerCache<B>);
+    type Input = (Tensor<B, 2, Int>, TransformerCache<B>);
+    type Output = Tensor<B, 3>;
 
     fn name(&self) -> String {
         format!(
@@ -34,12 +35,12 @@ impl<B: Backend> Benchmark for TransformerBenchmark<B> {
         vec![vec![self.batch_size, self.seq_length, self.config.d_model]]
     }
 
-    fn execute(&self, (input, mut cache): Self::Args) {
+    fn execute(&self, (input, mut cache): Self::Input) -> Self::Output {
         self.transformer
-            .forward(input, &mut cache, &self.rope, None);
+            .forward(input, &mut cache, &self.rope, None)
     }
 
-    fn prepare(&self) -> Self::Args {
+    fn prepare(&self) -> Self::Input {
         let input = Tensor::<B, 2>::random(
             [self.batch_size, self.seq_length],
             Distribution::Uniform(0., 10000.0),

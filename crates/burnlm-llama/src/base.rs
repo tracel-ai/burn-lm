@@ -751,6 +751,11 @@ impl<B: Backend> PositionalEncodingState<B> {
     }
 }
 
+#[derive(Debug)]
+pub enum GenerationError {
+    MaxSequenceLengthExceeded { actual: usize, max: usize },
+}
+
 /// Meta Llama large language model and tokenizer.
 #[derive(Debug)]
 pub struct Llama<B: Backend, T: Tokenizer> {
@@ -783,7 +788,7 @@ impl<B: Backend, T: Tokenizer> Llama<B, T> {
         sample_len: usize,
         temperature: f64,
         sampler: &mut Sampler,
-    ) -> GenerationOutput {
+    ) -> Result<GenerationOutput, GenerationError> {
         let input_tokens = self.tokenize(prompt);
         let prompt_len = input_tokens.dims()[0];
 
@@ -806,7 +811,7 @@ impl<B: Backend, T: Tokenizer> Llama<B, T> {
                 .reshape([1, -1]);
 
             let [_, seq_len] = x.dims();
-            let mask = self.cache.prepare(seq_len);
+            let mask = self.cache.prepare(seq_len)?;
 
             // Right now we only move forward (greedy sampling), no earlier positions
             // are revisited (e.g., beam search). So we can shift the RoPE values when
@@ -844,11 +849,11 @@ impl<B: Backend, T: Tokenizer> Llama<B, T> {
 
         let generated = self.tokenizer.decode(tokens);
 
-        GenerationOutput {
+        Ok(GenerationOutput {
             text: generated,
             tokens: num_tokens,
             time: now.elapsed(),
-        }
+        })
     }
 
     /// Encode a string into a tensor of tokens.
@@ -1018,7 +1023,7 @@ mod tests {
         let result = llama.generate("This is a test", 64, 0.0, &mut Sampler::Argmax);
         let expected = "[187, 114, 51, 146, 146, 250, 112, 224, 192, 99, 132, 0, 0, 180, 192, 99, 19, 114, 19, 174, 0, 180, 192, 131, 132, 19, 99, 114, 131, 132, 249, 146, 82, 28, 226, 226, 148, 84, 19, 192, 83, 99, 19, 249, 19, 251, 222, 19, 192, 180, 192, 180, 192, 0, 180, 192, 146, 20, 0, 180, 192, 180]";
 
-        assert_eq!(result.text, expected);
+        assert_eq!(result.unwrap().text, expected);
     }
 
     #[test]

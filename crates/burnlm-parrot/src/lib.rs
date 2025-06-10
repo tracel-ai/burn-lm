@@ -107,4 +107,9 @@ impl InferenceServer for ParrotServer<InferenceBackend> {
             .insert(StatEntry::Named("Everything".to_string(), "42".to_string()));
         Ok(completion)
     }
+
+    fn clear_state(&mut self) -> InferenceResult<()> {
+        // No state
+        Ok(())
+    }
 }

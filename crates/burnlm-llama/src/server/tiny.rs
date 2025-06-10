@@ -7,7 +7,7 @@ use crate::{
     pretrained::{self, ModelMeta},
     sampling::{Sampler, TopP},
     tokenizer::SentiencePieceTokenizer,
-    Llama,
+    GenerationError, Llama,
 };
 use burn::prelude::Backend;
 use burnlm_inference::*;
@@ -135,7 +135,7 @@ impl InferenceServer for TinyLlamaServer<InferenceBackend> {
             Sampler::Argmax
         };
         let generated = match &self.model {
-            Some(arc_model) => arc_model
+            Some(arc_model) => match arc_model
                 .lock()
                 .expect("should be able to lock the model for inference")
                 .generate(
@@ -143,7 +143,12 @@ impl InferenceServer for TinyLlamaServer<InferenceBackend> {
                     self.config.sample_len,
                     self.config.temperature,
                     &mut sampler,
-                ),
+                ) {
+                Ok(result) => result,
+                Err(GenerationError::MaxSequenceLengthExceeded { actual, max }) => {
+                    return Err(InferenceError::ContextLengthExceeded(actual, max));
+                }
+            },
             _ => return Err(InferenceError::ModelNotLoaded),
         };
         let mut completion = Completion::new(&generated.text);
@@ -170,6 +175,19 @@ impl InferenceServer for TinyLlamaServer<InferenceBackend> {
             .entries
             .insert(StatEntry::TotalDuration(total_duration));
         Ok(completion)
+    }
+
+    fn clear_state(&mut self) -> InferenceResult<()> {
+        match &self.model {
+            Some(arc_model) => {
+                let mut model = arc_model
+                    .lock()
+                    .expect("should lock the model for inference");
+                model.reset();
+                Ok(())
+            }
+            None => return Err(InferenceError::ModelNotLoaded),
+        }
     }
 }
 

@@ -7,7 +7,7 @@ use crate::{
     pretrained::{self, ModelMeta},
     sampling::{Sampler, TopP},
     tokenizer::Tiktoken,
-    Llama,
+    GenerationError, Llama,
 };
 use burn::prelude::Backend;
 use burnlm_inference::*;
@@ -137,6 +137,10 @@ impl InferenceServer for Llama3InstructServer<InferenceBackend> {
     fn run_completion(&mut self, messages: Vec<Message>) -> InferenceResult<Completion> {
         self.server.complete(messages, &self.config)
     }
+
+    fn clear_state(&mut self) -> InferenceResult<()> {
+        self.server.clear_state()
+    }
 }
 
 #[derive(InferenceServer, Clone, Debug)]
@@ -200,6 +204,10 @@ impl InferenceServer for Llama31InstructServer<InferenceBackend> {
 
     fn run_completion(&mut self, messages: Vec<Message>) -> InferenceResult<Completion> {
         self.server.complete(messages, &self.config)
+    }
+
+    fn clear_state(&mut self) -> InferenceResult<()> {
+        self.server.clear_state()
     }
 }
 
@@ -265,6 +273,10 @@ impl InferenceServer for Llama321bInstructServer<InferenceBackend> {
     fn run_completion(&mut self, messages: Vec<Message>) -> InferenceResult<Completion> {
         self.server.complete(messages, &self.config)
     }
+
+    fn clear_state(&mut self) -> InferenceResult<()> {
+        self.server.clear_state()
+    }
 }
 
 #[derive(InferenceServer, Clone, Debug)]
@@ -329,6 +341,10 @@ impl InferenceServer for Llama323bInstructServer<InferenceBackend> {
     fn run_completion(&mut self, messages: Vec<Message>) -> InferenceResult<Completion> {
         self.server.complete(messages, &self.config)
     }
+
+    fn clear_state(&mut self) -> InferenceResult<()> {
+        self.server.clear_state()
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -390,7 +406,12 @@ impl Llama3BaseServer<InferenceBackend> {
                 let mut model = arc_model
                     .lock()
                     .expect("should lock the model for inference");
-                model.generate(&prompt, config.sample_len, config.temperature, &mut sampler)
+                match model.generate(&prompt, config.sample_len, config.temperature, &mut sampler) {
+                    Ok(result) => result,
+                    Err(GenerationError::MaxSequenceLengthExceeded { actual, max }) => {
+                        return Err(InferenceError::ContextLengthExceeded(actual, max));
+                    }
+                }
             }
             None => return Err(InferenceError::ModelNotLoaded),
         };
@@ -420,10 +441,20 @@ impl Llama3BaseServer<InferenceBackend> {
         Ok(completion)
     }
 
-    fn load(
-        &mut self,
-        config: &Llama3ServerConfig,
-    ) -> burnlm_inference::errors::InferenceResult<Option<Stats>> {
+    fn clear_state(&mut self) -> InferenceResult<()> {
+        match &self.model {
+            Some(arc_model) => {
+                let mut model = arc_model
+                    .lock()
+                    .expect("should lock the model for inference");
+                model.reset();
+                Ok(())
+            }
+            None => return Err(InferenceError::ModelNotLoaded),
+        }
+    }
+
+    fn load(&mut self, config: &Llama3ServerConfig) -> InferenceResult<Option<Stats>> {
         if !self.is_loaded() {
             let now = std::time::Instant::now();
             let model = match self.version {
@@ -470,7 +501,7 @@ impl Llama3BaseServer<InferenceBackend> {
     fn prompt(
         &self,
         messages: Vec<burnlm_inference::message::Message>,
-    ) -> burnlm_inference::errors::InferenceResult<burnlm_inference::Prompt> {
+    ) -> InferenceResult<burnlm_inference::Prompt> {
         let mut prompt: Vec<String> = vec![];
         for message in messages {
             prompt.push(format!(

@@ -13,14 +13,14 @@ license = "MIT OR Apache-2.0"
 readme = "README.md"
 
 [workspace.dependencies]
-burn = { git = "https://github.com/tracel-ai/burn", rev = "3118f6325dc6ab90bad49393f7e4e2938acaf8a3", features = [
+burn = { git = "https://github.com/tracel-ai/burn", features = [
     "std",
 ], default-features = false }
-burn-common = { git = "https://github.com/tracel-ai/burn", rev = "3118f6325dc6ab90bad49393f7e4e2938acaf8a3", features = [
+burn-common = { git = "https://github.com/tracel-ai/burn", features = [
     "std",
 ], default-features = false }
 
-burn-import = { git = "https://github.com/tracel-ai/burn", rev = "3118f6325dc6ab90bad49393f7e4e2938acaf8a3"}
+burn-import = { git = "https://github.com/tracel-ai/burn" }
 
 # For dev we use the local version of burn
 # burn = { path = "../burn/crates/burn", features = [

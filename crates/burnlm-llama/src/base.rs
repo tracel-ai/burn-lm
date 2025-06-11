@@ -811,11 +811,9 @@ impl<B: Backend, T: Tokenizer> Llama<B, T> {
                 .reshape([1, -1]);
 
             let [_, seq_len] = x.dims();
-            let mask = self.cache.prepare(seq_len)?;
 
-            // Right now we only move forward (greedy sampling), no earlier positions
-            // are revisited (e.g., beam search). So we can shift the RoPE values when
-            // exceeding the pre-computed positions.
+            // Prepare cache and RoPE for current sequence length and position
+            let mask = self.cache.prepare(seq_len)?;
             self.rope.prepare(seq_len);
 
             let logits = self.model.forward(x, &mut self.cache, &self.rope, mask);

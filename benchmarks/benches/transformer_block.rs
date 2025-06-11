@@ -3,12 +3,10 @@ use burn::{
     tensor::{backend::Backend, Distribution, Element, Tensor},
 };
 use burn_common::benchmark::{run_benchmark, Benchmark, BenchmarkResult};
-use burnlm_llama::{
-    nn::{
-        attention::KeyValueCache,
-        transformer::{TransformerBlock, TransformerBlockConfig},
-    },
-    PositionalEncodingState,
+use burnlm_llama::nn::{
+    attention::KeyValueCache,
+    pos_encoding::PositionalEncodingState,
+    transformer::{TransformerBlock, TransformerBlockConfig},
 };
 
 pub struct TransformerBlockBenchmark<B: Backend> {
@@ -17,7 +15,7 @@ pub struct TransformerBlockBenchmark<B: Backend> {
     config: Config,
     device: B::Device,
     block: TransformerBlock<B>,
-    rope: PositionalEncodingState<B>,
+    pos_encoding: PositionalEncodingState<B>,
 }
 
 impl<B: Backend> Benchmark for TransformerBlockBenchmark<B> {
@@ -38,7 +36,8 @@ impl<B: Backend> Benchmark for TransformerBlockBenchmark<B> {
     }
 
     fn execute(&self, (input, mut cache): Self::Input) -> Self::Output {
-        self.block.forward(input, &mut cache, &self.rope, None)
+        self.block
+            .forward(input, &mut cache, &self.pos_encoding, None)
     }
 
     fn prepare(&self) -> Self::Input {
@@ -120,7 +119,7 @@ fn bench<B: Backend>(device: &B::Device) -> Vec<BenchmarkResult> {
             config,
             device: device.clone(),
             block,
-            rope: PositionalEncodingState::new(rope),
+            pos_encoding: PositionalEncodingState::new(rope),
         };
         let result = run_benchmark(benchmark);
         results.push(result);

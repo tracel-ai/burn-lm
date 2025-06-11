@@ -4,7 +4,7 @@ use burn::{
     tensor::activation::softmax,
 };
 
-use crate::PositionalEncodingState;
+use crate::nn::pos_encoding::PositionalEncodingState;
 
 use super::kv_cache::KeyValueCache;
 
@@ -80,7 +80,7 @@ impl<B: Backend> MultiHeadAttention<B> {
         &self,
         input: Tensor<B, 3>,
         cache: &mut KeyValueCache<B>,
-        rope: &PositionalEncodingState<B>,
+        pos_encoding: &PositionalEncodingState<B>,
         mask: Option<Tensor<B, 4, Bool>>,
     ) -> Tensor<B, 3> {
         let device = input.device();
@@ -88,8 +88,8 @@ impl<B: Backend> MultiHeadAttention<B> {
 
         let (q, k, v) = self.forward_projection(input);
 
-        let q = rope.apply(q);
-        let k = rope.apply(k);
+        let q = pos_encoding.apply(q);
+        let k = pos_encoding.apply(k);
 
         // Key-value caching
         let (k, v) = cache.forward(k, v);

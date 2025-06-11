@@ -6,12 +6,14 @@ use burn::{
 };
 
 use crate::{
+    generation::GenerationError,
     nn::{
         attention::*,
         fftn::{FeedForward, FeedForwardConfig},
     },
-    GenerationError, PositionalEncodingState,
 };
+
+use super::pos_encoding::PositionalEncodingState;
 
 /// Configuration to create a Llama [decoder-only transformer](Transformer).
 #[derive(Config)]
@@ -157,13 +159,13 @@ impl<B: Backend> Transformer<B> {
         &self,
         input: Tensor<B, 2, Int>,
         cache: &mut TransformerCache<B>,
-        rope: &PositionalEncodingState<B>,
+        pos_encoding: &PositionalEncodingState<B>,
         mask: Option<Tensor<B, 4, Bool>>,
     ) -> Tensor<B, 3> {
         let mut h = self.tok_embeddings.forward(input);
 
         for (layer, c) in self.layers.iter().zip(cache.layers.iter_mut()) {
-            h = layer.forward(h, c, rope, mask.clone());
+            h = layer.forward(h, c, pos_encoding, mask.clone());
         }
 
         let h = self.norm.forward(h);
@@ -228,13 +230,16 @@ impl<B: Backend> TransformerBlock<B> {
         &self,
         input: Tensor<B, 3>,
         cache: &mut KeyValueCache<B>,
-        rope: &PositionalEncodingState<B>,
+        pos_encoding: &PositionalEncodingState<B>,
         mask: Option<Tensor<B, 4, Bool>>,
     ) -> Tensor<B, 3> {
         let h = input.clone()
-            + self
-                .attention
-                .forward_cache(self.attention_norm.forward(input), cache, rope, mask);
+            + self.attention.forward_cache(
+                self.attention_norm.forward(input),
+                cache,
+                pos_encoding,
+                mask,
+            );
         h.clone() + self.feed_forward.forward(self.ffn_norm.forward(h))
     }
 }

@@ -3,28 +3,13 @@ use serde::Deserialize;
 use std::sync::{Arc, Mutex};
 
 use crate::{
-    self as llama,
-    pretrained::{self, ModelMeta},
-    sampling::{Sampler, TopP},
+    generation::{GenerationError, Sampler, TopP},
+    pretrained::ModelMeta,
     tokenizer::Tiktoken,
-    GenerationError, Llama,
+    Llama, LlamaConfig, LlamaVersion,
 };
 use burn::prelude::Backend;
 use burnlm_inference::*;
-
-#[derive(Clone, Debug, Default)]
-/// Llama-3 model variants to load.
-pub enum LlamaVersion {
-    /// Llama-3-8B-Instruct.
-    Llama3Instruct,
-    /// Llama-3.1-8B-Instruct.
-    Llama31Instruct,
-    /// Llama-3.2-3B-Instruct.
-    Llama323bInstruct,
-    #[default]
-    /// Llama-3.2-1B-Instruct.
-    Llama321bInstruct,
-}
 
 #[inference_server_config]
 pub struct Llama3ServerConfig {
@@ -66,12 +51,9 @@ impl<B: Backend> Default for Llama3InstructServer<B> {
     }
 }
 
-fn llama_downloader(
-    version: pretrained::Llama,
-    name: &'static str,
-) -> InferenceResult<Option<Stats>> {
+fn llama_downloader(version: LlamaVersion, name: &'static str) -> InferenceResult<Option<Stats>> {
     let now = std::time::Instant::now();
-    let model = pretrained::Llama::pretrained(&version);
+    let model = LlamaVersion::pretrained(&version);
     model
         .download_weights()
         .map_err(|err| InferenceError::DownloadError(name.to_string(), err.to_string()))?;
@@ -85,8 +67,8 @@ fn llama_downloader(
     Ok(Some(stats))
 }
 
-fn llama_deleter(version: pretrained::Llama, name: &'static str) -> InferenceResult<Option<Stats>> {
-    let model = pretrained::Llama::pretrained(&version);
+fn llama_deleter(version: LlamaVersion, name: &'static str) -> InferenceResult<Option<Stats>> {
+    let model = LlamaVersion::pretrained(&version);
     model
         .delete_weights()
         .map_err(|err| InferenceError::DeleteError(name.to_string(), err.to_string()))?;
@@ -100,7 +82,7 @@ impl InferenceServer for Llama3InstructServer<InferenceBackend> {
     fn downloader(&mut self) -> Option<fn() -> InferenceResult<Option<Stats>>> {
         fn downloader() -> InferenceResult<Option<Stats>> {
             llama_downloader(
-                pretrained::Llama::Llama3,
+                LlamaVersion::Llama3Instruct,
                 Llama3InstructServer::<InferenceBackend>::model_name(),
             )
         }
@@ -108,14 +90,14 @@ impl InferenceServer for Llama3InstructServer<InferenceBackend> {
     }
 
     fn is_downloaded(&mut self) -> bool {
-        let model = pretrained::Llama::Llama3.pretrained();
+        let model = LlamaVersion::Llama3Instruct.pretrained();
         model.is_downloaded()
     }
 
     fn deleter(&mut self) -> Option<fn() -> InferenceResult<Option<Stats>>> {
         fn deleter() -> InferenceResult<Option<Stats>> {
             llama_deleter(
-                pretrained::Llama::Llama3,
+                LlamaVersion::Llama3Instruct,
                 Llama3InstructServer::<InferenceBackend>::model_name(),
             )
         }
@@ -168,7 +150,7 @@ impl InferenceServer for Llama31InstructServer<InferenceBackend> {
     fn downloader(&mut self) -> Option<fn() -> InferenceResult<Option<Stats>>> {
         fn downloader() -> InferenceResult<Option<Stats>> {
             llama_downloader(
-                pretrained::Llama::Llama31Instruct,
+                LlamaVersion::Llama31Instruct,
                 Llama31InstructServer::<InferenceBackend>::model_name(),
             )
         }
@@ -176,14 +158,14 @@ impl InferenceServer for Llama31InstructServer<InferenceBackend> {
     }
 
     fn is_downloaded(&mut self) -> bool {
-        let model = pretrained::Llama::Llama31Instruct.pretrained();
+        let model = LlamaVersion::Llama31Instruct.pretrained();
         model.is_downloaded()
     }
 
     fn deleter(&mut self) -> Option<fn() -> InferenceResult<Option<Stats>>> {
         fn deleter() -> InferenceResult<Option<Stats>> {
             llama_deleter(
-                pretrained::Llama::Llama31Instruct,
+                LlamaVersion::Llama31Instruct,
                 Llama31InstructServer::<InferenceBackend>::model_name(),
             )
         }
@@ -236,7 +218,7 @@ impl InferenceServer for Llama321bInstructServer<InferenceBackend> {
     fn downloader(&mut self) -> Option<fn() -> InferenceResult<Option<Stats>>> {
         fn downloader() -> InferenceResult<Option<Stats>> {
             llama_downloader(
-                pretrained::Llama::Llama321bInstruct,
+                LlamaVersion::Llama321bInstruct,
                 Llama321bInstructServer::<InferenceBackend>::model_name(),
             )
         }
@@ -244,14 +226,14 @@ impl InferenceServer for Llama321bInstructServer<InferenceBackend> {
     }
 
     fn is_downloaded(&mut self) -> bool {
-        let model = pretrained::Llama::Llama321bInstruct.pretrained();
+        let model = LlamaVersion::Llama321bInstruct.pretrained();
         model.is_downloaded()
     }
 
     fn deleter(&mut self) -> Option<fn() -> InferenceResult<Option<Stats>>> {
         fn deleter() -> InferenceResult<Option<Stats>> {
             llama_deleter(
-                pretrained::Llama::Llama321bInstruct,
+                LlamaVersion::Llama321bInstruct,
                 Llama321bInstructServer::<InferenceBackend>::model_name(),
             )
         }
@@ -304,7 +286,7 @@ impl InferenceServer for Llama323bInstructServer<InferenceBackend> {
     fn downloader(&mut self) -> Option<fn() -> InferenceResult<Option<Stats>>> {
         fn downloader() -> InferenceResult<Option<Stats>> {
             llama_downloader(
-                pretrained::Llama::Llama323bInstruct,
+                LlamaVersion::Llama323bInstruct,
                 Llama323bInstructServer::<InferenceBackend>::model_name(),
             )
         }
@@ -312,14 +294,14 @@ impl InferenceServer for Llama323bInstructServer<InferenceBackend> {
     }
 
     fn is_downloaded(&mut self) -> bool {
-        let model = pretrained::Llama::Llama323bInstruct.pretrained();
+        let model = LlamaVersion::Llama323bInstruct.pretrained();
         model.is_downloaded()
     }
 
     fn deleter(&mut self) -> Option<fn() -> InferenceResult<Option<Stats>>> {
         fn deleter() -> InferenceResult<Option<Stats>> {
             llama_deleter(
-                pretrained::Llama::Llama323bInstruct,
+                LlamaVersion::Llama323bInstruct,
                 Llama323bInstructServer::<InferenceBackend>::model_name(),
             )
         }
@@ -458,25 +440,26 @@ impl Llama3BaseServer<InferenceBackend> {
         if !self.is_loaded() {
             let now = std::time::Instant::now();
             let model = match self.version {
-                LlamaVersion::Llama3Instruct => llama::LlamaConfig::llama3_8b_pretrained::<
+                LlamaVersion::Llama3Instruct => {
+                    LlamaConfig::llama3_8b_pretrained::<InferenceBackend>(
+                        config.max_seq_len,
+                        &INFERENCE_DEVICE,
+                    )
+                    .unwrap()
+                }
+                LlamaVersion::Llama31Instruct => LlamaConfig::llama3_1_8b_pretrained::<
                     InferenceBackend,
                 >(
                     config.max_seq_len, &INFERENCE_DEVICE
                 )
                 .unwrap(),
-                LlamaVersion::Llama31Instruct => llama::LlamaConfig::llama3_1_8b_pretrained::<
+                LlamaVersion::Llama323bInstruct => LlamaConfig::llama3_2_3b_pretrained::<
                     InferenceBackend,
                 >(
                     config.max_seq_len, &INFERENCE_DEVICE
                 )
                 .unwrap(),
-                LlamaVersion::Llama323bInstruct => llama::LlamaConfig::llama3_2_3b_pretrained::<
-                    InferenceBackend,
-                >(
-                    config.max_seq_len, &INFERENCE_DEVICE
-                )
-                .unwrap(),
-                LlamaVersion::Llama321bInstruct => llama::LlamaConfig::llama3_2_1b_pretrained::<
+                LlamaVersion::Llama321bInstruct => LlamaConfig::llama3_2_1b_pretrained::<
                     InferenceBackend,
                 >(
                     config.max_seq_len, &INFERENCE_DEVICE

@@ -16,7 +16,8 @@ candle-metal = ["burn/candle", "burn/metal", "selected-backend"]
 
 cuda = [
     "burn/cuda",
-    "burn/default",
+    # TODO: autotune matmul tiling2d can result in CUDA_ILLEGAL_ADDRESS_ERROR, and naive results in CUDA_ERROR_OUT_OF_MEMORY
+    # "burn/default",
     # The compilation cache really help for the CLI.
     "burn/compilation-cache",
     "selected-backend",

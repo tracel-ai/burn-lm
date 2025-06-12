@@ -75,7 +75,7 @@ impl SpinningMessage {
     }
 
     /// Stop the spinner and replace the line with the end message.
-    /// If delete is true then delete the spinner line alltogether.
+    /// If delete is true then delete the spinner line altogether.
     pub fn end(&mut self, delete: bool) {
         if delete {
             self.spinner.stop();

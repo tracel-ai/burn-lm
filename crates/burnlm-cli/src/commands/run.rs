@@ -18,7 +18,7 @@ pub(crate) fn create() -> clap::Command {
             .args((plugin.create_cli_flags_fn())().get_arguments())
             .arg(
                 clap::Arg::new("no-stats")
-                    .help("Disable display of satistics at the end of the inference")
+                    .help("Disable display of statistics at the end of the inference")
                     .long("no-stats")
                     .action(clap::ArgAction::SetTrue)
                     .required(false),
@@ -85,6 +85,6 @@ fn run(plugin_name: &str, run_args: &clap::ArgMatches) -> super::HandleCommandRe
             }
             Ok(None)
         }
-        Err(err) => anyhow::bail!("An error occured: {err}"),
+        Err(err) => anyhow::bail!("An error occurred: {err}"),
     }
 }

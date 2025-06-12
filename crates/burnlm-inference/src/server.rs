@@ -46,4 +46,7 @@ pub trait InferenceServer: ServerConfigParsing + Clone + Default + Send + Sync +
 
     /// Run inference to complete messages
     fn run_completion(&mut self, messages: Vec<Message>) -> InferenceResult<Completion>;
+
+    /// Clear the model state
+    fn clear_state(&mut self) -> InferenceResult<()>;
 }

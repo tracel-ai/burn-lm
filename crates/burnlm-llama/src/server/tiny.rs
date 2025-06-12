@@ -3,11 +3,10 @@ use serde::Deserialize;
 use std::sync::{Arc, Mutex};
 
 use crate::{
-    self as llama,
-    pretrained::{self, ModelMeta},
-    sampling::{Sampler, TopP},
+    generation::{GenerationError, Sampler, TopP},
+    pretrained::ModelMeta,
     tokenizer::SentiencePieceTokenizer,
-    Llama,
+    Llama, LlamaConfig, TinyLlamaVersion,
 };
 use burn::prelude::Backend;
 use burnlm_inference::*;
@@ -46,7 +45,7 @@ impl InferenceServer for TinyLlamaServer<InferenceBackend> {
     fn downloader(&mut self) -> Option<fn() -> InferenceResult<Option<Stats>>> {
         Some(|| {
             let now = std::time::Instant::now();
-            let model = pretrained::Llama::TinyLlama.pretrained();
+            let model = TinyLlamaVersion::V1.pretrained();
             model.download_weights().map_err(|err| {
                 InferenceError::DownloadError(Self::model_name().to_string(), err.to_string())
             })?;
@@ -62,13 +61,13 @@ impl InferenceServer for TinyLlamaServer<InferenceBackend> {
     }
 
     fn is_downloaded(&mut self) -> bool {
-        let model = pretrained::Llama::TinyLlama.pretrained();
+        let model = TinyLlamaVersion::V1.pretrained();
         model.is_downloaded()
     }
 
     fn deleter(&mut self) -> Option<fn() -> InferenceResult<Option<Stats>>> {
         Some(|| {
-            let model = pretrained::Llama::TinyLlama.pretrained();
+            let model = TinyLlamaVersion::V1.pretrained();
             model.delete_weights().map_err(|err| {
                 InferenceError::DeleteError(Self::model_name().to_string(), err.to_string())
             })?;
@@ -82,7 +81,7 @@ impl InferenceServer for TinyLlamaServer<InferenceBackend> {
     fn load(&mut self) -> InferenceResult<Option<Stats>> {
         if !self.is_loaded() {
             let now = std::time::Instant::now();
-            let model = llama::LlamaConfig::tiny_llama_pretrained::<InferenceBackend>(
+            let model = LlamaConfig::tiny_llama_pretrained::<InferenceBackend>(
                 self.config.max_seq_len,
                 &INFERENCE_DEVICE,
             )
@@ -135,7 +134,7 @@ impl InferenceServer for TinyLlamaServer<InferenceBackend> {
             Sampler::Argmax
         };
         let generated = match &self.model {
-            Some(arc_model) => arc_model
+            Some(arc_model) => match arc_model
                 .lock()
                 .expect("should be able to lock the model for inference")
                 .generate(
@@ -143,7 +142,12 @@ impl InferenceServer for TinyLlamaServer<InferenceBackend> {
                     self.config.sample_len,
                     self.config.temperature,
                     &mut sampler,
-                ),
+                ) {
+                Ok(result) => result,
+                Err(GenerationError::MaxSequenceLengthExceeded { actual, max }) => {
+                    return Err(InferenceError::ContextLengthExceeded(actual, max));
+                }
+            },
             _ => return Err(InferenceError::ModelNotLoaded),
         };
         let mut completion = Completion::new(&generated.text);
@@ -170,6 +174,19 @@ impl InferenceServer for TinyLlamaServer<InferenceBackend> {
             .entries
             .insert(StatEntry::TotalDuration(total_duration));
         Ok(completion)
+    }
+
+    fn clear_state(&mut self) -> InferenceResult<()> {
+        match &self.model {
+            Some(arc_model) => {
+                let mut model = arc_model
+                    .lock()
+                    .expect("should lock the model for inference");
+                model.reset();
+                Ok(())
+            }
+            None => return Err(InferenceError::ModelNotLoaded),
+        }
     }
 }
 

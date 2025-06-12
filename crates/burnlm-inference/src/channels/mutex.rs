@@ -72,4 +72,9 @@ impl<Server: InferenceServer> InferenceChannel<Server> for MutexChannel<Server> 
         let mut server = self.server.lock().unwrap();
         server.run_completion(message)
     }
+
+    fn clear_state(&self) -> InferenceResult<()> {
+        let mut server = self.server.lock().unwrap();
+        server.clear_state()
+    }
 }

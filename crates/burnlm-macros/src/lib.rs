@@ -346,7 +346,7 @@ pub fn inference_server_registry(attr: TokenStream, item: TokenStream) -> TokenS
         let server_ty: syn::Type = match syn::parse_str(server_ty_str) {
             Ok(ty) => ty,
             Err(e) => {
-                // Server type is unkown
+                // Server type is unknown
                 let msg = format!("Invalid server_type `{}`: {}", server_ty_str, e);
                 return syn::Error::new_spanned(
                     syn::Lit::Str(syn::LitStr::new(

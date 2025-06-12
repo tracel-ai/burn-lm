@@ -1,9 +1,12 @@
 use burn::{
-    nn::{RotaryEncoding, RotaryEncodingConfig},
+    nn::RotaryEncodingConfig,
     tensor::{backend::Backend, Distribution, Element, Int, Tensor},
 };
 use burn_common::benchmark::{run_benchmark, Benchmark, BenchmarkResult};
-use burnlm_llama::nn::transformer::{Transformer, TransformerCache, TransformerConfig};
+use burnlm_llama::nn::{
+    pos_encoding::PositionalEncodingState,
+    transformer::{Transformer, TransformerCache, TransformerConfig},
+};
 
 pub struct TransformerBenchmark<B: Backend> {
     seq_length: usize,
@@ -12,11 +15,12 @@ pub struct TransformerBenchmark<B: Backend> {
     config_transformer: TransformerConfig,
     device: B::Device,
     transformer: Transformer<B>,
-    rope: RotaryEncoding<B>,
+    pos_encoding: PositionalEncodingState<B>,
 }
 
 impl<B: Backend> Benchmark for TransformerBenchmark<B> {
-    type Args = (Tensor<B, 2, Int>, TransformerCache<B>);
+    type Input = (Tensor<B, 2, Int>, TransformerCache<B>);
+    type Output = Tensor<B, 3>;
 
     fn name(&self) -> String {
         format!(
@@ -31,12 +35,12 @@ impl<B: Backend> Benchmark for TransformerBenchmark<B> {
         vec![vec![self.batch_size, self.seq_length, self.config.d_model]]
     }
 
-    fn execute(&self, (input, mut cache): Self::Args) {
+    fn execute(&self, (input, mut cache): Self::Input) -> Self::Output {
         self.transformer
-            .forward(input, &mut cache, &self.rope, None);
+            .forward(input, &mut cache, &self.pos_encoding, None)
     }
 
-    fn prepare(&self) -> Self::Args {
+    fn prepare(&self) -> Self::Input {
         let input = Tensor::<B, 2>::random(
             [self.batch_size, self.seq_length],
             Distribution::Uniform(0., 10000.0),
@@ -119,7 +123,7 @@ fn bench<B: Backend>(device: &B::Device) -> Vec<BenchmarkResult> {
             config_transformer,
             device: device.clone(),
             transformer,
-            rope,
+            pos_encoding: PositionalEncodingState::new(rope),
         };
         let result = run_benchmark(benchmark);
         results.push(result);

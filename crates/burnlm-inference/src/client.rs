@@ -118,4 +118,8 @@ where
     fn create_cli_flags_fn(&self) -> CreateCliFlagsFn {
         self.create_cli_flags_fn
     }
+
+    fn clear_state(&self) -> InferenceResult<()> {
+        self.channel.clear_state()
+    }
 }

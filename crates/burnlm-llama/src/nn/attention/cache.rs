@@ -37,8 +37,8 @@ impl<const D: usize, B: Backend> AutoregressiveCache<B, D> {
     ///
     /// # Shapes
     ///
-    /// - input:  [batch_size, num_heads, seq_len_input, d_model]
-    /// - output: [batch_size, num_heads, seq_len_previous + seq_len_input, d_model]
+    /// - input:  `[batch_size, num_heads, seq_len_input, d_model]`
+    /// - output: `[batch_size, num_heads, seq_len_previous + seq_len_input, d_model]`
     pub fn append(&mut self, tokens: Tensor<B, D>) -> Tensor<B, D> {
         let shape = tokens.shape();
         let seq_len_input = shape.dims[self.seq_dim];
@@ -58,7 +58,10 @@ impl<const D: usize, B: Backend> AutoregressiveCache<B, D> {
             }
         }
         self.cache.inplace(|cache| {
-            cache.slice_assign::<D>(indices_added_tokens.try_into().unwrap(), tokens)
+            cache.slice_assign::<D, [Range<usize>; D]>(
+                indices_added_tokens.try_into().unwrap(),
+                tokens,
+            )
         });
 
         self.cur_seq_len += seq_len_input;
@@ -94,7 +97,8 @@ impl<const D: usize, B: Backend> AutoregressiveCache<B, D> {
             let prev_slice = cache.slice::<D, [Range<usize>; D]>(slices_prev.try_into().unwrap());
             let new_cache = Tensor::empty(shape, &device);
 
-            new_cache.slice_assign::<D>(slices_curr.try_into().unwrap(), prev_slice)
+            new_cache
+                .slice_assign::<D, [Range<usize>; D]>(slices_curr.try_into().unwrap(), prev_slice)
         });
     }
 

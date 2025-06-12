@@ -16,6 +16,8 @@ pub enum MessageCommand {
     Msg { message: String },
     /// Toggle stats
     Stats,
+    /// Clear chat session context
+    Clear,
 }
 
 // Dummy wrapper to get CommandFactory implemented
@@ -73,7 +75,7 @@ impl ChatContext {
 }
 
 pub(crate) fn create() -> clap::Command {
-    let mut root = clap::Command::new("chat").about("Start a chat session with the choosen model");
+    let mut root = clap::Command::new("chat").about("Start a chat session with the chosen model");
     let registry = Registry::new();
     // Create a a subcommand for each registered model with its associated  flags
     let mut installed: Vec<_> = registry
@@ -153,7 +155,7 @@ pub(crate) fn handle(
                             crate::utils::display_stats(&answer);
                         }
                     }
-                    Err(err) => anyhow::bail!("An error occured: {err}"),
+                    Err(err) => anyhow::bail!("An error occurred: {err}"),
                 }
                 Ok(cloop::ShellAction::Continue)
             }
@@ -170,6 +172,19 @@ pub(crate) fn handle(
                 Ok(cloop::ShellAction::Continue)
             }
             MessageCommand::Exit => Ok(cloop::ShellAction::Exit),
+            MessageCommand::Clear => {
+                match plugin.clear_state() {
+                    Ok(_) => {
+                        // Explicitly call Vec::clear() due to yansi::Paint::clear() conflict
+                        // https://github.com/SergioBenitez/yansi/issues/42
+                        Vec::clear(&mut ctx.messages);
+                        let msg = format!("Chat state cleared!");
+                        println!("{}", msg.bright_black().bold());
+                    }
+                    Err(err) => anyhow::bail!("An error occurred: {err}"),
+                }
+                Ok(cloop::ShellAction::Continue)
+            }
         }
     };
 

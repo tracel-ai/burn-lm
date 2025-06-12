@@ -156,7 +156,7 @@ async fn handle_streaming_response(
                     .expect("should send end of loading model chunk");
             }
 
-            // answer chunck
+            // answer chunk
             let chunk = StreamingChunk::Data(ChatCompletionChunkSchema::new(
                 &id,
                 model,

@@ -3,12 +3,12 @@ use std::process::{exit, Command};
 
 use yansi::Paint;
 
-const BURNLM_SUPERVISER_RESTART_EXIT_CODE: i32 = 8;
+const BURNLM_SUPERVISOR_RESTART_EXIT_CODE: i32 = 8;
 
 fn main() {
     println!();
     // retrieve backend
-    let mut exit_code = BURNLM_SUPERVISER_RESTART_EXIT_CODE;
+    let mut exit_code = BURNLM_SUPERVISOR_RESTART_EXIT_CODE;
     // build and run arguments
     let mut args = std::env::args();
 
@@ -54,8 +54,8 @@ fn main() {
     let passed_args: Vec<String> = std::env::args().skip(1).collect();
     run_args.extend(passed_args.iter().map(|s| s.as_str()));
 
-    // Rebuild and restart burnlm while its exit code is SUPERVISER_RESTART_EXIT_CODE
-    while exit_code == BURNLM_SUPERVISER_RESTART_EXIT_CODE {
+    // Rebuild and restart burnlm while its exit code is SUPERVISOR_RESTART_EXIT_CODE
+    while exit_code == BURNLM_SUPERVISOR_RESTART_EXIT_CODE {
         let compile_msg = "compiling burnlm CLI, please wait...";
         let mut sp = Spinner::new(Spinners::Bounce, compile_msg.bright_black().to_string());
         // build burnlm cli

@@ -1,18 +1,17 @@
 #![recursion_limit = "256"]
 
-pub mod pretrained;
-pub mod sampling;
 pub mod tokenizer;
 
 /// Neural network components.
 pub mod nn;
 
-mod base;
+/// Text generation components.
+pub mod generation;
 
 #[cfg(feature = "inference-server")]
 pub mod server;
 
-pub use base::*;
+pub use nn::llama::*;
 
 #[cfg(test)]
 mod tests {

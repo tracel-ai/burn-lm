@@ -6,3 +6,9 @@ pub mod fftn;
 
 /// Transformer module.
 pub mod transformer;
+
+/// Positional encoding module.
+pub mod pos_encoding;
+
+/// Llama architecture.
+pub mod llama;

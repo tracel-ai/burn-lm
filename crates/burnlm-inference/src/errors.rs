@@ -15,4 +15,6 @@ pub enum InferenceError {
     PluginDownloadUnsupportedError(String),
     #[error("Error unloading model: {0} (reason: {1})")]
     UnloadError(String, String),
+    #[error("Input sequence length ({0} tokens) exceeds maximum context window ({1} tokens). Please shorten your input or increase the maximum context window.")]
+    ContextLengthExceeded(usize, usize),
 }

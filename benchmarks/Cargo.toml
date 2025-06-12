@@ -19,7 +19,7 @@ candle-metal = ["burn/candle", "burn/candle-metal"]
 cuda = ["burn/cuda"]
 cuda-fusion = ["cuda", "burn/fusion"]
 default = []
-rocm = ["burn/rocm"]
+rocm = ["burn/rocm", "burn/autotune"]
 rocm-fusion = ["rocm", "burn/fusion"]
 ndarray = ["burn/ndarray"]
 ndarray-blas-accelerate = ["ndarray", "burn/accelerate"]
@@ -43,7 +43,6 @@ legacy-v16 = []
 
 [dependencies]
 burn = { workspace = true, default-features = false, features = [
-    "autotune",
     "std",
 ] }
 burn-common = { workspace = true, default-features = false }

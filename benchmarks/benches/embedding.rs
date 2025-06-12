@@ -13,7 +13,8 @@ pub struct EmbeddingBenchmark<B: Backend> {
 }
 
 impl<B: Backend> Benchmark for EmbeddingBenchmark<B> {
-    type Args = Tensor<B, 2, Int>;
+    type Input = Tensor<B, 2, Int>;
+    type Output = Tensor<B, 3>;
 
     fn name(&self) -> String {
         format!("embedding-{}-{:?}", self.config.name, B::FloatElem::dtype()).to_lowercase()
@@ -23,11 +24,11 @@ impl<B: Backend> Benchmark for EmbeddingBenchmark<B> {
         vec![vec![self.batch_size, self.seq_length, self.config.d_model]]
     }
 
-    fn execute(&self, input: Self::Args) {
-        self.embedding.forward(input);
+    fn execute(&self, input: Self::Input) -> Self::Output {
+        self.embedding.forward(input)
     }
 
-    fn prepare(&self) -> Self::Args {
+    fn prepare(&self) -> Self::Input {
         let input = Tensor::<B, 2>::random(
             [self.batch_size, self.seq_length],
             Distribution::Uniform(0., 10000.0),

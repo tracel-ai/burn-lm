@@ -56,7 +56,7 @@ pub(crate) fn handle(args: &clap::ArgMatches) -> super::HandleCommandResult {
         }
     };
 
-    // let's delete each model sequentially to mimic the download command behabior.
+    // let's delete each model sequentially to mimic the download command behavior.
     for (i, (name, rm)) in deleters.iter().enumerate() {
         println!(
             "[{}/{}] Deleting model: {name}\nPlease wait...",

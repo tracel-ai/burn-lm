@@ -66,4 +66,8 @@ impl<Server: InferenceServer> InferenceChannel<Server> for SingleThreadedChannel
     fn run_completion(&self, message: Vec<Message>) -> InferenceResult<Completion> {
         self.server.borrow_mut().run_completion(message)
     }
+
+    fn clear_state(&self) -> InferenceResult<()> {
+        self.server.borrow_mut().clear_state()
+    }
 }

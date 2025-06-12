@@ -62,7 +62,7 @@ Burn LM allows to chat with LLMs both in the terminal or in the browser.
 Start a chat session with a chosen model using the `chat` command:
 
 ```sh
-cargo chat llama32
+cargo burnlm chat llama32
 ```
 
 Some slash commands are available, you can get the list of them by typing `/help`
@@ -83,7 +83,7 @@ Head your browser to http://localhost:3000 and enjoy.
 ## Plugins
 
 Models can be easily integrated with Burn LM by implementing the `InferenceServer`
-trait to create a plugable server that can be added to the Burn LM registry.
+trait to create a pluggable server that can be added to the Burn LM registry.
 
 To bootstrap a new model server you can use the dedicated command `new`:
 

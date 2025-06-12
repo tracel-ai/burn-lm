@@ -1,10 +1,11 @@
 use burn::{
-    nn::{RotaryEncoding, RotaryEncodingConfig},
+    nn::RotaryEncodingConfig,
     tensor::{backend::Backend, Distribution, Element, Tensor},
 };
 use burn_common::benchmark::{run_benchmark, Benchmark, BenchmarkResult};
 use burnlm_llama::nn::{
     attention::KeyValueCache,
+    pos_encoding::PositionalEncodingState,
     transformer::{TransformerBlock, TransformerBlockConfig},
 };
 
@@ -14,11 +15,12 @@ pub struct TransformerBlockBenchmark<B: Backend> {
     config: Config,
     device: B::Device,
     block: TransformerBlock<B>,
-    rope: RotaryEncoding<B>,
+    pos_encoding: PositionalEncodingState<B>,
 }
 
 impl<B: Backend> Benchmark for TransformerBlockBenchmark<B> {
-    type Args = (Tensor<B, 3>, KeyValueCache<B>);
+    type Input = (Tensor<B, 3>, KeyValueCache<B>);
+    type Output = Tensor<B, 3>;
 
     fn name(&self) -> String {
         format!(
@@ -33,11 +35,12 @@ impl<B: Backend> Benchmark for TransformerBlockBenchmark<B> {
         vec![vec![self.batch_size, self.seq_length, self.config.d_model]]
     }
 
-    fn execute(&self, (input, mut cache): Self::Args) {
-        self.block.forward(input, &mut cache, &self.rope, None);
+    fn execute(&self, (input, mut cache): Self::Input) -> Self::Output {
+        self.block
+            .forward(input, &mut cache, &self.pos_encoding, None)
     }
 
-    fn prepare(&self) -> Self::Args {
+    fn prepare(&self) -> Self::Input {
         let input = Tensor::<B, 3>::random(
             [self.batch_size, self.seq_length, self.config.d_model],
             Distribution::Default,
@@ -116,7 +119,7 @@ fn bench<B: Backend>(device: &B::Device) -> Vec<BenchmarkResult> {
             config,
             device: device.clone(),
             block,
-            rope,
+            pos_encoding: PositionalEncodingState::new(rope),
         };
         let result = run_benchmark(benchmark);
         results.push(result);

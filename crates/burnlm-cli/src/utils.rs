@@ -1,6 +1,7 @@
 use anyhow::Context;
 use burnlm_inference::Completion;
 use yansi::Paint;
+use which::which;
 
 use crate::commands::HandleCommandResult;
 
@@ -172,6 +173,10 @@ pub fn is_cargo_crate_installed(crate_name: &str) -> bool {
         .expect("Should get the list of installed cargo commands");
     let output_str = String::from_utf8_lossy(&output.stdout);
     output_str.lines().any(|line| line.contains(crate_name))
+}
+
+pub fn find_executable(name: &str) -> bool {
+    which(name).is_ok()
 }
 
 #[cfg(test)]

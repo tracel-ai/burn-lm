@@ -127,7 +127,7 @@ impl<B: Backend> TransformerCache<B> {
             let num_removed = self.curr_seq_len - self.max_seq_len;
             self.layers
                 .iter_mut()
-                .for_each(|cache| cache.shrink(num_removed));
+                .for_each(|cache| cache.prepare(num_removed));
             self.curr_seq_len -= num_removed;
         }
 

@@ -1,7 +1,7 @@
 use std::io::Write;
 use std::process::Command as StdCommand;
 
-use crate::utils;
+use crate::utils::{self, ensure_cargo_crate_is_installed};
 
 const DOCKER_COMPOSE_CONFIG: &str = "./crates/burnlm-cli/config/docker-compose.web.yml";
 const DOCKER_COMPOSE_PROJECT: &str = "burn-lm-web";
@@ -34,8 +34,14 @@ pub(crate) fn handle(
     }
 }
 
+fn install_dependencies() -> super::HandleCommandResult {
+    ensure_cargo_crate_is_installed("mprocs", None, None, false)?;
+    ensure_cargo_crate_is_installed("cargo-watch", None, None, true)
+}
+
 fn start_web(backend: &str, dtype: &str) -> super::HandleCommandResult {
     println!("Starting containerized services...",);
+    install_dependencies()?;
     up_docker_compose()?;
     // write mprocs file from template
     let template = std::fs::read_to_string(MPROC_WEB_TEMPLATE).unwrap();

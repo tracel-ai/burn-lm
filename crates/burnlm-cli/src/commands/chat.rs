@@ -6,12 +6,14 @@ use yansi::Paint;
 
 use super::BurnLMPromptHelper;
 
+const MESSAGE_CMD: &str = "<message>";
+
 /// Message subcommand.
 #[derive(clap::Subcommand)]
 #[command(name = "message", disable_help_subcommand = true)]
 pub enum MessageCommand {
     /// Message (prompt) for inference
-    #[command(name = "<message>")]
+    #[command(name = MESSAGE_CMD)]
     Msg { message: String },
     /// Display slash commands help
     Help,
@@ -31,7 +33,7 @@ struct MessageCli {
     command: MessageCommand,
 }
 
-// custom rustyline editor to automatically insert the 'msg' command
+// custom rustyline editor to automatically insert the `MESSAGE_CMD` command
 // in front of the message and parse slash commands (for instance /exit).
 struct ChatEditor<H: rustyline::Helper> {
     editor: Editor<H, DefaultHistory>,
@@ -54,7 +56,7 @@ impl cloop::InputReader for ChatEditor<BurnLMPromptHelper> {
                     Ok(cloop::InputResult::Input(format!("{cmd} {rest}")))
                 } else {
                     // consider any freefrom input a message
-                    Ok(cloop::InputResult::Input(format!("msg \"{s}\"")))
+                    Ok(cloop::InputResult::Input(format!("{MESSAGE_CMD} \"{s}\"")))
                 }
             }
             other => other,

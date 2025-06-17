@@ -6,18 +6,21 @@ use yansi::Paint;
 
 use super::BurnLMPromptHelper;
 
+/// Message subcommand.
 #[derive(clap::Subcommand)]
+#[command(name = "message", disable_help_subcommand = true)]
 pub enum MessageCommand {
-    /// Exit chat session
-    Exit,
+    /// Message (prompt) for inference
+    #[command(name = "<message>")]
+    Msg { message: String },
     /// Display slash commands help
     Help,
-    /// Message (prompt) for inference
-    Msg { message: String },
     /// Toggle stats
     Stats,
     /// Clear chat session context
     Clear,
+    /// Exit chat session
+    Exit,
 }
 
 // Dummy wrapper to get CommandFactory implemented
@@ -161,6 +164,7 @@ pub(crate) fn handle(
             }
             MessageCommand::Help => {
                 MessageCli::command()
+                    .override_usage("<command>")
                     .print_help()
                     .expect("help output should be printed");
                 Ok(cloop::ShellAction::Continue)

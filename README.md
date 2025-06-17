@@ -65,8 +65,24 @@ Start a chat session with a chosen model using the `chat` command:
 cargo burnlm chat llama32
 ```
 
+You can also specify the backend and data type with the `-b` and `-d` options, for example:
+
+```sh
+cargo burnlm -b cuda -d f16 chat llama32
+```
+
+#### Slash Commands
+
 Some slash commands are available, you can get the list of them by typing `/help`
 as a prompt.
+
+| Command  | Description                      |
+| -------- | -------------------------------- |
+| `/help`  | Display available slash commands |
+| `/stats` | Toggle stats display             |
+| `/clear` | Clear the current chat context   |
+| `/exit`  | Exit the chat session            |
+
 
 ### Chat in Open WebUI
 

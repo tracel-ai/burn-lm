@@ -50,9 +50,9 @@ impl<B: Backend> KeyValueCache<B> {
         self.key.len()
     }
 
-    pub fn shrink(&mut self, num_removed: usize) {
-        self.key.shrink(num_removed);
-        self.value.shrink(num_removed);
+    pub fn prepare(&mut self, num_tokens: usize) {
+        self.key.prepare(num_tokens);
+        self.value.prepare(num_tokens);
     }
 
     /// Reset key-value cache.

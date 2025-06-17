@@ -2,12 +2,27 @@ use std::ops::Range;
 
 use burn::tensor::{backend::Backend, Device, Tensor};
 
+/// Strategy for managing the autoregressive cache when its capacity is exceeded.
+#[derive(Debug, Clone, Default)]
+pub(crate) enum CacheStrategy {
+    /// Shrinks the cache by copying the remaining tokens into a new buffer,
+    /// removing the oldest tokens beyond the context limit.
+    #[allow(dead_code)]
+    Shrink,
+
+    /// Shifts the remaining tokens to the start of the existing buffer in-place,
+    /// overwriting the oldest tokens.
+    #[default]
+    Shift,
+}
+
 #[derive(Debug, Clone)]
 /// Cache that keeps track of a tensor state in an autoregressive decoding process.
 pub(crate) struct AutoregressiveCache<B: Backend, const D: usize> {
     cache: Tensor<B, D>,
     seq_dim: usize,
     cur_seq_len: usize,
+    strategy: CacheStrategy,
 }
 
 impl<const D: usize, B: Backend> AutoregressiveCache<B, D> {
@@ -17,19 +32,20 @@ impl<const D: usize, B: Backend> AutoregressiveCache<B, D> {
             cache: Tensor::empty(shape, device),
             seq_dim,
             cur_seq_len: 0,
+            strategy: CacheStrategy::default(),
         }
+    }
+
+    #[allow(dead_code)]
+    /// Sets the cache management strategy.
+    pub fn with_strategy(mut self, strategy: CacheStrategy) -> Self {
+        self.strategy = strategy;
+        self
     }
 
     /// Reset the cache state.
     pub fn reset(&mut self) {
-        let shape = self.cache.shape();
-        let device = self.cache.device();
-
-        self.cache.inplace(|cache| {
-            core::mem::drop(cache);
-            Tensor::empty(shape, &device)
-        });
-
+        // Note: we don't need to clear the tensor since we track the current seq length
         self.cur_seq_len = 0;
     }
 
@@ -64,16 +80,26 @@ impl<const D: usize, B: Backend> AutoregressiveCache<B, D> {
             )
         });
 
-        self.cur_seq_len += seq_len_input;
+        self.cur_seq_len = new_seq_len;
 
         self.cache
             .clone()
             .slice::<D, [Range<usize>; D]>(indices_output.try_into().unwrap())
     }
 
+    /// Prepare the cache by applying the configured strategy to make room for new tokens.
+    ///
+    /// `num_tokens` is the number of past tokens to discard or shift, depending on the strategy.
+    pub fn prepare(&mut self, num_tokens: usize) {
+        match self.strategy {
+            CacheStrategy::Shrink => self.shrink(num_tokens),
+            CacheStrategy::Shift => self.shift(num_tokens),
+        }
+    }
+
     /// Shrink the cache to fit in `max_seq_len` while making place for the new tokens being
     /// decoded.
-    pub fn shrink(&mut self, num_removed: usize) {
+    fn shrink(&mut self, num_removed: usize) {
         let old_cur_seq_len = self.cur_seq_len;
         self.cur_seq_len -= num_removed;
 
@@ -102,9 +128,45 @@ impl<const D: usize, B: Backend> AutoregressiveCache<B, D> {
         });
     }
 
+    /// Shift the cache to fit in `max_seq_len` while making place for the new tokens being
+    /// decoded.
+    fn shift(&mut self, num_shifted: usize) {
+        let old_cur_seq_len = self.cur_seq_len;
+        self.cur_seq_len -= num_shifted;
+
+        let shape = self.cache.shape();
+
+        let mut slices_prev = Vec::with_capacity(shape.dims.len());
+        let mut slices_curr = Vec::with_capacity(shape.dims.len());
+
+        for (i, shape) in shape.dims.iter().enumerate() {
+            if i == self.seq_dim {
+                slices_prev.push(num_shifted..old_cur_seq_len);
+                slices_curr.push(0..self.cur_seq_len);
+            } else {
+                slices_prev.push(0..*shape);
+                slices_curr.push(0..*shape);
+            }
+        }
+
+        // Shift tail -> head
+        self.cache.inplace(|cache| {
+            let prev_slice = cache
+                .clone()
+                .slice::<D, [Range<usize>; D]>(slices_prev.try_into().unwrap());
+
+            cache.slice_assign::<D, [Range<usize>; D]>(slices_curr.try_into().unwrap(), prev_slice)
+        });
+    }
+
     /// Returns the cached sequence length.
     pub fn len(&self) -> usize {
         self.cur_seq_len
+    }
+
+    #[allow(dead_code)]
+    pub fn device(&self) -> Device<B> {
+        self.cache.device()
     }
 }
 
@@ -113,13 +175,10 @@ mod tests {
     use super::*;
     use crate::tests::TestBackend;
 
-    #[test]
-    fn test_autoregressive_cache() {
-        let device: Device<TestBackend> = Default::default();
-        let mut cache = AutoregressiveCache::<TestBackend, 2>::new([8, 8], 0, &device);
-
-        let tokens_1 = Tensor::<TestBackend, 2>::full([4, 8], 1.0, &device);
-        let tokens_2 = Tensor::<TestBackend, 2>::full([4, 8], 2.0, &device);
+    fn test_autoregressive_cache<B: Backend>(mut cache: AutoregressiveCache<B, 2>) {
+        let device = cache.device();
+        let tokens_1 = Tensor::<B, 2>::full([4, 8], 1.0, &device);
+        let tokens_2 = Tensor::<B, 2>::full([4, 8], 2.0, &device);
 
         let received_1 = cache.append(tokens_1.clone());
         assert_eq!(cache.len(), 4);
@@ -137,10 +196,10 @@ mod tests {
             .to_data()
             .assert_eq(&tokens_2.to_data(), true);
 
-        cache.shrink(2);
+        cache.prepare(2);
         assert_eq!(cache.len(), 6);
 
-        let tokens_3 = Tensor::<TestBackend, 2>::full([2, 8], 3.0, &device);
+        let tokens_3 = Tensor::<B, 2>::full([2, 8], 3.0, &device);
         let received_3 = cache.append(tokens_3.clone());
         assert_eq!(cache.len(), 8);
 
@@ -158,5 +217,19 @@ mod tests {
             .slice(6..8)
             .to_data()
             .assert_eq(&tokens_3.to_data(), true);
+    }
+
+    #[test]
+    fn test_autoregressive_cache_shrink() {
+        let cache = AutoregressiveCache::<TestBackend, 2>::new([8, 8], 0, &Default::default())
+            .with_strategy(CacheStrategy::Shrink);
+        test_autoregressive_cache(cache);
+    }
+
+    #[test]
+    fn test_autoregressive_cache_shift() {
+        let cache = AutoregressiveCache::<TestBackend, 2>::new([8, 8], 0, &Default::default())
+            .with_strategy(CacheStrategy::Shift);
+        test_autoregressive_cache(cache);
     }
 }

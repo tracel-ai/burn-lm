@@ -39,6 +39,7 @@ rustyline = { workspace = true }
 strum = { workspace = true }
 yansi = { workspace = true }
 spinners = { workspace = true }
+which = { workspace = true }
 
 [dev-dependencies]
 rstest = { workspace = true }

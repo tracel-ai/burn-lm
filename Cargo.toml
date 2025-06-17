@@ -53,6 +53,7 @@ comfy-table = "7.1"
 dotenvy = "0.15"
 rustyline = { version = "15.0", features = ["custom-bindings", "derive"] }
 spinners = "4.1"
+which = "8.0.0"
 yansi = "1.0"
 
 # Logging

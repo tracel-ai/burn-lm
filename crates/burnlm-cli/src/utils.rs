@@ -1,6 +1,9 @@
 use anyhow::Context;
 use burnlm_inference::Completion;
 use yansi::Paint;
+use which::which;
+
+use crate::commands::HandleCommandResult;
 
 /// Sanitizes a given crate name by replacing invalid characters, merging consecutive
 /// hyphens, and ensuring it adheres to common crate naming conventions.
@@ -127,6 +130,53 @@ pub fn display_stats(completion: &Completion) {
     let stats = completion.stats.display_stats().to_string();
     let fmt_stats = stats.italic();
     println!("{fmt_stats}");
+}
+
+/// Ensure that a cargo crate is installed
+pub fn ensure_cargo_crate_is_installed(
+    crate_name: &str,
+    features: Option<&str>,
+    version: Option<&str>,
+    locked: bool,
+) -> HandleCommandResult {
+    if !is_cargo_crate_installed(crate_name) {
+        println!("Installing cargo crate '{}'", crate_name);
+        let mut args = vec!["install", crate_name];
+        if locked {
+            args.push("--locked");
+        }
+        if let Some(features) = features {
+            if !features.is_empty() {
+                args.extend(vec!["--features", features]);
+            }
+        }
+        if let Some(version) = version {
+            args.extend(vec!["--version", version]);
+        }
+        run_process(
+            "cargo",
+            &args,
+            None,
+            None,
+            &format!("crate '{}' should be installed", crate_name),
+        )?;
+    }
+    Ok(None)
+}
+
+/// Returns true if the passed cargo crate is installed locally
+pub fn is_cargo_crate_installed(crate_name: &str) -> bool {
+    let output = std::process::Command::new("cargo")
+        .arg("install")
+        .arg("--list")
+        .output()
+        .expect("Should get the list of installed cargo commands");
+    let output_str = String::from_utf8_lossy(&output.stdout);
+    output_str.lines().any(|line| line.contains(crate_name))
+}
+
+pub fn find_executable(name: &str) -> bool {
+    which(name).is_ok()
 }
 
 #[cfg(test)]

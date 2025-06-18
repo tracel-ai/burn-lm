@@ -23,7 +23,7 @@ pub(crate) enum ShellMetaAction {
     RestartShell,
 }
 
-type HandleCommandResult = anyhow::Result<Option<ShellMetaAction>>;
+pub(crate) type HandleCommandResult = anyhow::Result<Option<ShellMetaAction>>;
 
 use std::io::{stdout, Write};
 

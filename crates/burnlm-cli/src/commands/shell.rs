@@ -45,12 +45,12 @@ fn create_parser() -> clap::Command {
         .multicall(true)
 }
 
-struct CliConfig {
+struct BurnLmConfig {
     backend: String,
     dtype: String,
 }
 
-impl CliConfig {
+impl BurnLmConfig {
     fn new(backend: String, dtype: String) -> Self {
         Self { backend, dtype }
     }
@@ -112,7 +112,7 @@ pub(crate) fn handle(backend: &str, dtype: &str) -> anyhow::Result<()> {
                     println!("Backend {new_backend} already selected...");
                 } else {
                     println!("Reinitializing backend...");
-                    let config = CliConfig::new(new_backend.clone(), dtype.to_string());
+                    let config = BurnLmConfig::new(new_backend.clone(), dtype.to_string());
                     config.save();
                     exit(RESTART_SHELL_EXIT_CODE);
                 }
@@ -122,7 +122,7 @@ pub(crate) fn handle(backend: &str, dtype: &str) -> anyhow::Result<()> {
                     println!("Data type {new_dtype} already selected...");
                 } else {
                     println!("Reinitializing backend dtype...");
-                    let config = CliConfig::new(backend.to_string(), new_dtype.clone());
+                    let config = BurnLmConfig::new(backend.to_string(), new_dtype.clone());
                     config.save();
                     exit(RESTART_SHELL_EXIT_CODE);
                 }

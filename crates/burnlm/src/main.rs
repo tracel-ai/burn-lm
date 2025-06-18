@@ -63,19 +63,19 @@ impl CargoCommand {
     }
 }
 
-struct CliConfig {
+struct BurnLmConfig {
     backend: String,
     dtype: String,
 }
 
-impl Default for CliConfig {
+impl Default for BurnLmConfig {
     fn default() -> Self {
         let (backend, dtype) = Self::load();
         Self { backend, dtype }
     }
 }
 
-impl CliConfig {
+impl BurnLmConfig {
     fn config_path() -> PathBuf {
         let mut path = std::env::var("BURNLM_CONFIG_DIR")
             .map(|dir| PathBuf::from(dir))
@@ -130,7 +130,7 @@ fn main() {
         }
     }
 
-    let mut config = CliConfig::default();
+    let mut config = BurnLmConfig::default();
     let passed_args = std::env::args().skip(1).collect();
 
     let mut build_cmd = CargoCommand::build(&config.backend, &config.dtype);

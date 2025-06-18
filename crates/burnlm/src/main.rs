@@ -146,7 +146,7 @@ fn main() {
         let mut sp = Spinner::new(Spinners::Bounce, compile_msg.bright_black().to_string());
         // build burnlm cli
         let build_output = Command::new("cargo")
-            .args(&build_cmd.args())
+            .args(build_cmd.args())
             .output()
             .expect("build command should compile burnlm successfully");
         // build step results
@@ -166,7 +166,7 @@ fn main() {
         sp.stop_with_message(completion_msg);
         // execute burnlm
         let run_status = Command::new("cargo")
-            .args(&run_cmd.args())
+            .args(run_cmd.args())
             .status()
             .expect("burnlm command should execute successfully");
         exit_code = run_status.code().unwrap_or(1);

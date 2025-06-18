@@ -5,6 +5,7 @@ use rustyline::{history::DefaultHistory, Editor};
 use super::{BurnLMPromptHelper, ShellMetaAction};
 
 const RESTART_SHELL_EXIT_CODE: i32 = 8;
+const BURNLM_CONFIG_FILE: &str = "burnlm.config";
 
 // custom rustyline editor to stylize the prompt
 struct ShellEditor<H: rustyline::Helper> {
@@ -59,7 +60,7 @@ impl BurnLmConfig {
         let mut path = std::env::var("BURNLM_CONFIG_DIR")
             .map(|dir| PathBuf::from(dir))
             .unwrap_or(std::env::current_dir().expect("should get valid directory"));
-        path.push("burnlm.config");
+        path.push(BURNLM_CONFIG_FILE);
         path
     }
 

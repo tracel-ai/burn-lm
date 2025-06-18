@@ -17,10 +17,10 @@ const ANSI_CODE_DELETE_LINE: &str = "\r\x1b[K";
 /// It is returned by the handle function of each command.
 pub(crate) enum ShellMetaAction {
     Initialize,
-    RefreshParser,
-    RestartShell,
     ChangeBackend(String),
     ChangeDtype(String),
+    RefreshParser,
+    RestartShell,
 }
 
 type HandleCommandResult = anyhow::Result<Option<ShellMetaAction>>;

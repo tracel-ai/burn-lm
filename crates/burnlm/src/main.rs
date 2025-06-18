@@ -8,59 +8,29 @@ use yansi::Paint;
 
 const BURNLM_SUPERVISOR_RESTART_EXIT_CODE: i32 = 8;
 
-struct CargoCommand {
-    subcommand: String,
-    features: String,
-    extra_args: Vec<String>,
-}
+fn cargo_args<'a>(
+    subcommand: &'a str,
+    features: &'a str,
+    extra_args: &'a [String],
+) -> Vec<&'a str> {
+    let mut args = vec![
+        subcommand,
+        "--release",
+        "--features",
+        features,
+        "--bin",
+        "burnlm-cli",
+        "--quiet",
+        "--color",
+        "always",
+    ];
 
-impl CargoCommand {
-    /// New build command.
-    fn build(backend: &str, dtype: &str) -> Self {
-        Self {
-            subcommand: "build".to_string(),
-            features: Self::features(backend, dtype),
-            extra_args: Vec::new(),
-        }
+    if !extra_args.is_empty() {
+        args.push("--");
+        args.extend(extra_args.iter().map(|s| s.as_str()));
     }
 
-    /// New run command.
-    fn run(backend: &str, dtype: &str, args: Vec<String>) -> Self {
-        Self {
-            subcommand: "run".to_string(),
-            features: Self::features(backend, dtype),
-            extra_args: args,
-        }
-    }
-
-    fn features(backend: &str, dtype: &str) -> String {
-        format!("{backend},{dtype}")
-    }
-
-    fn set_features(&mut self, backend: &str, dtype: &str) {
-        self.features = Self::features(backend, dtype)
-    }
-
-    fn args(&self) -> Vec<&str> {
-        let mut args = vec![
-            self.subcommand.as_str(),
-            "--release",
-            "--features",
-            self.features.as_str(),
-            "--bin",
-            "burnlm-cli",
-            "--quiet",
-            "--color",
-            "always",
-        ];
-
-        if !self.extra_args.is_empty() {
-            args.push("--");
-            args.extend(self.extra_args.iter().map(|a| a.as_str()));
-        }
-
-        args
-    }
+    args
 }
 
 struct BurnLmConfig {
@@ -131,22 +101,21 @@ fn main() {
     }
 
     let mut config = BurnLmConfig::default();
-    let passed_args = std::env::args().skip(1).collect();
-
-    let mut build_cmd = CargoCommand::build(&config.backend, &config.dtype);
-    let mut run_cmd = CargoCommand::run(&config.backend, &config.dtype, passed_args);
+    let passed_args: Vec<String> = std::env::args().skip(1).collect();
 
     // Rebuild and restart burnlm while its exit code is SUPERVISOR_RESTART_EXIT_CODE
     while exit_code == BURNLM_SUPERVISOR_RESTART_EXIT_CODE {
         config.reload();
-        build_cmd.set_features(&config.backend, &config.dtype);
-        run_cmd.set_features(&config.backend, &config.dtype);
+        let features = format!("{},{}", config.backend, config.dtype);
+
+        let build_args = cargo_args("build", &features, &[]);
+        let run_args = cargo_args("run", &features, &passed_args);
 
         let compile_msg = "compiling burnlm CLI, please wait...";
         let mut sp = Spinner::new(Spinners::Bounce, compile_msg.bright_black().to_string());
         // build burnlm cli
         let build_output = Command::new("cargo")
-            .args(build_cmd.args())
+            .args(build_args)
             .output()
             .expect("build command should compile burnlm successfully");
         // build step results
@@ -166,7 +135,7 @@ fn main() {
         sp.stop_with_message(completion_msg);
         // execute burnlm
         let run_status = Command::new("cargo")
-            .args(run_cmd.args())
+            .args(run_args)
             .status()
             .expect("burnlm command should execute successfully");
         exit_code = run_status.code().unwrap_or(1);

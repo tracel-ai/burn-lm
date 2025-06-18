@@ -1,26 +1,24 @@
-#[cfg(feature = "f16")]
 mod elems {
-    pub type ElemType = burn::tensor::f16;
-    pub const DTYPE_NAME: &str = "f16";
-}
-
-#[cfg(feature = "bf16")]
-mod elems {
-    pub type ElemType = burn::tensor::bf16;
-    pub const DTYPE_NAME: &str = "bf16";
-}
-
-#[cfg(not(any(feature = "f16", feature = "bf16")))]
-mod elems {
-    pub type ElemType = f32;
-    pub const DTYPE_NAME: &str = "f32";
+    cfg_if::cfg_if! {
+        if #[cfg(all(feature = "f16", any(feature = "cuda", feature = "wgpu", feature = "vulkan", feature = "metal", feature = "rocm", feature = "libtorch", feature = "candle-cuda")))]{
+            pub type ElemType = burn::tensor::f16;
+            pub const DTYPE_NAME: &str = "f16";
+        }
+        else if #[cfg(all(feature = "f16", any(feature = "cuda", feature = "wgpu", feature = "vulkan", feature = "metal", feature = "rocm", feature = "libtorch", feature = "candle-cuda")))]{
+            pub type ElemType = burn::tensor::bf16;
+            pub const DTYPE_NAME: &str = "bf16";
+        } else {
+            pub type ElemType = f32;
+            pub const DTYPE_NAME: &str = "f32";
+        }
+    }
 }
 
 pub use elems::*;
 
 // Candle --------------------------------------------------------------------
 
-#[cfg(any(feature = "candle-accelerate", feature = "candle-cpu",))]
+#[cfg(any(feature = "candle-accelerate", feature = "candle-cpu"))]
 pub mod burn_backend_types {
     use super::*;
     use burn::backend::candle::{Candle, CandleDevice};

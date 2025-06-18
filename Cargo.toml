@@ -82,6 +82,7 @@ syn = { version = "2", features = ["full"] }
 proc-macro2 = "1"
 quote = "1"
 strum = { version = "0.26", features = ["derive"] }
+cfg-if = "1.0.1"
 
 # Files
 dirs = { version = "5" }

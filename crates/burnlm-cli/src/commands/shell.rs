@@ -54,6 +54,7 @@ impl BurnLmConfig {
     fn new(backend: String, dtype: String) -> Self {
         Self { backend, dtype }
     }
+
     fn config_path() -> PathBuf {
         let mut path = std::env::var("BURNLM_CONFIG_DIR")
             .map(|dir| PathBuf::from(dir))

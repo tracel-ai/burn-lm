@@ -48,6 +48,7 @@ f32 = []
 burn = { workspace = true, default-features = false, features = ["ndarray"] }
 burnlm-macros = { path = "../burnlm-macros" }
 
+cfg-if = { workspace = true }
 clap = { workspace = true }
 comfy-table = { workspace = true }
 serde = { workspace = true }

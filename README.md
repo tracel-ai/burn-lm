@@ -26,6 +26,12 @@ cargo burnlm
 
 Type `help` to get a list of commands.
 
+You can also specify the backend and data type with the `-b` and `-d` options, for example:
+
+```sh
+cargo burnlm -b cuda -d f16
+```
+
 # Usage
 
 ## Models management

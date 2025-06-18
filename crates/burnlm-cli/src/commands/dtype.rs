@@ -14,7 +14,7 @@ pub(crate) fn create() -> clap::Command {
 pub(crate) fn handle(args: &clap::ArgMatches) -> super::HandleCommandResult {
     match args.subcommand_name() {
         Some(cmd) if is_valid_dtype(cmd) => {
-            Ok(Some(super::ShellMetaAction::ResetDtype(cmd.to_string())))
+            Ok(Some(super::ShellMetaAction::ChangeDtype(cmd.to_string())))
         }
         _ => {
             create().print_help().unwrap();

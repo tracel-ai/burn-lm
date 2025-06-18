@@ -107,7 +107,7 @@ pub(crate) fn handle(backend: &str, dtype: &str) -> anyhow::Result<()> {
                 println!("Restarting shell...");
                 exit(RESTART_SHELL_EXIT_CODE);
             }
-            ShellMetaAction::ResetBackend(new_backend) => {
+            ShellMetaAction::ChangeBackend(new_backend) => {
                 if backend == new_backend {
                     println!("Backend {new_backend} already selected...");
                 } else {
@@ -117,7 +117,7 @@ pub(crate) fn handle(backend: &str, dtype: &str) -> anyhow::Result<()> {
                     exit(RESTART_SHELL_EXIT_CODE);
                 }
             }
-            ShellMetaAction::ResetDtype(new_dtype) => {
+            ShellMetaAction::ChangeDtype(new_dtype) => {
                 if dtype == new_dtype {
                     println!("Data type {new_dtype} already selected...");
                 } else {

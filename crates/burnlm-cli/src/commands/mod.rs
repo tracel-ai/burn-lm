@@ -19,8 +19,8 @@ pub(crate) enum ShellMetaAction {
     Initialize,
     RefreshParser,
     RestartShell,
-    ResetBackend(String),
-    ResetDtype(String),
+    ChangeBackend(String),
+    ChangeDtype(String),
 }
 
 type HandleCommandResult = anyhow::Result<Option<ShellMetaAction>>;

@@ -1,7 +1,9 @@
+pub(crate) mod backend;
 pub(crate) mod backends;
 pub(crate) mod chat;
 pub(crate) mod delete;
 pub(crate) mod download;
+pub(crate) mod dtype;
 pub(crate) mod models;
 pub(crate) mod new;
 pub(crate) mod run;
@@ -17,6 +19,8 @@ pub(crate) enum ShellMetaAction {
     Initialize,
     RefreshParser,
     RestartShell,
+    ResetBackend(String),
+    ResetDtype(String),
 }
 
 type HandleCommandResult = anyhow::Result<Option<ShellMetaAction>>;

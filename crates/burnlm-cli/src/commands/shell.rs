@@ -109,12 +109,13 @@ pub(crate) fn handle(backend: &str, dtype: &str) -> anyhow::Result<()> {
                 println!("Restarting shell...");
                 exit(RESTART_SHELL_EXIT_CODE);
             }
-            ShellMetaAction::ChangeBackend(new_backend) => {
-                if backend == new_backend {
+            ShellMetaAction::ChangeBackend(new_backend, new_dtype) => {
+                let new_dtype = new_dtype.clone().unwrap_or(dtype.to_string());
+                if backend == new_backend && new_dtype == dtype {
                     println!("Backend {new_backend} already selected...");
                 } else {
                     println!("Reinitializing backend...");
-                    let config = BurnLmConfig::new(new_backend.clone(), dtype.to_string());
+                    let config = BurnLmConfig::new(new_backend.clone(), new_dtype);
                     config.save();
                     exit(RESTART_SHELL_EXIT_CODE);
                 }

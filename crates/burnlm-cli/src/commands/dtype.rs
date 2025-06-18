@@ -23,7 +23,6 @@ pub(crate) fn handle(args: &clap::ArgMatches) -> super::HandleCommandResult {
     }
 }
 
-// TODO: check that dtype is valid for current backend (otherwise program will panic)
 pub fn is_valid_dtype(input: &str) -> bool {
     VALID_DTYPES.iter().any(|dtype| *dtype == input)
 }

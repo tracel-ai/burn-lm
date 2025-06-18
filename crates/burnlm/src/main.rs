@@ -65,7 +65,6 @@ impl BurnLmConfig {
                 }
             }
         }
-        // TODO: platform specific defaults
         ("ndarray".to_string(), "f32".to_string())
     }
 

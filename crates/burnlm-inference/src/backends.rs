@@ -1,5 +1,7 @@
 mod elems {
     cfg_if::cfg_if! {
+        // NOTE: f16/bf16 is not always supported on wgpu depending on the hardware
+        // https://github.com/gfx-rs/wgpu/issues/7468
         if #[cfg(all(feature = "f16", any(feature = "cuda", feature = "wgpu", feature = "vulkan", feature = "metal", feature = "rocm", feature = "libtorch", feature = "candle-cuda")))]{
             pub type ElemType = burn::tensor::f16;
             pub const DTYPE_NAME: &str = "f16";

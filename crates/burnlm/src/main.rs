@@ -82,6 +82,9 @@ fn main() {
     // build and run arguments
     let mut args = std::env::args();
 
+    let mut config = BurnLmConfig::default();
+    let passed_args: Vec<String> = std::env::args().skip(1).collect();
+
     let mut backend = None;
     let mut dtype = None;
 
@@ -100,13 +103,14 @@ fn main() {
         }
     }
 
-    let mut config = BurnLmConfig::default();
-    let passed_args: Vec<String> = std::env::args().skip(1).collect();
-
     // Rebuild and restart burnlm while its exit code is SUPERVISOR_RESTART_EXIT_CODE
     while exit_code == BURNLM_SUPERVISOR_RESTART_EXIT_CODE {
         config.reload();
-        let features = format!("{},{}", config.backend, config.dtype);
+
+        // Force feature flags over config
+        let feat_backend = backend.clone().unwrap_or(config.backend.clone());
+        let feat_dtype = dtype.clone().unwrap_or(config.dtype.clone());
+        let features = format!("{},{}", feat_backend, feat_dtype);
 
         let build_args = cargo_args("build", &features, &[]);
         let run_args = cargo_args("run", &features, &passed_args);

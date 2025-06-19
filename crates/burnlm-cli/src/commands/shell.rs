@@ -1,10 +1,11 @@
-use std::{cell::RefCell, process::exit, rc::Rc};
+use std::{cell::RefCell, io::Write, path::PathBuf, process::exit, rc::Rc};
 
 use rustyline::{history::DefaultHistory, Editor};
 
 use super::{BurnLMPromptHelper, ShellMetaAction};
 
 const RESTART_SHELL_EXIT_CODE: i32 = 8;
+const BURNLM_CONFIG_FILE: &str = "burnlm.config";
 
 // custom rustyline editor to stylize the prompt
 struct ShellEditor<H: rustyline::Helper> {
@@ -32,8 +33,10 @@ type ShellContext = ();
 fn create_parser() -> clap::Command {
     clap::Command::default()
         .subcommand(super::backends::create())
+        .subcommand(super::backend::create())
         .subcommand(super::chat::create())
         .subcommand(super::delete::create())
+        .subcommand(super::dtype::create())
         .subcommand(super::download::create())
         .subcommand(super::models::create())
         .subcommand(super::new::create())
@@ -41,6 +44,36 @@ fn create_parser() -> clap::Command {
         .subcommand(super::server::create())
         .subcommand(super::web::create())
         .multicall(true)
+}
+
+struct BurnLmConfig {
+    backend: String,
+    dtype: String,
+}
+
+impl BurnLmConfig {
+    fn new(backend: String, dtype: String) -> Self {
+        Self { backend, dtype }
+    }
+
+    fn config_path() -> PathBuf {
+        let mut path = std::env::var("BURNLM_CONFIG_DIR")
+            .map(|dir| PathBuf::from(dir))
+            .unwrap_or(std::env::current_dir().expect("should get valid directory"));
+        path.push(BURNLM_CONFIG_FILE);
+        path
+    }
+
+    fn save(&self) {
+        let path = Self::config_path();
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let content = format!("{}\n{}", self.backend, self.dtype);
+        let _ = std::fs::File::create(&path)
+            .and_then(|mut f| f.write_all(content.as_bytes()))
+            .expect("Failed to write config file");
+    }
 }
 
 pub(crate) fn handle(backend: &str, dtype: &str) -> anyhow::Result<()> {
@@ -76,12 +109,37 @@ pub(crate) fn handle(backend: &str, dtype: &str) -> anyhow::Result<()> {
                 println!("Restarting shell...");
                 exit(RESTART_SHELL_EXIT_CODE);
             }
+            ShellMetaAction::ChangeBackend(new_backend, new_dtype) => {
+                let new_dtype = new_dtype.clone().unwrap_or(dtype.to_string());
+                if backend == new_backend && new_dtype == dtype {
+                    println!("Backend {new_backend} already selected...");
+                } else {
+                    println!("Reinitializing backend...");
+                    let config = BurnLmConfig::new(new_backend.clone(), new_dtype);
+                    config.save();
+                    exit(RESTART_SHELL_EXIT_CODE);
+                }
+            }
+            ShellMetaAction::ChangeDtype(new_dtype) => {
+                if dtype == new_dtype {
+                    println!("Data type {new_dtype} already selected...");
+                } else {
+                    println!("Reinitializing backend dtype...");
+                    let config = BurnLmConfig::new(backend.to_string(), new_dtype.clone());
+                    config.save();
+                    exit(RESTART_SHELL_EXIT_CODE);
+                }
+            }
         }
         *meta_action.borrow_mut() = None;
 
         let handler = |args: clap::ArgMatches, _: &mut ShellContext| -> cloop::ShellResult {
             *meta_action.borrow_mut() = if args.subcommand_matches("backends").is_some() {
                 super::backends::handle()?
+            } else if let Some(args) = args.subcommand_matches("backend") {
+                super::backend::handle(args)?
+            } else if let Some(args) = args.subcommand_matches("dtype") {
+                super::dtype::handle(args)?
             } else if let Some(args) = args.subcommand_matches("chat") {
                 super::chat::handle(args, backend, dtype)?
             } else if let Some(args) = args.subcommand_matches("delete") {

@@ -16,7 +16,8 @@ pub struct AttentionBenchmark<B: Backend> {
 }
 
 impl<B: Backend> Benchmark for AttentionBenchmark<B> {
-    type Args = (Tensor<B, 3>, KeyValueCache<B>);
+    type Input = (Tensor<B, 3>, KeyValueCache<B>);
+    type Output = Tensor<B, 3>;
 
     fn name(&self) -> String {
         format!("llama-attention-{:?}", B::FloatElem::dtype()).to_lowercase()
@@ -26,11 +27,11 @@ impl<B: Backend> Benchmark for AttentionBenchmark<B> {
         vec![vec![self.batch_size, self.seq_length, self.d_model]]
     }
 
-    fn execute(&self, (input, mut cache): Self::Args) {
-        self.attn.forward_cache(input, &mut cache, &self.rope, None);
+    fn execute(&self, (input, mut cache): Self::Input) -> Self::Output {
+        self.attn.forward_cache(input, &mut cache, &self.rope, None)
     }
 
-    fn prepare(&self) -> Self::Args {
+    fn prepare(&self) -> Self::Input {
         let input = Tensor::<B, 3>::random(
             [self.batch_size, self.seq_length, self.d_model],
             Distribution::Default,

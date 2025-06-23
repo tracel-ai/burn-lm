@@ -72,7 +72,12 @@ fn bench<B: Backend>(device: &B::Device) -> Vec<BenchmarkResult> {
         rope,
     };
 
-    vec![run_benchmark(benchmark)]
+    let results = vec![run_benchmark(benchmark)];
+
+    for r in &results {
+        println!("{:?}", r.computed);
+    }
+    results
 }
 
 fn main() {

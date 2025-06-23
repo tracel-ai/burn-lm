@@ -58,10 +58,8 @@ fn run(args: &clap::ArgMatches, backend: &str, dtype: &str) -> super::HandleComm
     run_args.extend(vec!["--", "run", "--port", &port_string]);
     let run_args = run_args.join(" ").to_string();
     watch_args.push(&run_args);
-    let mut spin_msg = super::SpinningMessage::new(
-        &format!("compiling {backend} server..."),
-        "server ready!",
-    );
+    let mut spin_msg =
+        super::SpinningMessage::new(&format!("compiling {backend} server..."), "server ready!");
     // build server
     let build_output = std::process::Command::new("cargo")
         .args(&build_args)

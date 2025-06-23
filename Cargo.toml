@@ -19,7 +19,6 @@ burn = { git = "https://github.com/tracel-ai/burn", features = [
 burn-common = { git = "https://github.com/tracel-ai/burn", features = [
     "std",
 ], default-features = false }
-
 burn-import = { git = "https://github.com/tracel-ai/burn" }
 
 # For dev we use the local version of burn
@@ -29,7 +28,7 @@ burn-import = { git = "https://github.com/tracel-ai/burn" }
 # burn-common = { path = "../burn/crates/burn-common", features = [
 #     "std",
 # ], default-features = false }
-
+# 
 # burn-import = { path = "../burn/crates/burn-import" }
 # For release, but right now we need new features that are not released in Burn yet.
 # burn = { version = "0.17.0", default-features = false, features = ["std"] }

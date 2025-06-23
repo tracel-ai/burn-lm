@@ -42,11 +42,9 @@ flex32 = []
 legacy-v16 = []
 
 [dependencies]
-burn = { workspace = true, default-features = false, features = [
-    "std",
-] }
+burn = { workspace = true, default-features = false, features = ["std"] }
 burn-common = { workspace = true, default-features = false }
-burnbench = { git = "https://github.com/tracel-ai/burn-bench" }
+burnbench = { git = "https://github.com/tracel-ai/burn-bench", rev = "6064aee195165784f5e926b4811fd6c8e040b69f" }
 burnlm-llama = { path = "../crates/burnlm-llama" }
 
 [[bench]]

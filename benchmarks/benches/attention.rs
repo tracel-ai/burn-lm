@@ -2,7 +2,7 @@ use burn::{
     nn::RotaryEncodingConfig,
     tensor::{backend::Backend, Distribution, Element, Tensor},
 };
-use burn_common::benchmark::{run_benchmark, Benchmark, BenchmarkResult};
+use burnbench::{run_benchmark, Benchmark, BenchmarkResult};
 use burnlm_llama::nn::{
     attention::{KeyValueCache, MultiHeadAttention, MultiHeadAttentionConfig},
     pos_encoding::PositionalEncodingState,

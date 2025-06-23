@@ -2,7 +2,7 @@ use burn::{
     nn::{Embedding, EmbeddingConfig},
     tensor::{backend::Backend, Distribution, Element, Int, Tensor},
 };
-use burn_common::benchmark::{run_benchmark, Benchmark, BenchmarkResult};
+use burnbench::{run_benchmark, Benchmark, BenchmarkResult};
 
 pub struct EmbeddingBenchmark<B: Backend> {
     seq_length: usize,

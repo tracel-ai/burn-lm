@@ -71,11 +71,11 @@ pub mod burn_backend_types {
 #[cfg(feature = "rocm")]
 pub mod burn_backend_types {
     use super::*;
-    use burn::backend::rocm::{HipDevice, Rocm};
+    use burn::backend::rocm::{Rocm, RocmDevice};
     pub type InferenceBackend = Rocm<ElemType>;
-    pub type InferenceDevice = HipDevice;
-    pub const INFERENCE_DEVICE: std::sync::LazyLock<HipDevice> =
-        std::sync::LazyLock::new(|| HipDevice::default());
+    pub type InferenceDevice = RocmDevice;
+    pub const INFERENCE_DEVICE: std::sync::LazyLock<RocmDevice> =
+        std::sync::LazyLock::new(|| RocmDevice::default());
     pub const NAME: &str = "rocm";
 }
 

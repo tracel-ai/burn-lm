@@ -1,7 +1,7 @@
 use anyhow::Context;
 use burnlm_inference::Completion;
-use yansi::Paint;
 use which::which;
+use yansi::Paint;
 
 use crate::commands::HandleCommandResult;
 

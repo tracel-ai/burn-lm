@@ -502,6 +502,7 @@ checksum = "793db76d6187cd04dff33004d8e6c9cc4e05cd330500379d2394209271b4aeee"
 [[package]]
 name = "burn"
 version = "0.18.0"
+source = "git+https://github.com/tracel-ai/burn#35cf372c57ab0f7e7b4ba4fbd4211ff2bd5748d0"
 dependencies = [
  "burn-autodiff",
  "burn-candle",
@@ -520,6 +521,7 @@ dependencies = [
 [[package]]
 name = "burn-autodiff"
 version = "0.18.0"
+source = "git+https://github.com/tracel-ai/burn#35cf372c57ab0f7e7b4ba4fbd4211ff2bd5748d0"
 dependencies = [
  "burn-common",
  "burn-tensor",
@@ -534,6 +536,7 @@ dependencies = [
 [[package]]
 name = "burn-candle"
 version = "0.18.0"
+source = "git+https://github.com/tracel-ai/burn#35cf372c57ab0f7e7b4ba4fbd4211ff2bd5748d0"
 dependencies = [
  "burn-common",
  "burn-tensor",
@@ -545,6 +548,7 @@ dependencies = [
 [[package]]
 name = "burn-common"
 version = "0.18.0"
+source = "git+https://github.com/tracel-ai/burn#35cf372c57ab0f7e7b4ba4fbd4211ff2bd5748d0"
 dependencies = [
  "cubecl-common",
  "indicatif",
@@ -557,6 +561,7 @@ dependencies = [
 [[package]]
 name = "burn-core"
 version = "0.18.0"
+source = "git+https://github.com/tracel-ai/burn#35cf372c57ab0f7e7b4ba4fbd4211ff2bd5748d0"
 dependencies = [
  "ahash",
  "bincode",
@@ -585,6 +590,7 @@ dependencies = [
 [[package]]
 name = "burn-cubecl"
 version = "0.18.0"
+source = "git+https://github.com/tracel-ai/burn#35cf372c57ab0f7e7b4ba4fbd4211ff2bd5748d0"
 dependencies = [
  "burn-common",
  "burn-cubecl-fusion",
@@ -608,6 +614,7 @@ dependencies = [
 [[package]]
 name = "burn-cubecl-fusion"
 version = "0.18.0"
+source = "git+https://github.com/tracel-ai/burn#35cf372c57ab0f7e7b4ba4fbd4211ff2bd5748d0"
 dependencies = [
  "burn-common",
  "burn-fusion",
@@ -622,6 +629,7 @@ dependencies = [
 [[package]]
 name = "burn-cuda"
 version = "0.18.0"
+source = "git+https://github.com/tracel-ai/burn#35cf372c57ab0f7e7b4ba4fbd4211ff2bd5748d0"
 dependencies = [
  "burn-cubecl",
  "burn-fusion",
@@ -636,6 +644,7 @@ dependencies = [
 [[package]]
 name = "burn-dataset"
 version = "0.18.0"
+source = "git+https://github.com/tracel-ai/burn#35cf372c57ab0f7e7b4ba4fbd4211ff2bd5748d0"
 dependencies = [
  "csv",
  "derive-new 0.7.0",
@@ -659,6 +668,7 @@ dependencies = [
 [[package]]
 name = "burn-derive"
 version = "0.18.0"
+source = "git+https://github.com/tracel-ai/burn#35cf372c57ab0f7e7b4ba4fbd4211ff2bd5748d0"
 dependencies = [
  "derive-new 0.7.0",
  "proc-macro2",
@@ -669,6 +679,7 @@ dependencies = [
 [[package]]
 name = "burn-fusion"
 version = "0.18.0"
+source = "git+https://github.com/tracel-ai/burn#35cf372c57ab0f7e7b4ba4fbd4211ff2bd5748d0"
 dependencies = [
  "burn-common",
  "burn-ir",
@@ -684,6 +695,7 @@ dependencies = [
 [[package]]
 name = "burn-import"
 version = "0.18.0"
+source = "git+https://github.com/tracel-ai/burn#35cf372c57ab0f7e7b4ba4fbd4211ff2bd5748d0"
 dependencies = [
  "burn",
  "burn-ndarray",
@@ -708,6 +720,7 @@ dependencies = [
 [[package]]
 name = "burn-ir"
 version = "0.18.0"
+source = "git+https://github.com/tracel-ai/burn#35cf372c57ab0f7e7b4ba4fbd4211ff2bd5748d0"
 dependencies = [
  "burn-tensor",
  "hashbrown 0.15.4",
@@ -718,6 +731,7 @@ dependencies = [
 [[package]]
 name = "burn-ndarray"
 version = "0.18.0"
+source = "git+https://github.com/tracel-ai/burn#35cf372c57ab0f7e7b4ba4fbd4211ff2bd5748d0"
 dependencies = [
  "atomic_float",
  "blas-src",
@@ -744,6 +758,7 @@ dependencies = [
 [[package]]
 name = "burn-remote"
 version = "0.18.0"
+source = "git+https://github.com/tracel-ai/burn#35cf372c57ab0f7e7b4ba4fbd4211ff2bd5748d0"
 dependencies = [
  "async-channel",
  "axum",
@@ -767,6 +782,7 @@ dependencies = [
 [[package]]
 name = "burn-rocm"
 version = "0.18.0"
+source = "git+https://github.com/tracel-ai/burn#35cf372c57ab0f7e7b4ba4fbd4211ff2bd5748d0"
 dependencies = [
  "burn-cubecl",
  "burn-fusion",
@@ -781,6 +797,7 @@ dependencies = [
 [[package]]
 name = "burn-router"
 version = "0.18.0"
+source = "git+https://github.com/tracel-ai/burn#35cf372c57ab0f7e7b4ba4fbd4211ff2bd5748d0"
 dependencies = [
  "burn-common",
  "burn-ir",
@@ -793,6 +810,7 @@ dependencies = [
 [[package]]
 name = "burn-tch"
 version = "0.18.0"
+source = "git+https://github.com/tracel-ai/burn#35cf372c57ab0f7e7b4ba4fbd4211ff2bd5748d0"
 dependencies = [
  "burn-tensor",
  "cc",
@@ -806,6 +824,7 @@ dependencies = [
 [[package]]
 name = "burn-tensor"
 version = "0.18.0"
+source = "git+https://github.com/tracel-ai/burn#35cf372c57ab0f7e7b4ba4fbd4211ff2bd5748d0"
 dependencies = [
  "burn-common",
  "bytemuck",
@@ -824,6 +843,7 @@ dependencies = [
 [[package]]
 name = "burn-train"
 version = "0.18.0"
+source = "git+https://github.com/tracel-ai/burn#35cf372c57ab0f7e7b4ba4fbd4211ff2bd5748d0"
 dependencies = [
  "async-channel",
  "burn-core",
@@ -844,6 +864,7 @@ dependencies = [
 [[package]]
 name = "burn-wgpu"
 version = "0.18.0"
+source = "git+https://github.com/tracel-ai/burn#35cf372c57ab0f7e7b4ba4fbd4211ff2bd5748d0"
 dependencies = [
  "burn-cubecl",
  "burn-fusion",
@@ -854,7 +875,6 @@ dependencies = [
 [[package]]
 name = "burnbench"
 version = "0.1.0"
-source = "git+https://github.com/tracel-ai/burn-bench#9ab67dd05c1091883831616ee787ecc6886041da"
 dependencies = [
  "arboard",
  "cfg-if",
@@ -4461,6 +4481,7 @@ dependencies = [
 [[package]]
 name = "onnx-ir"
 version = "0.18.0"
+source = "git+https://github.com/tracel-ai/burn#35cf372c57ab0f7e7b4ba4fbd4211ff2bd5748d0"
 dependencies = [
  "bytemuck",
  "half",

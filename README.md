@@ -21,7 +21,7 @@ Launch a Burn LM shell with:
 ```sh
 git clone https://github.com/tracel-ai/burn-lm.git
 cd burn-lm
-cargo burnlm
+cargo burn-lm
 ```
 
 Type `help` to get a list of commands.
@@ -29,7 +29,7 @@ Type `help` to get a list of commands.
 You can also specify the backend and data type with the `-b` and `-d` options, for example:
 
 ```sh
-cargo burnlm -b cuda -d f16
+cargo burn-lm -b cuda -d f16
 ```
 
 # Usage
@@ -39,14 +39,14 @@ cargo burnlm -b cuda -d f16
 The list of installed models is displayed with:
 
 ```sh
-cargo burnlm models
+cargo burn-lm models
 ```
 
 To download a model use the `download` command. This is will give you
 the list of all downloadable models:
 
 ```sh
-cargo burnlm download
+cargo burn-lm download
 ```
 
 To delete a downloaded model use the `delete` command.
@@ -56,7 +56,7 @@ To delete a downloaded model use the `delete` command.
 Run a single inference with the command `run`:
 
 ```sh
-cargo burnlm run llama32 "Name a famous Quebecois dish."
+cargo burn-lm run llama32 "Name a famous Quebecois dish."
 ```
 
 ## Chat
@@ -68,13 +68,13 @@ Burn LM allows to chat with LLMs both in the terminal or in the browser.
 Start a chat session with a chosen model using the `chat` command:
 
 ```sh
-cargo burnlm chat llama32
+cargo burn-lm chat llama32
 ```
 
 You can also specify the backend and data type with the `-b` and `-d` options, for example:
 
 ```sh
-cargo burnlm -b cuda -d f16 chat llama32
+cargo burn-lm -b cuda -d f16 chat llama32
 ```
 
 #### Slash Commands
@@ -97,7 +97,7 @@ First make sure `docker` and `docker-compose` are available on your system.
 Then execute the command:
 
 ```sh
-cargo burnlm web start
+cargo burn-lm web start
 ```
 
 Head your browser to http://localhost:3000 and enjoy.
@@ -110,15 +110,15 @@ trait to create a pluggable server that can be added to the Burn LM registry.
 To bootstrap a new model server you can use the dedicated command `new`:
 
 ```sh
-cargo burnlm new "my-model"
+cargo burn-lm new "my-model"
 ```
 
-This will create a new crate named `burnlm-inference-my-model` and automatically
-register it in `burnlm-registry`.
+This will create a new crate named `burn-lm-inference-my-model` and automatically
+register it in `burn-lm-registry`.
 
 The bootstraped server is a model-less server that just repeat the prompt it is
 given. You can also get inspiration from the other crate with name starting with
-`burnlm-inference-`.
+`burn-lm-inference-`.
 
 
 

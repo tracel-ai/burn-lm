@@ -1,0 +1,13 @@
+[package]
+name = "burn-lm-parrot"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+readme.workspace = true
+
+[dependencies]
+burn = { workspace = true }
+burn-lm-inference = { path = "../burn-lm-inference" }
+
+rand = { workspace = true }
+serde = { workspace = true }

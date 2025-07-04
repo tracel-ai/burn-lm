@@ -2,11 +2,11 @@ use burn::{
     nn::RotaryEncodingConfig,
     tensor::{backend::Backend, Distribution, Element, Int, Tensor},
 };
-use burnbench::{run_benchmark, Benchmark, BenchmarkResult};
-use burnlm_llama::nn::{
+use burn_lm_llama::nn::{
     pos_encoding::PositionalEncodingState,
     transformer::{Transformer, TransformerCache, TransformerConfig},
 };
+use burnbench::{run_benchmark, Benchmark, BenchmarkResult};
 
 pub struct TransformerBenchmark<B: Backend> {
     seq_length: usize,

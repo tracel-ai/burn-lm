@@ -1,0 +1,91 @@
+name: publish
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+
+  # burn-ml ------------------------------------------------------------------
+
+  publish-burn-lm-macros:
+    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v3
+    with:
+      crate: burn-lm-macros
+    secrets:
+      CRATES_IO_API_TOKEN: ${{ secrets.CRATES_IO_API_TOKEN }}
+
+  publish-burn-lm-inference:
+    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v3
+    with:
+      crate: burn-lm-inference
+    needs:
+      - publish-burn-lm-macros
+    secrets:
+      CRATES_IO_API_TOKEN: ${{ secrets.CRATES_IO_API_TOKEN }}
+
+  publish-burn-lm-registry:
+    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v3
+    with:
+      crate: burn-lm-registry
+    needs:
+      - publish-burn-lm-macros
+      - publish-burn-lm-inference
+    secrets:
+      CRATES_IO_API_TOKEN: ${{ secrets.CRATES_IO_API_TOKEN }}
+
+  publish-burn-lm-cli:
+    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v3
+    with:
+      crate: burn-lm-cli
+    needs:
+      - publish-burn-lm-registry
+      - publish-burn-lm-inference
+    secrets:
+      CRATES_IO_API_TOKEN: ${{ secrets.CRATES_IO_API_TOKEN }}
+
+  publish-burn-lm-http:
+    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v3
+    with:
+      crate: burn-lm-http
+    needs:
+      - publish-burn-lm-registry
+      - publish-burn-lm-inference
+    secrets:
+      CRATES_IO_API_TOKEN: ${{ secrets.CRATES_IO_API_TOKEN }}
+
+  # burn-lm does not depend on anything technically in its cargo.toml but
+  # we want it to be the last crate to be published nonetheless
+  publish-burn-lm:
+    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v3
+    with:
+      crate: burn-lm
+    needs:
+      - publish-burn-lm-cli
+      - publish-burn-lm-http
+      # models
+      - publish-burn-lm-llama
+      - publish-burn-lm-parrot
+    secrets:
+      CRATES_IO_API_TOKEN: ${{ secrets.CRATES_IO_API_TOKEN }}
+
+  # models -------------------------------------------------------------------
+
+  publish-burn-lm-llama:
+    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v3
+    with:
+      crate: burn-lm-llama
+    needs:
+      - publish-burn-lm-inference
+    secrets:
+      CRATES_IO_API_TOKEN: ${{ secrets.CRATES_IO_API_TOKEN }}
+
+  publish-burn-lm-parrot:
+    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v3
+    with:
+      crate: burn-lm-parrot
+    needs:
+      - publish-burn-lm-inference
+    secrets:
+      CRATES_IO_API_TOKEN: ${{ secrets.CRATES_IO_API_TOKEN }}

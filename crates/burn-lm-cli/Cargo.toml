@@ -1,0 +1,50 @@
+[package]
+name = "burn-lm-cli"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+readme.workspace = true
+
+[features]
+candle-accelerate = ["burn-lm-inference/candle-accelerate"]
+candle-cpu = ["burn-lm-inference/candle-cpu"]
+candle-cuda = ["burn-lm-inference/candle-cuda"]
+candle-metal = ["burn-lm-inference/candle-metal"]
+
+f16 = ["burn-lm-inference/f16"]
+bf16 = ["burn-lm-inference/f16"]
+cuda = ["burn-lm-inference/cuda"]
+rocm = ["burn-lm-inference/rocm"]
+wgpu = ["burn-lm-inference/wgpu"]
+vulkan = ["burn-lm-inference/vulkan"]
+metal = ["burn-lm-inference/metal"]
+
+libtorch-cuda = ["burn-lm-inference/libtorch"]
+libtorch-cpu = ["burn-lm-inference/libtorch-cpu"]
+
+ndarray = ["burn-lm-inference/ndarray"]
+ndarray-blas-openblas = ["burn-lm-inference/ndarray-blas-openblas"]
+ndarray-blas-accelerate = ["burn-lm-inference/ndarray-blas-accelerate"]
+ndarray-blas-netlib = ["burn-lm-inference/ndarray-blas-netlib"]
+
+[dependencies]
+burn-lm-inference = { path = "../burn-lm-inference" }
+burn-lm-registry = { path = "../burn-lm-registry" }
+
+anyhow = { workspace = true }
+clap = { workspace = true }
+cloop = { workspace = true }
+comfy-table = { workspace = true }
+rustyline = { workspace = true }
+strum = { workspace = true }
+yansi = { workspace = true }
+spinners = { workspace = true }
+which = { workspace = true }
+
+[dev-dependencies]
+rstest = { workspace = true }
+tempfile = { workspace = true }
+
+[[bin]]
+name = "burnlm-cli"
+path = "src/bin/burnlm-cli.rs"

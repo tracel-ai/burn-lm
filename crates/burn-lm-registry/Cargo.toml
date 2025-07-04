@@ -1,0 +1,18 @@
+[package]
+name = "burn-lm-registry"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+readme.workspace = true
+
+[dependencies]
+burn-lm-inference = { path = "../burn-lm-inference" }
+burn-lm-macros = { path = "../burn-lm-macros" }
+
+# plugins
+burn-lm-llama = { path = "../burn-lm-llama", features = [
+    "inference-server",
+    "llama3",
+    "tiny",
+] }
+burn-lm-parrot = { path = "../burn-lm-parrot" }

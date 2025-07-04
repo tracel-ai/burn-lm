@@ -2,11 +2,11 @@ use burn::{
     nn::RotaryEncodingConfig,
     tensor::{backend::Backend, Distribution, Element, Tensor},
 };
-use burnbench::{run_benchmark, Benchmark, BenchmarkResult};
-use burnlm_llama::nn::{
+use burn_lm_llama::nn::{
     attention::{KeyValueCache, MultiHeadAttention, MultiHeadAttentionConfig},
     pos_encoding::PositionalEncodingState,
 };
+use burnbench::{run_benchmark, Benchmark, BenchmarkResult};
 
 pub struct AttentionBenchmark<B: Backend> {
     seq_length: usize,

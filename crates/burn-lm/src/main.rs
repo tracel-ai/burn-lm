@@ -20,7 +20,7 @@ fn cargo_args<'a>(
         "--features",
         features,
         "--bin",
-        "burnlm-cli",
+        "burn-lm-cli",
         "--quiet",
         "--color",
         "always",

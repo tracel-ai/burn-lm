@@ -13,23 +13,23 @@ license = "MIT OR Apache-2.0"
 readme = "README.md"
 
 [workspace.dependencies]
-burn = { git = "https://github.com/tracel-ai/burn", features = [
-    "std",
-], default-features = false }
-burn-common = { git = "https://github.com/tracel-ai/burn", features = [
-    "std",
-], default-features = false }
-burn-import = { git = "https://github.com/tracel-ai/burn" }
+# burn = { git = "https://github.com/tracel-ai/burn", features = [
+#     "std",
+# ], default-features = false, rev = "8a875fbefd9fda9019d9314bb9fafc814dfcb6a7" }
+# burn-common = { git = "https://github.com/tracel-ai/burn", features = [
+#     "std",
+# ], default-features = false, rev = "8a875fbefd9fda9019d9314bb9fafc814dfcb6a7" }
+# burn-import = { git = "https://github.com/tracel-ai/burn", default-features = false, rev = "8a875fbefd9fda9019d9314bb9fafc814dfcb6a7" }
 
 # For dev we use the local version of burn
-# burn = { path = "../burn/crates/burn", features = [
-#     "std",
-# ], default-features = false }
-# burn-common = { path = "../burn/crates/burn-common", features = [
-#     "std",
-# ], default-features = false }
-# 
-# burn-import = { path = "../burn/crates/burn-import" }
+burn = { path = "../burn/crates/burn", features = [
+    "std",
+], default-features = false }
+burn-common = { path = "../burn/crates/burn-common", features = [
+    "std",
+], default-features = false }
+
+burn-import = { path = "../burn/crates/burn-import" }
 # For release, but right now we need new features that are not released in Burn yet.
 # burn = { version = "0.17.0", default-features = false, features = ["std"] }
 # burn-import = { version = "0.17.0" }

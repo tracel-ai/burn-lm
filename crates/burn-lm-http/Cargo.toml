@@ -33,5 +33,5 @@ utoipa-swagger-ui = { workspace = true }
 rstest = { workspace = true }
 
 [[bin]]
-name = "burnlm-http"
-path = "src/bin/burnlm-http.rs"
+name = "burn-lm-http"
+path = "src/bin/burn-lm-http.rs"

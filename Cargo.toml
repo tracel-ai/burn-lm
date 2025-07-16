@@ -30,6 +30,7 @@ burn-common = { path = "../burn/crates/burn-common", features = [
 ], default-features = false }
 
 burn-import = { path = "../burn/crates/burn-import" }
+
 # For release, but right now we need new features that are not released in Burn yet.
 # burn = { version = "0.17.0", default-features = false, features = ["std"] }
 # burn-import = { version = "0.17.0" }

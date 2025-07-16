@@ -2,7 +2,7 @@ use burn::{
     nn::RotaryEncodingConfig,
     tensor::{backend::Backend, Distribution, Element, Tensor},
 };
-use burn_lm_llama::nn::{
+use burnlm_llama::nn::{
     attention::KeyValueCache,
     pos_encoding::PositionalEncodingState,
     transformer::{TransformerBlock, TransformerBlockConfig},

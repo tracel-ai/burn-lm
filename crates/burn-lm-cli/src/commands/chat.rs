@@ -177,7 +177,13 @@ pub(crate) fn handle(
                 println!("{}", msg.bright_black().bold());
                 Ok(cloop::ShellAction::Continue)
             }
-            MessageCommand::Exit => Ok(cloop::ShellAction::Exit),
+            MessageCommand::Exit => {
+                let stats = plugin.unload();
+                if let Ok(Some(stats)) = stats {
+                    println!("{}", stats.display_stats());
+                }
+                Ok(cloop::ShellAction::Exit)
+            }
             MessageCommand::Clear => {
                 match plugin.clear_state() {
                     Ok(_) => {

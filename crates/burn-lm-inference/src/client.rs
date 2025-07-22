@@ -1,5 +1,7 @@
 use std::marker::PhantomData;
 
+use burn::prelude::Backend;
+
 use crate::{
     channels::InferenceChannel,
     completion::Completion,
@@ -7,7 +9,7 @@ use crate::{
     message::Message,
     plugin::{CreateCliFlagsFn, InferencePlugin},
     server::InferenceServer,
-    Stats,
+    InferenceBackend, Stats, INFERENCE_DEVICE,
 };
 
 #[derive(Debug, Clone)]
@@ -72,7 +74,10 @@ where
     }
 
     fn deleter(&self) -> Option<fn() -> InferenceResult<Option<Stats>>> {
-        self.channel.deleter()
+        let result = self.channel.deleter();
+        let device = &INFERENCE_DEVICE;
+        <InferenceBackend as Backend>::memory_cleanup(device);
+        result
     }
 
     fn parse_cli_config(&self, args: &clap::ArgMatches) {
@@ -84,7 +89,10 @@ where
     }
 
     fn load(&self) -> InferenceResult<Option<Stats>> {
-        self.channel.load()
+        let device = &INFERENCE_DEVICE;
+        <InferenceBackend as Backend>::memory_static_allocations(device, (), |_| {
+            self.channel.load()
+        })
     }
 
     fn is_loaded(&self) -> bool {
@@ -92,7 +100,10 @@ where
     }
 
     fn unload(&self) -> InferenceResult<Option<Stats>> {
-        self.channel.unload()
+        let result = self.channel.unload();
+        let device = &INFERENCE_DEVICE;
+        <InferenceBackend as Backend>::memory_cleanup(device);
+        result
     }
 
     fn run_completion(&self, messages: Vec<Message>) -> InferenceResult<Completion> {

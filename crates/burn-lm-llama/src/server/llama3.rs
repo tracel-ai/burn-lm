@@ -9,7 +9,7 @@ use crate::{
     Llama, LlamaConfig, LlamaVersion,
 };
 use burn::prelude::Backend;
-use burn_lm_inference::{server::Completion, *};
+use burn_lm_inference::{InferenceJob, *};
 
 #[inference_server_config]
 pub struct Llama3ServerConfig {
@@ -116,12 +116,8 @@ impl InferenceServer for Llama3InstructServer<InferenceBackend> {
         self.server.unload(Self::model_name())
     }
 
-    fn run_completion(
-        &mut self,
-        messages: Vec<Message>,
-        completion: Completion,
-    ) -> InferenceResult<Stats> {
-        self.server.complete(messages, &self.config, completion)
+    fn run_job(&mut self, job: InferenceJob) -> InferenceResult<Stats> {
+        self.server.run_job(job, &self.config)
     }
 
     fn clear_state(&mut self) -> InferenceResult<()> {
@@ -188,12 +184,8 @@ impl InferenceServer for Llama31InstructServer<InferenceBackend> {
         self.server.unload(Self::model_name())
     }
 
-    fn run_completion(
-        &mut self,
-        messages: Vec<Message>,
-        completion: Completion,
-    ) -> InferenceResult<Stats> {
-        self.server.complete(messages, &self.config, completion)
+    fn run_job(&mut self, job: InferenceJob) -> InferenceResult<Stats> {
+        self.server.run_job(job, &self.config)
     }
 
     fn clear_state(&mut self) -> InferenceResult<()> {
@@ -260,12 +252,8 @@ impl InferenceServer for Llama321bInstructServer<InferenceBackend> {
         self.server.unload(Self::model_name())
     }
 
-    fn run_completion(
-        &mut self,
-        messages: Vec<Message>,
-        completion: Completion,
-    ) -> InferenceResult<Stats> {
-        self.server.complete(messages, &self.config, completion)
+    fn run_job(&mut self, job: InferenceJob) -> InferenceResult<Stats> {
+        self.server.run_job(job, &self.config)
     }
 
     fn clear_state(&mut self) -> InferenceResult<()> {
@@ -332,12 +320,8 @@ impl InferenceServer for Llama323bInstructServer<InferenceBackend> {
         self.server.unload(Self::model_name())
     }
 
-    fn run_completion(
-        &mut self,
-        messages: Vec<Message>,
-        completion: Completion,
-    ) -> InferenceResult<Stats> {
-        self.server.complete(messages, &self.config, completion)
+    fn run_job(&mut self, job: InferenceJob) -> InferenceResult<Stats> {
+        self.server.run_job(job, &self.config)
     }
 
     fn clear_state(&mut self) -> InferenceResult<()> {
@@ -383,14 +367,27 @@ impl Llama3BaseServer<InferenceBackend> {
         Ok(None)
     }
 
+    fn run_job(
+        &mut self,
+        job: InferenceJob,
+        config: &Llama3ServerConfig,
+    ) -> InferenceResult<Stats> {
+        let prompt = match job.task {
+            InferenceTask::Message(message) => self.prompt(vec![message])?,
+            InferenceTask::Context(messages) => self.prompt(messages)?,
+            InferenceTask::Prompt(prompt) => prompt,
+        };
+        self.complete(prompt, &config, job.emitter)
+    }
+
     fn complete(
         &mut self,
-        messages: Vec<Message>,
+        prompt: Prompt,
         config: &Llama3ServerConfig,
-        completion: Completion,
+        emitter: GeneratedItemEmitter,
     ) -> InferenceResult<Stats> {
         let load_stats = self.load(config)?;
-        let prompt = self.prompt(messages)?;
+        // let prompt = self.prompt(messages)?;
         let seed = match config.seed {
             0 => rand::rng().random::<u64>(),
             s => s,
@@ -410,7 +407,7 @@ impl Llama3BaseServer<InferenceBackend> {
                     config.sample_len,
                     config.temperature,
                     &mut sampler,
-                    completion,
+                    emitter,
                 ) {
                     Ok(result) => result,
                     Err(GenerationError::MaxSequenceLengthExceeded { actual, max }) => {

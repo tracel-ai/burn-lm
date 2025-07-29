@@ -4,10 +4,7 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
-use burn_lm_inference::{
-    server::{Completion, StringCallback},
-    StatEntry,
-};
+use burn_lm_inference::{InferenceJob, InferenceTask, StatEntry, TextGenerationListener};
 use tokio::sync::mpsc;
 use tokio_stream::{wrappers::ReceiverStream, StreamExt};
 
@@ -53,9 +50,10 @@ async fn handle_non_streaming_response(
         .expect("ChatCompletionParams should serialize to a JSON string");
     tracing::debug!("Json params from payload: {}", json_params);
     plugin.parse_json_config(&json_params);
-    let (completion, handle) = Completion::start(StringCallback::default());
-    let _answer = plugin.run_completion(messages, completion).unwrap();
-    let content = handle.finished();
+    let task = InferenceTask::Context(messages);
+    let (job, handle) = InferenceJob::create(task, TextGenerationListener::default());
+    let _answer = plugin.run_job(job).unwrap();
+    let content = handle.join();
 
     tracing::debug!("Answer: {}", content);
     let response = ChatCompletionSchema {
@@ -177,19 +175,16 @@ async fn handle_streaming_response(
                 .iter_mut()
                 .for_each(|m| m.cleanup(REPLY_MARKER, burn_lm_inference::STATS_MARKER));
             tracing::debug!("Cleaned up messages: {:?}", messages);
-            let (completion, handle) = Completion::start(StringCallback::default());
+            let task = InferenceTask::Context(messages);
+            let (job, handle) = InferenceJob::create(task, TextGenerationListener::default());
             let stats = tokio::task::spawn_blocking({
                 let plugin = plugin.clone();
-                move || {
-                    plugin
-                        .run_completion(messages, completion)
-                        .expect("should generate answer")
-                }
+                move || plugin.run_job(job).expect("should generate answer")
             })
             .await
             .expect("should complete answer generation");
 
-            let content = handle.finished();
+            let content = handle.join();
             let content = format!("{}\n\n{}", content, stats.display_stats());
             tracing::debug!("Answer: {}", content);
             let chunk =

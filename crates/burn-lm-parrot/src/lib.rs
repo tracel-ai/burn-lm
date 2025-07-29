@@ -1,6 +1,6 @@
 #![recursion_limit = "256"]
 
-use burn_lm_inference::{server::Completion, *};
+use burn_lm_inference::{InferenceJob, *};
 
 // This is where you can declare the configuration parameters for
 // your model.
@@ -94,18 +94,26 @@ impl InferenceServer for ParrotServer<InferenceBackend> {
         Ok(None)
     }
 
-    fn run_completion(
-        &mut self,
-        mut messages: Vec<Message>,
-        completion: Completion,
-    ) -> InferenceResult<Stats> {
-        // This is where the inference actually happens.
-        match messages.pop() {
-            Some(msg) => completion.text(msg.content),
-            _ => completion.text("...".to_string()),
-        };
-        let mut stats = Stats::default();
+    fn run_job(&mut self, job: InferenceJob) -> InferenceResult<Stats> {
+        match job.task {
+            InferenceTask::Message(message) => {
+                job.emitter.completed(GeneratedItem::Text(message.content));
+            }
+            InferenceTask::Context(mut messages) => {
+                job.emitter.completed(GeneratedItem::Text(
+                    messages
+                        .pop()
+                        .map(|msg| msg.content)
+                        .unwrap_or_else(|| "...".to_string()),
+                ));
+            }
+            InferenceTask::Prompt(text) => {
+                job.emitter.completed(GeneratedItem::Text(text));
+            }
+        }
+
         // Example of returned statistics about the completion.
+        let mut stats = Stats::default();
         stats
             .entries
             .insert(StatEntry::Named("Everything".to_string(), "42".to_string()));

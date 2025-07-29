@@ -1,7 +1,4 @@
-use burn_lm_inference::{
-    server::{Completion, StdOutCallback},
-    Message, MessageRole,
-};
+use burn_lm_inference::{InferenceJob, InferenceTask, Message, MessageRole, StdOutListener};
 use burn_lm_registry::Registry;
 use clap::CommandFactory as _;
 use rustyline::{history::DefaultHistory, Editor};
@@ -140,9 +137,10 @@ pub(crate) fn handle(
                     content: message,
                     refusal: None,
                 };
-                let (completion, handle) = Completion::start(StdOutCallback::default());
-                let result = plugin.run_completion(vec![formatted_msg], completion);
-                handle.finished();
+                let task = InferenceTask::Message(formatted_msg);
+                let (job, handle) = InferenceJob::create(task, StdOutListener::default());
+                let result = plugin.run_job(job);
+                handle.join();
 
                 match result {
                     Ok(answer) => {

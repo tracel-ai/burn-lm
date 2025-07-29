@@ -1,11 +1,9 @@
 use std::time::Instant;
 
-use burn::{prelude::*, tensor::activation::softmax};
-use burn_lm_inference::server::Completion;
-
-use crate::{tokenizer::Tokenizer, Llama};
-
 use super::{GenerationContext, Sampler, StreamChat};
+use crate::{tokenizer::Tokenizer, Llama};
+use burn::{prelude::*, tensor::activation::softmax};
+use burn_lm_inference::GeneratedItemEmitter;
 
 pub(crate) fn temperature_scaled_softmax<B: Backend>(
     logits: Tensor<B, 2>,
@@ -45,7 +43,7 @@ impl<B: Backend, T: Tokenizer + 'static> Llama<B, T> {
         sample_len: usize,
         temperature: f64,
         sampler: &mut Sampler,
-        completion: Completion,
+        emitter: GeneratedItemEmitter,
     ) -> Result<GenerationOutput, GenerationError> {
         let input_tokens = self.tokenize(prompt);
         let prompt_len = input_tokens.dims()[0];
@@ -54,7 +52,7 @@ impl<B: Backend, T: Tokenizer + 'static> Llama<B, T> {
             prompt_len + sample_len,
             Tensor::from_ints(self.tokenizer.stop_ids().as_slice(), &self.device),
             StreamChat {
-                completion,
+                emitter,
                 tokenizer: self.tokenizer.clone(),
             },
         );
@@ -125,7 +123,7 @@ mod tests {
         module::Reinitializer,
         tensor::{TensorData, Tolerance},
     };
-    use burn_lm_inference::server::StringCallback;
+    use burn_lm_inference::TextGenerationListener;
 
     #[test]
     fn test_temperature_softmax() {
@@ -155,11 +153,11 @@ mod tests {
             .random_float(0, -1.0, 1.0)
             .apply(llama.model);
 
-        let (completion, handle) = Completion::start(StringCallback::default());
+        let (emitter, handle) = GeneratedItemEmitter::init(TextGenerationListener::default());
         llama
-            .generate("This is a test", 64, 0.0, &mut Sampler::Argmax, completion)
+            .generate("This is a test", 64, 0.0, &mut Sampler::Argmax, emitter)
             .unwrap();
-        let result = handle.finished();
+        let result = handle.join();
         let expected = "[187, 114, 51, 146, 146, 250, 112, 224, 192, 99, 132, 0, 0, 180, 192, 99, 19, 114, 19, 174, 0, 180, 192, 131, 132, 19, 99, 114, 131, 132, 249, 146, 82, 28, 226, 226, 148, 84, 19, 192, 83, 99, 19, 249, 19, 251, 222, 19, 192, 180, 192, 180, 192, 0, 180, 192, 146, 20, 0, 180, 192, 180]";
 
         assert_eq!(result, expected);

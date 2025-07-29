@@ -1,11 +1,6 @@
 use std::{cell::RefCell, sync::Arc};
 
-use crate::{
-    errors::InferenceResult,
-    message::Message,
-    server::{Completion, InferenceServer},
-    Stats,
-};
+use crate::{errors::InferenceResult, server::InferenceServer, InferenceJob, Stats};
 
 use super::InferenceChannel;
 
@@ -65,12 +60,8 @@ impl<Server: InferenceServer> InferenceChannel<Server> for SingleThreadedChannel
         self.server.borrow_mut().unload()
     }
 
-    fn run_completion(
-        &self,
-        message: Vec<Message>,
-        completion: Completion,
-    ) -> InferenceResult<Stats> {
-        self.server.borrow_mut().run_completion(message, completion)
+    fn run_job(&self, job: InferenceJob) -> InferenceResult<Stats> {
+        self.server.borrow_mut().run_job(job)
     }
 
     fn clear_state(&self) -> InferenceResult<()> {

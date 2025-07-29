@@ -5,7 +5,7 @@ use std::sync::{
 };
 
 use burn::tensor::{Int, Tensor};
-use burn_lm_inference::{server::Completion, Backend};
+use burn_lm_inference::{Backend, GeneratedItem, GeneratedItemEmitter};
 
 use crate::tokenizer::Tokenizer;
 
@@ -20,7 +20,7 @@ pub struct GenerationContext<B: Backend> {
 }
 
 pub struct StreamChat<T: Tokenizer> {
-    pub(crate) completion: Completion,
+    pub(crate) emitter: GeneratedItemEmitter,
     pub(crate) tokenizer: T,
 }
 
@@ -99,8 +99,8 @@ impl<B: Backend> GenerationContext<B> {
                 }
 
                 if let Some(tokens) = state.stream() {
-                    let string = stream.tokenizer.decode(tokens);
-                    stream.completion.text(string);
+                    let text = stream.tokenizer.decode(tokens);
+                    stream.emitter.completed(GeneratedItem::Text(text));
                 }
 
                 if finished {

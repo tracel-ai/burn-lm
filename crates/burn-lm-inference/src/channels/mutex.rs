@@ -1,7 +1,9 @@
 use std::sync::{Arc, Mutex};
 
 use crate::{
-    completion::Completion, errors::InferenceResult, message::Message, server::InferenceServer,
+    errors::InferenceResult,
+    message::Message,
+    server::{Completion, InferenceServer},
     Stats,
 };
 
@@ -68,9 +70,13 @@ impl<Server: InferenceServer> InferenceChannel<Server> for MutexChannel<Server> 
         server.unload()
     }
 
-    fn run_completion(&self, message: Vec<Message>) -> InferenceResult<Completion> {
+    fn run_completion(
+        &self,
+        message: Vec<Message>,
+        completion: Completion,
+    ) -> InferenceResult<Stats> {
         let mut server = self.server.lock().unwrap();
-        server.run_completion(message)
+        server.run_completion(message, completion)
     }
 
     fn clear_state(&self) -> InferenceResult<()> {

@@ -1,4 +1,7 @@
-use burn_lm_inference::{Message, MessageRole};
+use burn_lm_inference::{
+    server::{Completion, StdOutCallback},
+    Message, MessageRole,
+};
 use burn_lm_registry::Registry;
 use clap::CommandFactory as _;
 use rustyline::{history::DefaultHistory, Editor};
@@ -66,16 +69,12 @@ impl cloop::InputReader for ChatEditor<BurnLMPromptHelper> {
 
 #[derive(Default)]
 struct ChatContext {
-    messages: Vec<Message>,
     stats: bool,
 }
 
 impl ChatContext {
     pub fn new() -> Self {
-        Self {
-            messages: vec![],
-            stats: true,
-        }
+        Self { stats: true }
     }
 }
 
@@ -141,21 +140,14 @@ pub(crate) fn handle(
                     content: message,
                     refusal: None,
                 };
-                ctx.messages.push(formatted_msg);
-                let mut spin_msg =
-                    super::SpinningMessage::new("generating answer...", "generation complete!");
-                let result = plugin.run_completion(ctx.messages.clone());
+                let (completion, handle) = Completion::start(StdOutCallback::default());
+                let result = plugin.run_completion(vec![formatted_msg], completion);
+                handle.finished();
+
                 match result {
                     Ok(answer) => {
-                        let formatted_ans = Message {
-                            role: MessageRole::Assistant,
-                            content: answer.completion.to_owned(),
-                            refusal: None,
-                        };
-                        ctx.messages.push(formatted_ans);
-                        spin_msg.end(true);
-                        let fmt_answer = answer.completion.bright_black().bold();
-                        println!("{fmt_answer}");
+                        println!("");
+
                         if ctx.stats {
                             crate::utils::display_stats(&answer);
                         }
@@ -187,9 +179,6 @@ pub(crate) fn handle(
             MessageCommand::Clear => {
                 match plugin.clear_state() {
                     Ok(_) => {
-                        // Explicitly call Vec::clear() due to yansi::Paint::clear() conflict
-                        // https://github.com/SergioBenitez/yansi/issues/42
-                        Vec::clear(&mut ctx.messages);
                         let msg = "Chat state cleared!".to_string();
                         println!("{}", msg.bright_black().bold());
                     }

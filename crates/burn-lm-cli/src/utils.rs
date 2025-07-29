@@ -1,5 +1,5 @@
 use anyhow::Context;
-use burn_lm_inference::Completion;
+use burn_lm_inference::Stats;
 use which::which;
 use yansi::Paint;
 
@@ -126,8 +126,8 @@ pub(crate) fn run_process(
 }
 
 /// Display stats from a completion
-pub fn display_stats(completion: &Completion) {
-    let stats = completion.stats.display_stats().to_string();
+pub fn display_stats(stats: &Stats) {
+    let stats = stats.display_stats().to_string();
     let fmt_stats = stats.italic();
     println!("{fmt_stats}");
 }

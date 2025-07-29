@@ -9,7 +9,7 @@ use crate::{
     Llama, LlamaConfig, TinyLlamaVersion,
 };
 use burn::prelude::Backend;
-use burn_lm_inference::*;
+use burn_lm_inference::{server::Completion, *};
 
 #[inference_server_config]
 pub struct TinyLlamaServerConfig {
@@ -121,7 +121,11 @@ impl InferenceServer for TinyLlamaServer<InferenceBackend> {
         Ok(None)
     }
 
-    fn run_completion(&mut self, messages: Vec<Message>) -> InferenceResult<Completion> {
+    fn run_completion(
+        &mut self,
+        messages: Vec<Message>,
+        completion: Completion,
+    ) -> InferenceResult<Stats> {
         let load_stats = self.load()?;
         let prompt = self.prompt(messages)?;
         let seed = match self.config.seed {
@@ -142,6 +146,7 @@ impl InferenceServer for TinyLlamaServer<InferenceBackend> {
                     self.config.sample_len,
                     self.config.temperature,
                     &mut sampler,
+                    completion,
                 ) {
                 Ok(result) => result,
                 Err(GenerationError::MaxSequenceLengthExceeded { actual, max }) => {
@@ -150,30 +155,29 @@ impl InferenceServer for TinyLlamaServer<InferenceBackend> {
             },
             _ => return Err(InferenceError::ModelNotLoaded),
         };
-        let mut completion = Completion::new(&generated.text);
+        let mut stats = Stats::default();
         let mut total_duration = generated.time;
-        completion.stats.entries.extend(vec![
+        stats.entries.extend(vec![
             StatEntry::InferenceDuration(generated.time),
             StatEntry::TokensCount(generated.tokens),
             StatEntry::TokensPerSecond(generated.tokens, generated.time),
         ]);
-        if let Some(stats) = load_stats {
-            let model_loading = stats
+        if let Some(load_stats) = load_stats {
+            let model_loading = load_stats
                 .entries
                 .iter()
                 .find(|e| matches!(e, StatEntry::ModelLoadingDuration(_)));
-            if let Some(stat) = model_loading {
-                total_duration += stat
+            if let Some(model_stats) = model_loading {
+                total_duration += model_stats
                     .get_duration()
                     .expect("should be a ModelLoadingDuration stat")
             }
-            completion.stats.entries.extend(stats.entries);
+            stats.entries.extend(load_stats.entries);
         }
-        completion
-            .stats
+        stats
             .entries
             .insert(StatEntry::TotalDuration(total_duration));
-        Ok(completion)
+        Ok(stats)
     }
 
     fn clear_state(&mut self) -> InferenceResult<()> {

@@ -1,10 +1,11 @@
 use std::time::Instant;
 
 use burn::{prelude::*, tensor::activation::softmax};
+use burn_lm_inference::server::Completion;
 
 use crate::{tokenizer::Tokenizer, Llama};
 
-use super::{GenerationContext, Sampler};
+use super::{GenerationContext, Sampler, StreamChat};
 
 pub(crate) fn temperature_scaled_softmax<B: Backend>(
     logits: Tensor<B, 2>,
@@ -15,8 +16,6 @@ pub(crate) fn temperature_scaled_softmax<B: Backend>(
 
 /// Generated text sample output.
 pub struct GenerationOutput {
-    /// The generated text.
-    pub text: String,
     /// The number of generated tokens.
     pub tokens: usize,
     /// The time it took to produce the output tokens (generation + decoding).
@@ -28,7 +27,7 @@ pub enum GenerationError {
     MaxSequenceLengthExceeded { actual: usize, max: usize },
 }
 
-impl<B: Backend, T: Tokenizer> Llama<B, T> {
+impl<B: Backend, T: Tokenizer + 'static> Llama<B, T> {
     /// Generate text sample based on the provided prompt.
     ///
     /// # Arguments
@@ -46,6 +45,7 @@ impl<B: Backend, T: Tokenizer> Llama<B, T> {
         sample_len: usize,
         temperature: f64,
         sampler: &mut Sampler,
+        completion: Completion,
     ) -> Result<GenerationOutput, GenerationError> {
         let input_tokens = self.tokenize(prompt);
         let prompt_len = input_tokens.dims()[0];
@@ -53,6 +53,10 @@ impl<B: Backend, T: Tokenizer> Llama<B, T> {
         let mut state = GenerationContext::new(
             prompt_len + sample_len,
             Tensor::from_ints(self.tokenizer.stop_ids().as_slice(), &self.device),
+            StreamChat {
+                completion,
+                tokenizer: self.tokenizer.clone(),
+            },
         );
         state.append(input_tokens);
 
@@ -97,18 +101,15 @@ impl<B: Backend, T: Tokenizer> Llama<B, T> {
         }
 
         let num_tokens = state.num_tokens_generated();
-        let tokens = state
-            .tokens
-            .slice([prompt_len..prompt_len + num_tokens - 1])
-            .into_data()
-            .iter::<B::IntElem>()
-            .map(|t| t.elem::<u32>())
-            .collect::<Vec<_>>();
-
-        let generated = self.tokenizer.decode(tokens);
+        // let tokens = state
+        //     .tokens
+        //     .slice([prompt_len..prompt_len + num_tokens - 1])
+        //     .into_data()
+        //     .iter::<B::IntElem>()
+        //     .map(|t| t.elem::<u32>())
+        //     .collect::<Vec<_>>();
 
         Ok(GenerationOutput {
-            text: generated,
             tokens: num_tokens,
             time: now.elapsed(),
         })
@@ -124,6 +125,7 @@ mod tests {
         module::Reinitializer,
         tensor::{TensorData, Tolerance},
     };
+    use burn_lm_inference::server::StringCallback;
 
     #[test]
     fn test_temperature_softmax() {
@@ -153,9 +155,13 @@ mod tests {
             .random_float(0, -1.0, 1.0)
             .apply(llama.model);
 
-        let result = llama.generate("This is a test", 64, 0.0, &mut Sampler::Argmax);
+        let (completion, handle) = Completion::start(StringCallback::default());
+        llama
+            .generate("This is a test", 64, 0.0, &mut Sampler::Argmax, completion)
+            .unwrap();
+        let result = handle.finished();
         let expected = "[187, 114, 51, 146, 146, 250, 112, 224, 192, 99, 132, 0, 0, 180, 192, 99, 19, 114, 19, 174, 0, 180, 192, 131, 132, 19, 99, 114, 131, 132, 249, 146, 82, 28, 226, 226, 148, 84, 19, 192, 83, 99, 19, 249, 19, 251, 222, 19, 192, 180, 192, 180, 192, 0, 180, 192, 146, 20, 0, 180, 192, 180]";
 
-        assert_eq!(result.unwrap().text, expected);
+        assert_eq!(result, expected);
     }
 }

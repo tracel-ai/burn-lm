@@ -1,6 +1,6 @@
 use std::fmt::Debug;
 
-use crate::{completion::Completion, InferenceResult, Message, Stats};
+use crate::{server::Completion, InferenceResult, Message, Stats};
 
 pub type CreateCliFlagsFn = fn() -> clap::Command;
 
@@ -19,7 +19,11 @@ pub trait InferencePlugin: Send + Sync + Debug {
     fn load(&self) -> InferenceResult<Option<Stats>>;
     fn is_loaded(&self) -> bool;
     fn unload(&self) -> InferenceResult<Option<Stats>>;
-    fn run_completion(&self, messages: Vec<Message>) -> InferenceResult<Completion>;
+    fn run_completion(
+        &self,
+        messages: Vec<Message>,
+        completion: Completion,
+    ) -> InferenceResult<Stats>;
     fn clear_state(&self) -> InferenceResult<()>;
 }
 

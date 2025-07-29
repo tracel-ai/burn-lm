@@ -5,7 +5,7 @@ use super::Tokenizer;
 const BOS_TOKEN_ID: u32 = 1;
 const EOS_TOKEN_ID: u32 = 2;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SentiencePieceTokenizer {
     bpe: BaseTokenizer,
     bos_token_id: u32,

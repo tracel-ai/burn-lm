@@ -1,5 +1,15 @@
-use crate::{completion::Completion, errors::InferenceResult, message::Message, Stats};
-use std::fmt::Debug;
+use crate::{errors::InferenceResult, message::Message, Stats};
+use std::{
+    any::Any,
+    fmt::Debug,
+    io::Write,
+    marker::PhantomData,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        mpsc::SyncSender,
+        Arc,
+    },
+};
 
 /// Marker trait for server configurations.
 pub trait InferenceServerConfig:
@@ -14,6 +24,118 @@ pub trait ServerConfigParsing {
 
     fn parse_cli_config(&mut self, args: &clap::ArgMatches);
     fn parse_json_config(&mut self, json: &str);
+}
+
+enum CompletionMessage {
+    Text(String),
+    Finished(SyncSender<Box<dyn Any + Send>>),
+}
+
+#[derive(Clone)]
+pub struct Completion {
+    sender: SyncSender<CompletionMessage>,
+    done: Arc<AtomicBool>,
+}
+
+pub trait CompletionCallback: Send + 'static {
+    type Result: Send;
+
+    fn on_text(&mut self, text: String);
+    fn on_finished(self) -> Self::Result;
+}
+
+#[derive(Default)]
+pub struct StringCallback {
+    pub value: String,
+}
+
+#[derive(Default)]
+pub struct StdOutCallback {}
+
+impl CompletionCallback for StdOutCallback {
+    type Result = ();
+
+    fn on_text(&mut self, text: String) {
+        let mut io = std::io::stdout();
+
+        write!(io, "{text}").unwrap();
+        io.flush().unwrap();
+    }
+
+    fn on_finished(self) -> Self::Result {
+        ()
+    }
+}
+
+impl CompletionCallback for StringCallback {
+    type Result = String;
+
+    fn on_text(&mut self, text: String) {
+        self.value += &text;
+    }
+
+    fn on_finished(self) -> Self::Result {
+        self.value
+    }
+}
+
+pub struct CompletionHandle<C: CompletionCallback> {
+    sender: SyncSender<CompletionMessage>,
+    _c: PhantomData<C>,
+}
+
+impl<C: CompletionCallback> CompletionHandle<C> {
+    pub fn finished(&self) -> C::Result {
+        let (sender, rec) = std::sync::mpsc::sync_channel(1);
+        self.sender
+            .send(CompletionMessage::Finished(sender))
+            .unwrap();
+
+        if let Ok(any) = rec.recv() {
+            return *any.downcast().unwrap();
+        } else {
+            panic!()
+        }
+    }
+}
+
+impl Completion {
+    /// Creates a new completion and process it on another thread.
+    pub fn start<C: CompletionCallback>(mut callback: C) -> (Self, CompletionHandle<C>) {
+        let (sender, receiver) = std::sync::mpsc::sync_channel::<CompletionMessage>(1);
+
+        let handle = CompletionHandle {
+            sender: sender.clone(),
+            _c: PhantomData,
+        };
+        let done = Arc::new(AtomicBool::new(false));
+        let this = Self {
+            sender,
+            done: done.clone(),
+        };
+
+        std::thread::spawn(move || {
+            for msg in receiver {
+                match msg {
+                    CompletionMessage::Text(text) => callback.on_text(text),
+                    CompletionMessage::Finished(c) => {
+                        let result = callback.on_finished();
+                        let result: Box<dyn Any + Send> = Box::new(result);
+                        c.send(result).unwrap();
+                        done.store(true, Ordering::Relaxed);
+                        return;
+                    }
+                }
+            }
+        });
+
+        (this, handle)
+    }
+    pub fn text(&self, text: String) {
+        if !self.done.load(Ordering::Relaxed) {
+            self.sender.send(CompletionMessage::Text(text)).unwrap();
+        }
+    }
 }
 
 /// Inference server interface aimed to be implemented to be able to register a
@@ -45,7 +167,11 @@ pub trait InferenceServer: ServerConfigParsing + Clone + Default + Send + Sync +
     fn unload(&mut self) -> InferenceResult<Option<Stats>>;
 
     /// Run inference to complete messages
-    fn run_completion(&mut self, messages: Vec<Message>) -> InferenceResult<Completion>;
+    fn run_completion(
+        &mut self,
+        messages: Vec<Message>,
+        completion: Completion,
+    ) -> InferenceResult<Stats>;
 
     /// Clear the model state
     fn clear_state(&mut self) -> InferenceResult<()>;

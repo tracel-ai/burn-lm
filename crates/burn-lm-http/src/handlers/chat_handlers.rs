@@ -4,7 +4,10 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
-use burn_lm_inference::StatEntry;
+use burn_lm_inference::{
+    server::{Completion, StringCallback},
+    StatEntry,
+};
 use tokio::sync::mpsc;
 use tokio_stream::{wrappers::ReceiverStream, StreamExt};
 
@@ -50,8 +53,10 @@ async fn handle_non_streaming_response(
         .expect("ChatCompletionParams should serialize to a JSON string");
     tracing::debug!("Json params from payload: {}", json_params);
     plugin.parse_json_config(&json_params);
-    let answer = plugin.run_completion(messages).unwrap();
-    let content = answer.completion;
+    let (completion, handle) = Completion::start(StringCallback::default());
+    let _answer = plugin.run_completion(messages, completion).unwrap();
+    let content = handle.finished();
+
     tracing::debug!("Answer: {}", content);
     let response = ChatCompletionSchema {
         id: ChatCompletionId::new().to_string(),
@@ -172,18 +177,21 @@ async fn handle_streaming_response(
                 .iter_mut()
                 .for_each(|m| m.cleanup(REPLY_MARKER, burn_lm_inference::STATS_MARKER));
             tracing::debug!("Cleaned up messages: {:?}", messages);
-            let answer = tokio::task::spawn_blocking({
+            let (completion, handle) = Completion::start(StringCallback::default());
+            let stats = tokio::task::spawn_blocking({
                 let plugin = plugin.clone();
                 move || {
                     plugin
-                        .run_completion(messages)
+                        .run_completion(messages, completion)
                         .expect("should generate answer")
                 }
             })
             .await
             .expect("should complete answer generation");
-            let content = format!("{}\n\n{}", answer.completion, answer.stats.display_stats());
-            tracing::debug!("Answer: {}", answer.completion);
+
+            let content = handle.finished();
+            let content = format!("{}\n\n{}", content, stats.display_stats());
+            tracing::debug!("Answer: {}", content);
             let chunk =
                 StreamingChunk::Data(ChatCompletionChunkSchema::new(&id, model, now, &content));
             tx.send(chunk.to_event_stream())

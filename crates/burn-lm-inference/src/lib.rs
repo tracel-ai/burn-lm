@@ -1,7 +1,6 @@
 pub mod backends;
 pub mod channels;
 pub mod client;
-pub mod completion;
 pub mod errors;
 pub mod message;
 pub mod plugin;
@@ -14,7 +13,6 @@ pub mod utils;
 pub use crate::channels::mutex::MutexChannel;
 pub use crate::channels::passthrough::SingleThreadedChannel;
 pub use crate::client::InferenceClient;
-pub use crate::completion::Completion;
 pub use crate::errors::*;
 pub use crate::message::{Message, MessageRole};
 pub use crate::plugin::InferencePlugin;

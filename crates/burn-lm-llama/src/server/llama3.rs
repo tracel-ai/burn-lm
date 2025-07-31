@@ -387,7 +387,6 @@ impl Llama3BaseServer<InferenceBackend> {
         emitter: GeneratedItemEmitter,
     ) -> InferenceResult<Stats> {
         let load_stats = self.load(config)?;
-        // let prompt = self.prompt(messages)?;
         let seed = match config.seed {
             0 => rand::rng().random::<u64>(),
             s => s,

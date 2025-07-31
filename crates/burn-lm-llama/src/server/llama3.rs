@@ -377,7 +377,7 @@ impl Llama3BaseServer<InferenceBackend> {
             InferenceTask::Context(messages) => self.prompt(messages)?,
             InferenceTask::Prompt(prompt) => prompt,
         };
-        self.complete(prompt, &config, job.emitter)
+        self.complete(prompt, config, job.emitter)
     }
 
     fn complete(

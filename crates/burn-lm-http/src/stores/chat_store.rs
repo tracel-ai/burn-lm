@@ -63,9 +63,9 @@ impl ChatController for ChatStore {
 
         // unload plugin if we request a different plugin than the current one
         let mut old_model_name = None;
+
         if self.current_plugin_name.is_some()
-            && *self.current_plugin_name.as_ref().unwrap()
-                != requested_plugin.model_name().to_string()
+            && self.current_plugin_name.as_ref().unwrap() != requested_plugin.model_name()
         {
             let current_plugin_name = self.current_plugin_name.as_ref().unwrap();
             let current_plugin = self

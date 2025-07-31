@@ -5,6 +5,7 @@ use rand::{
     SeedableRng,
 };
 
+#[allow(clippy::large_enum_variant)]
 pub enum Sampler {
     TopP(TopP),
     Argmax,

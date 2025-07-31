@@ -20,7 +20,7 @@ pub struct GenerationContext<B: Backend> {
 }
 
 impl<B: Backend> GenerationContext<B> {
-    /// Create a new instance.
+    /// Create a new generation context.
     pub fn new<T: Tokenizer + 'static>(
         max_sample_len: usize,
         emitter: GeneratedItemEmitter,
@@ -60,7 +60,7 @@ impl<B: Backend> GenerationContext<B> {
         let num_tokens_prev = self.num_tokens;
         self.num_tokens += tokens.shape().num_elements();
         self.tokens
-            .inplace(|toks| toks.slice_assign([num_tokens_prev..self.num_tokens], tokens));
+            .inplace(|toks| toks.slice_assign(num_tokens_prev..self.num_tokens, tokens));
     }
 
     /// Update the state with newly generated tokens.

@@ -40,12 +40,8 @@ async fn handle_non_streaming_response(
 ) -> ServerResult<Response> {
     let mut store = state.lock().await;
     let (plugin, _) = store.get_plugin(&payload.model).await?;
-    let messages: Vec<burn_lm_inference::Message> = payload
-        .messages
-        .to_owned()
-        .into_iter()
-        .map(Into::into)
-        .collect();
+    let messages: Vec<burn_lm_inference::Message> =
+        payload.messages.into_iter().map(Into::into).collect();
     let json_params = serde_json::to_string(&payload.params)
         .expect("ChatCompletionParams should serialize to a JSON string");
     tracing::debug!("Json params from payload: {}", json_params);

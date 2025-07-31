@@ -144,7 +144,7 @@ pub(crate) fn handle(
 
                 match result {
                     Ok(answer) => {
-                        println!("");
+                        println!();
 
                         if ctx.stats {
                             crate::utils::display_stats(&answer);

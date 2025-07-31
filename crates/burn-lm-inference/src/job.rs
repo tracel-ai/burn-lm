@@ -157,9 +157,7 @@ impl InferenceJobListener for StdOutListener {
         io.flush().unwrap();
     }
 
-    fn on_finished(self) -> Self::CompletedItem {
-        ()
-    }
+    fn on_finished(self) -> Self::CompletedItem {}
 }
 
 /// The handle returned by [InferenceJob::start].
@@ -184,7 +182,7 @@ impl<C: InferenceJobListener> JobHandle<C> {
         self.sender.send(Msg::Finished(sender)).unwrap();
 
         if let Ok(any) = rec.recv() {
-            return *any.downcast().unwrap();
+            *any.downcast().unwrap()
         } else {
             panic!()
         }

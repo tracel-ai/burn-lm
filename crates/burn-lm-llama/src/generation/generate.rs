@@ -32,7 +32,7 @@ impl<B: Backend, T: Tokenizer + 'static> Llama<B, T> {
     /// - `prompt`: The prompt string to use for generating the samples.
     /// - `sample_len`: The number of new tokens to generate (i.e., the number of generation steps to take).
     /// - `temperature`: Temperature value for controlling randomness in sampling (scales logits by `1 / temperature`).
-    ///                  High values result in more random sampling.
+    ///   High values result in more random sampling.
     /// - `sampler`: The sampling strategy to use when selecting the next token based on the predicted probabilities.
     ///
     /// # Returns
@@ -95,7 +95,7 @@ impl<B: Backend, T: Tokenizer + 'static> Llama<B, T> {
 
             // Advance
             let t = input_pos.dims()[0];
-            input_pos = input_pos.slice([t - 1..t]) + 1;
+            input_pos = input_pos.slice(t - 1..t) + 1;
         }
 
         let num_tokens = state.num_tokens_generated();

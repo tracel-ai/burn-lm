@@ -142,6 +142,7 @@ impl<B: Backend> MultiHeadAttention<B> {
         (q, k, v)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn forward_attention(
         &self,
         q: Tensor<B, 4>,

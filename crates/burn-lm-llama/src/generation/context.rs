@@ -47,7 +47,7 @@ impl<B: Backend> GenerationContext<B> {
         });
 
         Self {
-            tokens: Tensor::<B, 1, Int>::empty([max_sample_len], device),
+            tokens: Tensor::empty([max_sample_len], device),
             num_tokens: 0,
             stop,
             num_generated,

@@ -1,6 +1,6 @@
 use std::time::Instant;
 
-use super::{GenerationContext, Sampler, StreamChat};
+use super::{GenerationContext, Sampler};
 use crate::{tokenizer::Tokenizer, Llama};
 use burn::{prelude::*, tensor::activation::softmax};
 use burn_lm_inference::GeneratedItemEmitter;
@@ -50,20 +50,20 @@ impl<B: Backend, T: Tokenizer + 'static> Llama<B, T> {
 
         let mut state = GenerationContext::new(
             prompt_len + sample_len,
-            Tensor::from_ints(self.tokenizer.stop_ids().as_slice(), &self.device),
-            StreamChat {
-                emitter,
-                tokenizer: self.tokenizer.clone(),
-            },
+            emitter,
+            self.tokenizer.clone(),
+            &self.device,
         );
         state.append(input_tokens);
 
         let mut input_pos = Tensor::<B, 1, Int>::arange(0..prompt_len as i64, &self.device);
         let now = Instant::now();
+
         for _ in 0..sample_len {
             if state.should_stop() {
                 break;
             }
+
             let x = state
                 .tokens
                 .clone()
@@ -99,13 +99,6 @@ impl<B: Backend, T: Tokenizer + 'static> Llama<B, T> {
         }
 
         let num_tokens = state.num_tokens_generated();
-        // let tokens = state
-        //     .tokens
-        //     .slice([prompt_len..prompt_len + num_tokens - 1])
-        //     .into_data()
-        //     .iter::<B::IntElem>()
-        //     .map(|t| t.elem::<u32>())
-        //     .collect::<Vec<_>>();
 
         Ok(GenerationOutput {
             tokens: num_tokens,

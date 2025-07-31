@@ -181,10 +181,9 @@ impl<C: InferenceJobListener> JobHandle<C> {
         let (sender, rec) = std::sync::mpsc::sync_channel(1);
         self.sender.send(Msg::Finished(sender)).unwrap();
 
-        if let Ok(any) = rec.recv() {
-            *any.downcast().unwrap()
-        } else {
-            panic!()
+        match rec.recv() {
+            Ok(any) => *any.downcast().unwrap(),
+            Err(err) => panic!("{err}"),
         }
     }
 }

@@ -48,7 +48,7 @@ async fn handle_non_streaming_response(
     plugin.parse_json_config(&json_params);
     let task = InferenceTask::Context(messages);
     let (job, handle) = InferenceJob::create(task, TextGenerationListener::default());
-    let _answer = plugin.run_job(job).unwrap();
+    let _stats = plugin.run_job(job).unwrap();
     let content = handle.join();
 
     tracing::debug!("Answer: {}", content);

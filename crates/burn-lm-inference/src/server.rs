@@ -1,4 +1,4 @@
-use crate::{completion::Completion, errors::InferenceResult, message::Message, Stats};
+use crate::{errors::InferenceResult, InferenceJob, Stats};
 use std::fmt::Debug;
 
 /// Marker trait for server configurations.
@@ -44,8 +44,8 @@ pub trait InferenceServer: ServerConfigParsing + Clone + Default + Send + Sync +
     /// Unload the model.
     fn unload(&mut self) -> InferenceResult<Option<Stats>>;
 
-    /// Run inference to complete messages
-    fn run_completion(&mut self, messages: Vec<Message>) -> InferenceResult<Completion>;
+    /// Run an [inference job](InferenceJob).
+    fn run_job(&mut self, job: InferenceJob) -> InferenceResult<Stats>;
 
     /// Clear the model state
     fn clear_state(&mut self) -> InferenceResult<()>;

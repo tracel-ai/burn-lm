@@ -30,6 +30,7 @@ pub(crate) fn handle(args: &clap::ArgMatches) -> super::HandleCommandResult {
     let registry = Registry::new();
     let downloaders = match args.subcommand_name() {
         Some("all") => {
+            #[allow(clippy::type_complexity)]
             let mut candidates: Vec<(String, fn() -> InferenceResult<Option<Stats>>)> = registry
                 .get()
                 .iter()

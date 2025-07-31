@@ -11,7 +11,7 @@ pub(crate) fn create() -> clap::Command {
     let mut reg_entries: Vec<_> = registry
         .get()
         .iter()
-        .filter(|(_, p)| deletable(p))
+        .filter(|(_, p)| deletable(p.as_ref()))
         .collect();
     reg_entries.sort_by_key(|(key, ..)| *key);
     for (_name, plugin) in reg_entries {
@@ -27,10 +27,11 @@ pub(crate) fn handle(args: &clap::ArgMatches) -> super::HandleCommandResult {
     let registry = Registry::new();
     let deleters = match args.subcommand_name() {
         Some("all") => {
+            #[allow(clippy::type_complexity)]
             let mut candidates: Vec<(String, fn() -> InferenceResult<Option<Stats>>)> = registry
                 .get()
                 .iter()
-                .filter(|(_, p)| deletable(p))
+                .filter(|(_, p)| deletable(p.as_ref()))
                 .map(|(n, p)| (n.to_string(), p.deleter().unwrap()))
                 .collect();
             candidates.sort_by(|(n1, ..), (n2, ..)| n1.cmp(n2));
@@ -71,6 +72,6 @@ pub(crate) fn handle(args: &clap::ArgMatches) -> super::HandleCommandResult {
     Ok(Some(super::ShellMetaAction::RefreshParser))
 }
 
-fn deletable(plugin: &Box<dyn InferencePlugin>) -> bool {
+fn deletable(plugin: &dyn InferencePlugin) -> bool {
     plugin.downloader().is_some() && plugin.is_downloaded() && plugin.deleter().is_some()
 }

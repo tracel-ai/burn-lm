@@ -1,9 +1,6 @@
 use std::fmt::Debug;
 
-use crate::{
-    completion::Completion, errors::InferenceResult, message::Message, server::InferenceServer,
-    Stats,
-};
+use crate::{errors::InferenceResult, server::InferenceServer, InferenceJob, Stats};
 
 pub trait InferenceChannel<Server: InferenceServer>: Clone + Send + Sync + Debug {
     fn downloader(&self) -> Option<fn() -> InferenceResult<Option<Stats>>>;
@@ -14,6 +11,6 @@ pub trait InferenceChannel<Server: InferenceServer>: Clone + Send + Sync + Debug
     fn load(&self) -> InferenceResult<Option<Stats>>;
     fn is_loaded(&self) -> bool;
     fn unload(&self) -> InferenceResult<Option<Stats>>;
-    fn run_completion(&self, message: Vec<Message>) -> InferenceResult<Completion>;
+    fn run_job(&self, job: InferenceJob) -> InferenceResult<Stats>;
     fn clear_state(&self) -> InferenceResult<()>;
 }

@@ -4,7 +4,7 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
-use burn_lm_inference::StatEntry;
+use burn_lm_inference::{InferenceJob, InferenceTask, StatEntry, TextGenerationListener};
 use tokio::sync::mpsc;
 use tokio_stream::{wrappers::ReceiverStream, StreamExt};
 
@@ -40,18 +40,17 @@ async fn handle_non_streaming_response(
 ) -> ServerResult<Response> {
     let mut store = state.lock().await;
     let (plugin, _) = store.get_plugin(&payload.model).await?;
-    let messages: Vec<burn_lm_inference::Message> = payload
-        .messages
-        .to_owned()
-        .into_iter()
-        .map(Into::into)
-        .collect();
+    let messages: Vec<burn_lm_inference::Message> =
+        payload.messages.into_iter().map(Into::into).collect();
     let json_params = serde_json::to_string(&payload.params)
         .expect("ChatCompletionParams should serialize to a JSON string");
     tracing::debug!("Json params from payload: {}", json_params);
     plugin.parse_json_config(&json_params);
-    let answer = plugin.run_completion(messages).unwrap();
-    let content = answer.completion;
+    let task = InferenceTask::Context(messages);
+    let (job, handle) = InferenceJob::create(task, TextGenerationListener::default());
+    let _stats = plugin.run_job(job).unwrap();
+    let content = handle.join();
+
     tracing::debug!("Answer: {}", content);
     let response = ChatCompletionSchema {
         id: ChatCompletionId::new().to_string(),
@@ -172,18 +171,18 @@ async fn handle_streaming_response(
                 .iter_mut()
                 .for_each(|m| m.cleanup(REPLY_MARKER, burn_lm_inference::STATS_MARKER));
             tracing::debug!("Cleaned up messages: {:?}", messages);
-            let answer = tokio::task::spawn_blocking({
+            let task = InferenceTask::Context(messages);
+            let (job, handle) = InferenceJob::create(task, TextGenerationListener::default());
+            let stats = tokio::task::spawn_blocking({
                 let plugin = plugin.clone();
-                move || {
-                    plugin
-                        .run_completion(messages)
-                        .expect("should generate answer")
-                }
+                move || plugin.run_job(job).expect("should generate answer")
             })
             .await
             .expect("should complete answer generation");
-            let content = format!("{}\n\n{}", answer.completion, answer.stats.display_stats());
-            tracing::debug!("Answer: {}", answer.completion);
+
+            let content = handle.join();
+            let content = format!("{}\n\n{}", content, stats.display_stats());
+            tracing::debug!("Answer: {}", content);
             let chunk =
                 StreamingChunk::Data(ChatCompletionChunkSchema::new(&id, model, now, &content));
             tx.send(chunk.to_event_stream())

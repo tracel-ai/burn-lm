@@ -45,6 +45,7 @@ impl<B: Backend> KeyValueCache<B> {
     }
 
     /// Returns the cached sequence length.
+    #[allow(clippy::len_without_is_empty)]
     pub fn len(&self) -> usize {
         // We can assume key and value have the same length
         self.key.len()

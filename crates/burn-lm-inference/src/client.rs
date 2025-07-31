@@ -4,12 +4,10 @@ use burn::prelude::Backend;
 
 use crate::{
     channels::InferenceChannel,
-    completion::Completion,
     errors::InferenceResult,
-    message::Message,
     plugin::{CreateCliFlagsFn, InferencePlugin},
     server::InferenceServer,
-    InferenceBackend, Stats, INFERENCE_DEVICE,
+    InferenceBackend, InferenceJob, Stats, INFERENCE_DEVICE,
 };
 
 #[derive(Debug, Clone)]
@@ -106,8 +104,8 @@ where
         result
     }
 
-    fn run_completion(&self, messages: Vec<Message>) -> InferenceResult<Completion> {
-        self.channel.run_completion(messages)
+    fn run_job(&self, job: InferenceJob) -> InferenceResult<Stats> {
+        self.channel.run_job(job)
     }
 
     fn model_name(&self) -> &'static str {

@@ -1,5 +1,6 @@
 use super::Tokenizer;
 
+#[derive(Clone)]
 pub struct ByteTokenizer;
 
 impl Tokenizer for ByteTokenizer {

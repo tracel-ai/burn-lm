@@ -1,10 +1,9 @@
 use std::time::Instant;
 
-use burn::{prelude::*, tensor::activation::softmax};
-
-use crate::{tokenizer::Tokenizer, Llama};
-
 use super::{GenerationContext, Sampler};
+use crate::{tokenizer::Tokenizer, Llama};
+use burn::{prelude::*, tensor::activation::softmax};
+use burn_lm_inference::GeneratedItemEmitter;
 
 pub(crate) fn temperature_scaled_softmax<B: Backend>(
     logits: Tensor<B, 2>,
@@ -15,8 +14,6 @@ pub(crate) fn temperature_scaled_softmax<B: Backend>(
 
 /// Generated text sample output.
 pub struct GenerationOutput {
-    /// The generated text.
-    pub text: String,
     /// The number of generated tokens.
     pub tokens: usize,
     /// The time it took to produce the output tokens (generation + decoding).
@@ -28,14 +25,14 @@ pub enum GenerationError {
     MaxSequenceLengthExceeded { actual: usize, max: usize },
 }
 
-impl<B: Backend, T: Tokenizer> Llama<B, T> {
+impl<B: Backend, T: Tokenizer + 'static> Llama<B, T> {
     /// Generate text sample based on the provided prompt.
     ///
     /// # Arguments
     /// - `prompt`: The prompt string to use for generating the samples.
     /// - `sample_len`: The number of new tokens to generate (i.e., the number of generation steps to take).
     /// - `temperature`: Temperature value for controlling randomness in sampling (scales logits by `1 / temperature`).
-    ///                  High values result in more random sampling.
+    ///   High values result in more random sampling.
     /// - `sampler`: The sampling strategy to use when selecting the next token based on the predicted probabilities.
     ///
     /// # Returns
@@ -46,22 +43,27 @@ impl<B: Backend, T: Tokenizer> Llama<B, T> {
         sample_len: usize,
         temperature: f64,
         sampler: &mut Sampler,
+        emitter: GeneratedItemEmitter,
     ) -> Result<GenerationOutput, GenerationError> {
         let input_tokens = self.tokenize(prompt);
         let prompt_len = input_tokens.dims()[0];
 
         let mut state = GenerationContext::new(
             prompt_len + sample_len,
-            Tensor::from_ints(self.tokenizer.stop_ids().as_slice(), &self.device),
+            emitter,
+            self.tokenizer.clone(),
+            &self.device,
         );
         state.append(input_tokens);
 
         let mut input_pos = Tensor::<B, 1, Int>::arange(0..prompt_len as i64, &self.device);
         let now = Instant::now();
+
         for _ in 0..sample_len {
             if state.should_stop() {
                 break;
             }
+
             let x = state
                 .tokens
                 .clone()
@@ -93,22 +95,12 @@ impl<B: Backend, T: Tokenizer> Llama<B, T> {
 
             // Advance
             let t = input_pos.dims()[0];
-            input_pos = input_pos.slice([t - 1..t]) + 1;
+            input_pos = input_pos.slice(t - 1..t) + 1;
         }
 
         let num_tokens = state.num_tokens_generated();
-        let tokens = state
-            .tokens
-            .slice([prompt_len..prompt_len + num_tokens - 1])
-            .into_data()
-            .iter::<B::IntElem>()
-            .map(|t| t.elem::<u32>())
-            .collect::<Vec<_>>();
-
-        let generated = self.tokenizer.decode(tokens);
 
         Ok(GenerationOutput {
-            text: generated,
             tokens: num_tokens,
             time: now.elapsed(),
         })
@@ -124,6 +116,7 @@ mod tests {
         module::Reinitializer,
         tensor::{TensorData, Tolerance},
     };
+    use burn_lm_inference::TextGenerationListener;
 
     #[test]
     fn test_temperature_softmax() {
@@ -153,9 +146,14 @@ mod tests {
             .random_float(0, -1.0, 1.0)
             .apply(llama.model);
 
-        let result = llama.generate("This is a test", 64, 0.0, &mut Sampler::Argmax);
-        let expected = "[187, 114, 51, 146, 146, 250, 112, 224, 192, 99, 132, 0, 0, 180, 192, 99, 19, 114, 19, 174, 0, 180, 192, 131, 132, 19, 99, 114, 131, 132, 249, 146, 82, 28, 226, 226, 148, 84, 19, 192, 83, 99, 19, 249, 19, 251, 222, 19, 192, 180, 192, 180, 192, 0, 180, 192, 146, 20, 0, 180, 192, 180]";
+        let (emitter, handle) = GeneratedItemEmitter::init(TextGenerationListener::default());
+        llama
+            .generate("This is a test", 64, 0.0, &mut Sampler::Argmax, emitter)
+            .unwrap();
 
-        assert_eq!(result.unwrap().text, expected);
+        let result = handle.join();
+        let expected = "[187][114][51][146][146][250][112][224][192][99][132][0][0][180][192][99][19][114][19][174][0][180][192][131][132][19][99][114][131][132][249][146][82][28][226][226][148][84][19][192][83][99][19][249][19][251][222][19][192][180][192][180][192][0][180][192][146][20][0][180][192][180][20]";
+
+        assert_eq!(result, expected);
     }
 }

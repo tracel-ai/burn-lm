@@ -26,6 +26,7 @@ impl Message {
         if start.is_empty() || end.is_empty() {
             return;
         }
+
         if let Some(start_index) = self.content.find(start) {
             let content_start = start_index + start.len();
             if let Some(last_end_index) = self.content.rfind(end) {

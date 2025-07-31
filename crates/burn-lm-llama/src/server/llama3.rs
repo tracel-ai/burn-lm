@@ -9,7 +9,7 @@ use crate::{
     Llama, LlamaConfig, LlamaVersion,
 };
 use burn::prelude::Backend;
-use burn_lm_inference::*;
+use burn_lm_inference::{InferenceJob, *};
 
 #[inference_server_config]
 pub struct Llama3ServerConfig {
@@ -20,10 +20,10 @@ pub struct Llama3ServerConfig {
     #[config(default = 0.0)]
     pub temperature: f64,
     /// Maximum sequence length for input text.
-    #[config(default = 4096)]
+    #[config(default = 8192)]
     pub max_seq_len: usize,
     /// The number of new tokens to generate (i.e., the number of generation steps to take).
-    #[config(default = 512, openwebui_param = "max_tokens")]
+    #[config(default = 4096, openwebui_param = "max_tokens")]
     pub sample_len: usize,
     /// The seed to use when generating random samples. If it is 0 then a random seed is used for each inference.
     #[config(default = 0)]
@@ -116,8 +116,8 @@ impl InferenceServer for Llama3InstructServer<InferenceBackend> {
         self.server.unload(Self::model_name())
     }
 
-    fn run_completion(&mut self, messages: Vec<Message>) -> InferenceResult<Completion> {
-        self.server.complete(messages, &self.config)
+    fn run_job(&mut self, job: InferenceJob) -> InferenceResult<Stats> {
+        self.server.run_job(job, &self.config)
     }
 
     fn clear_state(&mut self) -> InferenceResult<()> {
@@ -184,8 +184,8 @@ impl InferenceServer for Llama31InstructServer<InferenceBackend> {
         self.server.unload(Self::model_name())
     }
 
-    fn run_completion(&mut self, messages: Vec<Message>) -> InferenceResult<Completion> {
-        self.server.complete(messages, &self.config)
+    fn run_job(&mut self, job: InferenceJob) -> InferenceResult<Stats> {
+        self.server.run_job(job, &self.config)
     }
 
     fn clear_state(&mut self) -> InferenceResult<()> {
@@ -252,8 +252,8 @@ impl InferenceServer for Llama321bInstructServer<InferenceBackend> {
         self.server.unload(Self::model_name())
     }
 
-    fn run_completion(&mut self, messages: Vec<Message>) -> InferenceResult<Completion> {
-        self.server.complete(messages, &self.config)
+    fn run_job(&mut self, job: InferenceJob) -> InferenceResult<Stats> {
+        self.server.run_job(job, &self.config)
     }
 
     fn clear_state(&mut self) -> InferenceResult<()> {
@@ -320,8 +320,8 @@ impl InferenceServer for Llama323bInstructServer<InferenceBackend> {
         self.server.unload(Self::model_name())
     }
 
-    fn run_completion(&mut self, messages: Vec<Message>) -> InferenceResult<Completion> {
-        self.server.complete(messages, &self.config)
+    fn run_job(&mut self, job: InferenceJob) -> InferenceResult<Stats> {
+        self.server.run_job(job, &self.config)
     }
 
     fn clear_state(&mut self) -> InferenceResult<()> {
@@ -367,13 +367,26 @@ impl Llama3BaseServer<InferenceBackend> {
         Ok(None)
     }
 
+    fn run_job(
+        &mut self,
+        job: InferenceJob,
+        config: &Llama3ServerConfig,
+    ) -> InferenceResult<Stats> {
+        let prompt = match job.task {
+            InferenceTask::Message(message) => self.prompt(vec![message])?,
+            InferenceTask::Context(messages) => self.prompt(messages)?,
+            InferenceTask::Prompt(prompt) => prompt,
+        };
+        self.complete(prompt, config, job.emitter)
+    }
+
     fn complete(
         &mut self,
-        messages: Vec<Message>,
+        prompt: Prompt,
         config: &Llama3ServerConfig,
-    ) -> InferenceResult<Completion> {
+        emitter: GeneratedItemEmitter,
+    ) -> InferenceResult<Stats> {
         let load_stats = self.load(config)?;
-        let prompt = self.prompt(messages)?;
         let seed = match config.seed {
             0 => rand::rng().random::<u64>(),
             s => s,
@@ -388,7 +401,13 @@ impl Llama3BaseServer<InferenceBackend> {
                 let mut model = arc_model
                     .lock()
                     .expect("should lock the model for inference");
-                match model.generate(&prompt, config.sample_len, config.temperature, &mut sampler) {
+                match model.generate(
+                    &prompt,
+                    config.sample_len,
+                    config.temperature,
+                    &mut sampler,
+                    emitter,
+                ) {
                     Ok(result) => result,
                     Err(GenerationError::MaxSequenceLengthExceeded { actual, max }) => {
                         return Err(InferenceError::ContextLengthExceeded(actual, max));
@@ -397,30 +416,29 @@ impl Llama3BaseServer<InferenceBackend> {
             }
             None => return Err(InferenceError::ModelNotLoaded),
         };
-        let mut completion = Completion::new(&generated.text);
+        let mut stats = Stats::default();
         let mut total_duration = generated.time;
-        completion.stats.entries.extend(vec![
+        stats.entries.extend(vec![
             StatEntry::InferenceDuration(generated.time),
             StatEntry::TokensCount(generated.tokens),
             StatEntry::TokensPerSecond(generated.tokens, generated.time),
         ]);
-        if let Some(stats) = load_stats {
-            let model_loading = stats
+        if let Some(load_stats) = load_stats {
+            let model_loading = load_stats
                 .entries
                 .iter()
                 .find(|e| matches!(e, StatEntry::ModelLoadingDuration(_)));
-            if let Some(stat) = model_loading {
-                total_duration += stat
+            if let Some(model_stats) = model_loading {
+                total_duration += model_stats
                     .get_duration()
                     .expect("should be a ModelLoadingDuration stat")
             }
-            completion.stats.entries.extend(stats.entries);
+            stats.entries.extend(load_stats.entries);
         }
-        completion
-            .stats
+        stats
             .entries
             .insert(StatEntry::TotalDuration(total_duration));
-        Ok(completion)
+        Ok(stats)
     }
 
     fn clear_state(&mut self) -> InferenceResult<()> {

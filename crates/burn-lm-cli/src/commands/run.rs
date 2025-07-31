@@ -1,4 +1,6 @@
-use burn_lm_inference::{message::MessageRole, Message};
+use burn_lm_inference::{
+    message::MessageRole, InferenceJob, InferenceTask, Message, TextGenerationListener,
+};
 use burn_lm_registry::Registry;
 use yansi::Paint;
 
@@ -74,11 +76,15 @@ fn run(plugin_name: &str, run_args: &clap::ArgMatches) -> super::HandleCommandRe
         refusal: None,
     };
     let mut spin_msg = super::SpinningMessage::new("generating answer...", "answer generated!");
-    let result = plugin.run_completion(vec![message]);
+    let task = InferenceTask::Message(message);
+    let (job, handle) = InferenceJob::create(task, TextGenerationListener::default());
+    let result = plugin.run_job(job);
+
     match result {
         Ok(answer) => {
             spin_msg.end(false);
-            let fmt_answer = answer.completion.bright_black();
+            let completion = handle.join();
+            let fmt_answer = completion.bright_black();
             println!("\n{fmt_answer}");
             if !run_args.get_flag("no-stats") {
                 crate::utils::display_stats(&answer);

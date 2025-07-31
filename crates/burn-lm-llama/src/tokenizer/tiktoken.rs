@@ -45,7 +45,11 @@ impl Tokenizer for Tiktoken {
         let file = File::open(tiktoken_bpe_file).map_err(|e| e.to_string())?;
         let mut mergeable_ranks: HashMap<Vec<u8>, usize> = HashMap::default();
 
-        for line in BufReader::new(file).lines().flatten() {
+        for line in BufReader::new(file).lines() {
+            let line = match line {
+                Ok(val) => val,
+                Err(err) => return Err(err.to_string()),
+            };
             let mut parts = line.split(' ');
             let token = STANDARD
                 .decode(parts.next().ok_or("Missing token")?)

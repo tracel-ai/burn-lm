@@ -9,7 +9,7 @@ use crate::{
     Llama, LlamaConfig, TinyLlamaVersion,
 };
 use burn::prelude::Backend;
-use burn_lm_inference::*;
+use burn_lm_inference::{InferenceJob, *};
 
 #[inference_server_config]
 pub struct TinyLlamaServerConfig {
@@ -41,6 +41,65 @@ pub struct TinyLlamaServer<B: Backend> {
     model: Option<Arc<Mutex<Llama<B, SentiencePieceTokenizer>>>>,
 }
 
+impl TinyLlamaServer<InferenceBackend> {
+    fn run_prompt(
+        &mut self,
+        prompt: Prompt,
+        emitter: GeneratedItemEmitter,
+    ) -> InferenceResult<Stats> {
+        let load_stats = self.load()?;
+        let seed = match self.config.seed {
+            0 => rand::rng().random::<u64>(),
+            s => s,
+        };
+        let mut sampler = if self.config.temperature > 0.0 {
+            Sampler::TopP(TopP::new(self.config.top_p, seed))
+        } else {
+            Sampler::Argmax
+        };
+        let generated = match &self.model {
+            Some(arc_model) => match arc_model
+                .lock()
+                .expect("should be able to lock the model for inference")
+                .generate(
+                    &prompt,
+                    self.config.sample_len,
+                    self.config.temperature,
+                    &mut sampler,
+                    emitter,
+                ) {
+                Ok(result) => result,
+                Err(GenerationError::MaxSequenceLengthExceeded { actual, max }) => {
+                    return Err(InferenceError::ContextLengthExceeded(actual, max));
+                }
+            },
+            _ => return Err(InferenceError::ModelNotLoaded),
+        };
+        let mut stats = Stats::default();
+        let mut total_duration = generated.time;
+        stats.entries.extend(vec![
+            StatEntry::InferenceDuration(generated.time),
+            StatEntry::TokensCount(generated.tokens),
+            StatEntry::TokensPerSecond(generated.tokens, generated.time),
+        ]);
+        if let Some(load_stats) = load_stats {
+            let model_loading = load_stats
+                .entries
+                .iter()
+                .find(|e| matches!(e, StatEntry::ModelLoadingDuration(_)));
+            if let Some(model_stats) = model_loading {
+                total_duration += model_stats
+                    .get_duration()
+                    .expect("should be a ModelLoadingDuration stat")
+            }
+            stats.entries.extend(load_stats.entries);
+        }
+        stats
+            .entries
+            .insert(StatEntry::TotalDuration(total_duration));
+        Ok(stats)
+    }
+}
 impl InferenceServer for TinyLlamaServer<InferenceBackend> {
     fn downloader(&mut self) -> Option<fn() -> InferenceResult<Option<Stats>>> {
         Some(|| {
@@ -121,59 +180,13 @@ impl InferenceServer for TinyLlamaServer<InferenceBackend> {
         Ok(None)
     }
 
-    fn run_completion(&mut self, messages: Vec<Message>) -> InferenceResult<Completion> {
-        let load_stats = self.load()?;
-        let prompt = self.prompt(messages)?;
-        let seed = match self.config.seed {
-            0 => rand::rng().random::<u64>(),
-            s => s,
+    fn run_job(&mut self, job: InferenceJob) -> InferenceResult<Stats> {
+        let prompt = match job.task {
+            InferenceTask::Message(message) => self.prompt(vec![message])?,
+            InferenceTask::Context(messages) => self.prompt(messages)?,
+            InferenceTask::Prompt(prompt) => prompt,
         };
-        let mut sampler = if self.config.temperature > 0.0 {
-            Sampler::TopP(TopP::new(self.config.top_p, seed))
-        } else {
-            Sampler::Argmax
-        };
-        let generated = match &self.model {
-            Some(arc_model) => match arc_model
-                .lock()
-                .expect("should be able to lock the model for inference")
-                .generate(
-                    &prompt,
-                    self.config.sample_len,
-                    self.config.temperature,
-                    &mut sampler,
-                ) {
-                Ok(result) => result,
-                Err(GenerationError::MaxSequenceLengthExceeded { actual, max }) => {
-                    return Err(InferenceError::ContextLengthExceeded(actual, max));
-                }
-            },
-            _ => return Err(InferenceError::ModelNotLoaded),
-        };
-        let mut completion = Completion::new(&generated.text);
-        let mut total_duration = generated.time;
-        completion.stats.entries.extend(vec![
-            StatEntry::InferenceDuration(generated.time),
-            StatEntry::TokensCount(generated.tokens),
-            StatEntry::TokensPerSecond(generated.tokens, generated.time),
-        ]);
-        if let Some(stats) = load_stats {
-            let model_loading = stats
-                .entries
-                .iter()
-                .find(|e| matches!(e, StatEntry::ModelLoadingDuration(_)));
-            if let Some(stat) = model_loading {
-                total_duration += stat
-                    .get_duration()
-                    .expect("should be a ModelLoadingDuration stat")
-            }
-            completion.stats.entries.extend(stats.entries);
-        }
-        completion
-            .stats
-            .entries
-            .insert(StatEntry::TotalDuration(total_duration));
-        Ok(completion)
+        self.run_prompt(prompt, job.emitter)
     }
 
     fn clear_state(&mut self) -> InferenceResult<()> {

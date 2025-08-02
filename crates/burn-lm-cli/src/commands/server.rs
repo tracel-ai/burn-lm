@@ -45,7 +45,7 @@ fn run(args: &clap::ArgMatches, backend: &str, dtype: &str) -> super::HandleComm
         "--package",
         "burn-lm-http",
         "--bin",
-        "burnlm-http",
+        "burn-lm-http",
         "--quiet",
         "--features",
         &inference_feature,

@@ -5,7 +5,7 @@ procs:
     autorestart: true
     stop: SIGTERM
   openai-server:
-    shell: 'cargo burnlm -b {{BACKEND}} -d {{DTYPE}} server run --port 3001'
+    shell: 'cargo burn-lm -b {{BACKEND}} -d {{DTYPE}} server run --port 3001'
     autostart: true
     autorestart: true
     stop: {send-keys: ["<C-c>"]}

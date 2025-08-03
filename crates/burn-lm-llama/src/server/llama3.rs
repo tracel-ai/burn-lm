@@ -335,8 +335,6 @@ pub struct Llama3BaseServer<B: Backend> {
     version: LlamaVersion,
 }
 
-unsafe impl<B: Backend> Sync for Llama3BaseServer<B> {}
-
 impl<B: Backend> Llama3BaseServer<B> {
     pub fn new(version: LlamaVersion) -> Self {
         Self {

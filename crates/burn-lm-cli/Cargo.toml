@@ -34,8 +34,8 @@ ndarray-blas-accelerate = ["burn-lm-inference/ndarray-blas-accelerate"]
 ndarray-blas-netlib = ["burn-lm-inference/ndarray-blas-netlib"]
 
 [dependencies]
-burn-lm-inference = { path = "../burn-lm-inference" }
-burn-lm-registry = { path = "../burn-lm-registry" }
+burn-lm-inference = { path = "../burn-lm-inference", version = "0.0.1" }
+burn-lm-registry = { path = "../burn-lm-registry", version = "0.0.1" }
 
 anyhow = { workspace = true }
 clap = { workspace = true }

@@ -57,7 +57,7 @@ f32 = []
 
 [dependencies]
 burn = { workspace = true, default-features = false, features = ["ndarray"] }
-burn-lm-macros = { path = "../burn-lm-macros" }
+burn-lm-macros = { path = "../burn-lm-macros", version = "0.0.1" }
 
 cfg-if = { workspace = true }
 clap = { workspace = true }

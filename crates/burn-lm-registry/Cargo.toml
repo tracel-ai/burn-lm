@@ -13,13 +13,13 @@ license.workspace = true
 readme.workspace = true
 
 [dependencies]
-burn-lm-inference = { path = "../burn-lm-inference" }
-burn-lm-macros = { path = "../burn-lm-macros" }
+burn-lm-inference = { path = "../burn-lm-inference", version = "0.0.1" }
+burn-lm-macros = { path = "../burn-lm-macros", version = "0.0.1" }
 
 # plugins
 burn-lm-llama = { path = "../burn-lm-llama", features = [
     "inference-server",
     "llama3",
     "tiny",
-] }
-burn-lm-parrot = { path = "../burn-lm-parrot" }
+], version = "0.0.1" }
+burn-lm-parrot = { path = "../burn-lm-parrot", version = "0.0.1" }

@@ -31,9 +31,9 @@ jobs:
       crate: burn-lm-registry
     needs:
       - publish-burn-lm-parrot
-      - publish-burn-lm-llamas
-      - publish-burn-lm-macros
+      - publish-burn-lm-llama
       - publish-burn-lm-inference
+      - publish-burn-lm-macros
     secrets:
       CRATES_IO_API_TOKEN: ${{ secrets.CRATES_IO_API_TOKEN }}
 

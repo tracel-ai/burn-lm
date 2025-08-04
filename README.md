@@ -28,7 +28,7 @@ Type `help` to get a list of commands.
 ## Available Models
 
 The list of models is very small at the moment since we're focused on performance optimization.
-Still we're accepting high quality contributions to port open-source models to Burn-LM.
+Still, we're accepting high quality contributions to port open-source models to Burn-LM.
 
 Here's the current list of supported models:
 

@@ -14,7 +14,7 @@ readme.workspace = true
 
 [dependencies]
 burn = { workspace = true }
-burn-lm-inference = { path = "../burn-lm-inference" }
+burn-lm-inference = { path = "../burn-lm-inference", version = "0.0.1" }
 
 rand = { workspace = true }
 serde = { workspace = true }

@@ -14,8 +14,8 @@ readme.workspace = true
 
 [dependencies]
 burn = { workspace = true }
-burn-lm-inference = { path = "../burn-lm-inference" }
-burn-lm-registry = { path = "../burn-lm-registry" }
+burn-lm-inference = { path = "../burn-lm-inference", version = "0.0.1" }
+burn-lm-registry = { path = "../burn-lm-registry", version = "0.0.1" }
 
 async-trait = { workspace = true }
 axum = { workspace = true }

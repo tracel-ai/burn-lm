@@ -65,13 +65,34 @@ impl BurnLmConfig {
                 }
             }
         }
-        ("ndarray".to_string(), "f32".to_string())
+
+        cfg_if::cfg_if! {
+            if #[cfg(target_os = "macos")] {
+                ("metal".to_string(), "f16".to_string())
+            } else if #[cfg(any(target_os = "linux", target_os = "windows"))] {
+                if Self::cuda_is_installed() {
+                    ("cuda".to_string(), "f16".to_string())
+                } else {
+                    ("vulkan".to_string(), "f16".to_string())
+                }
+            } else {
+                ("ndarray".to_string(), "f32".to_string())
+            }
+        }
     }
 
     fn reload(&mut self) {
         let (backend, dtype) = Self::load();
         self.backend = backend;
         self.dtype = dtype;
+    }
+
+    fn cuda_is_installed() -> bool {
+        let output = std::process::Command::new("nvcc").arg("--version").output();
+        match output {
+            Ok(_) => true,
+            Err(_) => false,
+        }
     }
 }
 
@@ -115,7 +136,10 @@ fn main() {
         let build_args = cargo_args("build", &features, &[]);
         let run_args = cargo_args("run", &features, &passed_args);
 
-        let compile_msg = "compiling burnlm CLI, please wait...";
+        let compile_msg = format!(
+            "Compiling 'burn-lm' with backend '{}' and dtype '{}', please wait...",
+            feat_backend, feat_dtype
+        );
         let mut sp = Spinner::new(Spinners::Bounce, compile_msg.bright_black().to_string());
         // build burnlm cli
         let build_output = Command::new("cargo")
@@ -134,7 +158,7 @@ fn main() {
         let completion_msg = format!(
             "{} {}",
             "✓".bright_green().bold(),
-            "burnlm CLI ready!".bright_black().bold(),
+            "'burn-lm' ready!".bright_black().bold(),
         );
         sp.stop_with_message(completion_msg);
         // execute burnlm

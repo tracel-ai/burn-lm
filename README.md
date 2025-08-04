@@ -1,20 +1,19 @@
 <div align="center">
 
+<img src="./assets/burn-blue.webp" width="350px"/>
 <h1>Burn LM</h1>
 
 [![Discord](https://img.shields.io/discord/1038839012602941528.svg?color=7289da&&logo=discord)](https://discord.gg/uPEBbYYDB6)
-[![Burn](https://img.shields.io/badge/DL_Framework-Burn-f45b16)](https://github.com/tracel-ai/burn)
-[![CubeCL](https://img.shields.io/badge/Compute_Language-CubeCL-3c83c2)](https://github.com/tracel-ai/cubecl)
 ![license](https://shields.io/badge/license-MIT%2FApache--2.0-blue)
 
 ---
 
-**Burn Large Models Engine.**
+**Burn-LM aims at democratizing large model inference and training on any device.**
 
 <br/>
 </div>
 
-# Quick Start
+## Quick Start
 
 Launch a Burn LM shell with:
 
@@ -26,82 +25,21 @@ cargo burn-lm
 
 Type `help` to get a list of commands.
 
-You can also specify the backend and data type with the `-b` and `-d` options, for example:
+## Available Models
 
-```sh
-cargo burn-lm -b cuda -d f16
-```
+The list of models is very small at the moment since we're focused on performance optimization.
+Still we're accepting high quality contributions to port open-source models to Burn-LM.
 
-# Usage
+Here's the current list of supported models:
 
-## Models management
+| Model     | Size   |
+| --------- | ------ |
+| Llama 3   | 8B     |
+| Llama 3.1 | 8B     |
+| Llama 3.2 | 1B, 3B |
+| TinyLlama | 1.1B   |
 
-The list of installed models is displayed with:
-
-```sh
-cargo burn-lm models
-```
-
-To download a model use the `download` command. This is will give you
-the list of all downloadable models:
-
-```sh
-cargo burn-lm download
-```
-
-To delete a downloaded model use the `delete` command.
-
-## Inference
-
-Run a single inference with the command `run`:
-
-```sh
-cargo burn-lm run llama32 "Name a famous Quebecois dish."
-```
-
-## Chat
-
-Burn LM allows to chat with LLMs both in the terminal or in the browser.
-
-### Chat in the terminal
-
-Start a chat session with a chosen model using the `chat` command:
-
-```sh
-cargo burn-lm chat llama32
-```
-
-You can also specify the backend and data type with the `-b` and `-d` options, for example:
-
-```sh
-cargo burn-lm -b cuda -d f16 chat llama32
-```
-
-#### Slash Commands
-
-Some slash commands are available, you can get the list of them by typing `/help`
-as a prompt.
-
-| Command  | Description                      |
-| -------- | -------------------------------- |
-| `/help`  | Display available slash commands |
-| `/stats` | Toggle stats display             |
-| `/clear` | Clear the current chat context   |
-| `/exit`  | Exit the chat session            |
-
-### Chat in Open WebUI
-
-First make sure `docker` and `docker-compose` are available on your system.
-
-Then execute the command:
-
-```sh
-cargo burn-lm web start
-```
-
-Head your browser to http://localhost:3000 and enjoy.
-
-## Plugins
+### Adding a New Model
 
 Models can be easily integrated with Burn LM by implementing the `InferenceServer`
 trait to create a pluggable server that can be added to the Burn LM registry.
@@ -116,5 +54,4 @@ This will create a new crate named `burn-lm-inference-my-model` and automaticall
 register it in `burn-lm-registry`.
 
 The bootstraped server is a model-less server that just repeat the prompt it is
-given. You can also get inspiration from the other crate with name starting with
-`burn-lm-inference-`.
+given. You can also get inspiration from the other crate with the crate `burn-lm-llama`.

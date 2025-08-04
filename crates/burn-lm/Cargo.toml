@@ -18,4 +18,5 @@ readme.workspace = true
 # to compile fast.
 
 spinners = { workspace = true }
+cfg-if = { workspace = true }
 yansi = { workspace = true }

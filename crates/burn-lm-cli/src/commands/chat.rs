@@ -1,3 +1,4 @@
+use anyhow::Error;
 use burn_lm_inference::{InferenceJob, InferenceTask, Message, MessageRole, StdOutListener};
 use burn_lm_registry::Registry;
 use clap::CommandFactory as _;
@@ -79,11 +80,7 @@ pub(crate) fn create() -> clap::Command {
     let mut root = clap::Command::new("chat").about("Start a chat session with the chosen model");
     let registry = Registry::new();
     // Create a a subcommand for each registered model with its associated  flags
-    let mut installed: Vec<_> = registry
-        .get()
-        .iter()
-        .filter(|(_name, plugin)| plugin.is_downloaded())
-        .collect();
+    let mut installed: Vec<_> = registry.get().iter().collect();
     installed.sort_by_key(|(key, ..)| *key);
     for (_name, plugin) in installed {
         let subcommand = clap::Command::new(plugin.model_cli_param_name())
@@ -115,7 +112,18 @@ pub(crate) fn handle(
         .find(|(_, p)| p.model_cli_param_name() == plugin_name.to_lowercase())
         .map(|(_, plugin)| plugin);
     let plugin = plugin.unwrap_or_else(|| panic!("Plugin should be registered: {plugin_name}"));
-    let plugin_args = args.subcommand_matches(plugin_name).unwrap();
+
+    if !plugin.is_downloaded() {
+        return Err(Error::msg(format!(
+            "Model is not downloaded, run `download {}` first.",
+            plugin_name
+        )));
+    }
+
+    let plugin_args = match args.subcommand_matches(plugin_name) {
+        Some(args) => args,
+        None => panic!("Model {plugin_name} not available, did you forget to download it first?"),
+    };
     plugin.parse_cli_config(plugin_args);
 
     // load the model

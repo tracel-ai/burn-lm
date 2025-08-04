@@ -13,8 +13,14 @@ license.workspace = true
 readme.workspace = true
 
 [features]
+default = []
+# default = ["legacy-v018"] # Necessary when building with burn-0.18
+
 # Feature flag to deactivate the default backend.
 selected-backend = []
+
+# Feature to make burn-lm compile with burn 0.18.0
+legacy-v018 = []
 
 candle-accelerate = ["burn/candle", "burn/accelerate", "selected-backend"]
 candle-cpu = ["burn/candle", "selected-backend"]

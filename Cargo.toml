@@ -13,6 +13,7 @@ license = "MIT OR Apache-2.0"
 readme = "README.md"
 
 [workspace.dependencies]
+# For dev
 burn = { git = "https://github.com/tracel-ai/burn", features = [
     "std",
 ], default-features = false, rev = "38874ebe6672877b9bacedcf9083dfc8a5a34eca" }
@@ -31,9 +32,12 @@ burn-import = { git = "https://github.com/tracel-ai/burn", default-features = fa
 # 
 # burn-import = { path = "../burn/crates/burn-import" }
 
-# For release, but right now we need new features that are not released in Burn yet.
-# burn = { version = "0.17.0", default-features = false, features = ["std"] }
-# burn-import = { version = "0.17.0" }
+# For release
+# burn = { version = "0.18.0", features = ["std"], default-features = false }
+# burn-import = { version = "0.18.0", default-features = false }
+# burn-common = { version = "0.18.0", features = [
+#     "std",
+# ], default-features = false }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }

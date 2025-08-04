@@ -1,5 +1,6 @@
 use std::marker::PhantomData;
 
+#[cfg(not(feature = "legacy-v018"))]
 use burn::prelude::Backend;
 
 use crate::{
@@ -7,7 +8,7 @@ use crate::{
     errors::InferenceResult,
     plugin::{CreateCliFlagsFn, InferencePlugin},
     server::InferenceServer,
-    InferenceBackend, InferenceJob, Stats, INFERENCE_DEVICE,
+    InferenceJob, Stats,
 };
 
 #[derive(Debug, Clone)]
@@ -66,8 +67,13 @@ where
 
     fn deleter(&self) -> Option<fn() -> InferenceResult<Option<Stats>>> {
         let result = self.channel.deleter();
-        let device = &INFERENCE_DEVICE;
-        <InferenceBackend as Backend>::memory_cleanup(device);
+
+        #[cfg(not(feature = "legacy-v018"))]
+        let device = &crate::INFERENCE_DEVICE;
+
+        #[cfg(not(feature = "legacy-v018"))]
+        <crate::InferenceBackend as Backend>::memory_cleanup(device);
+
         result
     }
 
@@ -80,10 +86,16 @@ where
     }
 
     fn load(&self) -> InferenceResult<Option<Stats>> {
-        let device = &INFERENCE_DEVICE;
-        <InferenceBackend as Backend>::memory_static_allocations(device, (), |_| {
-            self.channel.load()
-        })
+        cfg_if::cfg_if! {
+            if #[cfg(not(feature = "legacy-v018"))] {
+                let device = &crate::INFERENCE_DEVICE;
+                <crate::InferenceBackend as Backend>::memory_static_allocations(device, (), |_| {
+                    self.channel.load()
+                })
+            } else {
+                self.channel.load()
+            }
+        }
     }
 
     fn is_loaded(&self) -> bool {
@@ -92,8 +104,13 @@ where
 
     fn unload(&self) -> InferenceResult<Option<Stats>> {
         let result = self.channel.unload();
-        let device = &INFERENCE_DEVICE;
-        <InferenceBackend as Backend>::memory_cleanup(device);
+
+        #[cfg(not(feature = "legacy-v018"))]
+        let device = &crate::INFERENCE_DEVICE;
+
+        #[cfg(not(feature = "legacy-v018"))]
+        <crate::InferenceBackend as Backend>::memory_cleanup(device);
+
         result
     }
 

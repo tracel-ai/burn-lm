@@ -9,7 +9,7 @@
 
 ---
 
-**Burn Large Models Repository.**
+**Burn Large Models Engine.**
 
 <br/>
 </div>
@@ -89,7 +89,6 @@ as a prompt.
 | `/clear` | Clear the current chat context   |
 | `/exit`  | Exit the chat session            |
 
-
 ### Chat in Open WebUI
 
 First make sure `docker` and `docker-compose` are available on your system.
@@ -119,6 +118,3 @@ register it in `burn-lm-registry`.
 The bootstraped server is a model-less server that just repeat the prompt it is
 given. You can also get inspiration from the other crate with name starting with
 `burn-lm-inference-`.
-
-
-

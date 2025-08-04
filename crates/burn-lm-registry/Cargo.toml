@@ -1,5 +1,12 @@
 [package]
 name = "burn-lm-registry"
+authors = ["nathanielsimard <nathaniel.simard.42@gmail.com>"]
+categories = []
+description = "Burn Large Models Engine - Registry."
+documentation = "https://docs.rs/burn-lm-registry"
+repository = "https://github.com/tracel-ai/burn-lm"
+rust-version = "1.88"
+
 edition.workspace = true
 version.workspace = true
 license.workspace = true

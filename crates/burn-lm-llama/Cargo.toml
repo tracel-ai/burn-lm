@@ -1,10 +1,20 @@
 [package]
-authors = ["guillaumelagrange <lagrange.guillaume.1@gmail.com>"]
-license = "MIT OR Apache-2.0"
 name = "burn-lm-llama"
-version = "0.1.0"
-edition = "2021"
-description = "Llama 3 large language model with Burn"
+authors = [
+    "guillaumelagrange <lagrange.guillaume.1@gmail.com>",
+    "nathanielsimard <nathaniel.simard.42@gmail.com>",
+]
+categories = []
+description = "Burn Large Models Engine - Inference."
+documentation = "https://docs.rs/burn-lm-inference"
+repository = "https://github.com/tracel-ai/burn-lm"
+rust-version = "1.88"
+
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+readme.workspace = true
+
 
 [features]
 default = ["pretrained", "inference-server"]

@@ -1,5 +1,11 @@
 [package]
 name = "burn-lm-cli"
+authors = ["nathanielsimard <nathaniel.simard.42@gmail.com>"]
+categories = []
+description = "Burn Large Models Engine - CLI."
+documentation = "https://docs.rs/burn-lm-cli"
+repository = "https://github.com/tracel-ai/burn-lm"
+rust-version = "1.88"
 edition.workspace = true
 version.workspace = true
 license.workspace = true

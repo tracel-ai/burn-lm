@@ -1568,6 +1568,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "ctrlc"
+version = "3.4.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "46f93780a459b7d656ef7f071fe699c4d3d2cb201c4b24d085b6ddc505276e73"
+dependencies = [
+ "nix 0.30.1",
+ "windows-sys 0.59.0",
+]
+
+[[package]]
 name = "cubecl"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1595,7 +1605,7 @@ dependencies = [
  "bytemuck",
  "cfg-if",
  "derive-new",
- "derive_more 2.0.1",
+ "derive_more",
  "dirs 6.0.0",
  "embassy-futures",
  "embassy-time",
@@ -1645,7 +1655,7 @@ dependencies = [
  "cubecl-macros",
  "cubecl-runtime",
  "derive-new",
- "derive_more 2.0.1",
+ "derive_more",
  "half",
  "hashbrown 0.15.4",
  "log",
@@ -1726,7 +1736,7 @@ checksum = "bbb72454fb17da66e60f98a011cce199ff0bb78c4e465236459af619039b6cd5"
 dependencies = [
  "cubecl-common",
  "cubecl-macros-internal",
- "derive_more 2.0.1",
+ "derive_more",
  "float-ord",
  "fnv",
  "half",
@@ -1902,7 +1912,7 @@ dependencies = [
  "cubecl-runtime",
  "cubecl-spirv",
  "derive-new",
- "derive_more 2.0.1",
+ "derive_more",
  "half",
  "hashbrown 0.15.4",
  "log",
@@ -2087,17 +2097,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ab63b0e2bf4d5928aff72e83a7dace85d7bba5fe12dcc3c5a572d78caffd3f3c"
 dependencies = [
  "derive_builder_core",
- "syn 2.0.104",
-]
-
-[[package]]
-name = "derive_more"
-version = "0.99.20"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6edb4b64a43d977b8e99788fe3a04d483834fba1215a7e02caa415b626497f7f"
-dependencies = [
- "proc-macro2",
- "quote",
  "syn 2.0.104",
 ]
 
@@ -4248,6 +4247,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "nix"
+version = "0.30.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "74523f3a35e05aba87a1d978330aef40f67b0304ac79c1c00b294c9830543db6"
+dependencies = [
+ "bitflags 2.9.1",
+ "cfg-if",
+ "cfg_aliases",
+ "libc",
+]
+
+[[package]]
 name = "no-std-compat"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5821,7 +5832,7 @@ dependencies = [
  "libc",
  "log",
  "memchr",
- "nix",
+ "nix 0.29.0",
  "radix_trie",
  "rustyline-derive",
  "unicode-segmentation",
@@ -6913,28 +6924,30 @@ checksum = "8df9b6e13f2d32c91b9bd719c00d1958837bc7dec474d94952798cc8e69eeec3"
 
 [[package]]
 name = "tracel-xtask"
-version = "1.1.8"
+version = "2.1.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "58fccce80a2ef6bc32a512514a53cf853d438a44abaea286a4acb0c9f8566860"
+checksum = "8c787864b252f8416c973043877279b5d80ebda013c127a3ccd85789bec42448"
 dependencies = [
  "anyhow",
  "clap",
- "derive_more 0.99.20",
+ "ctrlc",
+ "derive_more",
+ "dotenvy",
  "env_logger",
  "log",
- "rand 0.8.5",
+ "rand 0.9.2",
  "regex",
  "serde_json",
- "strum 0.26.3",
+ "strum 0.27.2",
  "tracel-xtask-macros",
  "tracing-subscriber",
 ]
 
 [[package]]
 name = "tracel-xtask-macros"
-version = "1.1.8"
+version = "2.1.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5a3a646485f7cd8f580749ab94718ad3d344bcc0cc5b0fefe43c15fdd898bb96"
+checksum = "482636f5289136e0139c1b5dcf8a4e03de89b14395f2ec90e95b65a2133b2e8a"
 dependencies = [
  "proc-macro2",
  "quote",

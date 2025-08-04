@@ -266,10 +266,6 @@ pub fn inference_server(input: TokenStream) -> TokenStream {
             return TokenStream::from(quote! { compile_error!(#err_msg) });
         }
     };
-    // Generate Sync trait implementation
-    let sync_marker_trait = quote! {
-        unsafe impl #input_generics_impl Sync for #input_ident #input_generics_type #input_generics_where_clause {}
-    };
 
     let expanded = quote! {
         impl #input_generics_impl #input_ident #input_generics_type #input_generics_where_clause {
@@ -292,8 +288,6 @@ pub fn inference_server(input: TokenStream) -> TokenStream {
                     .expect("Should be able to parse JSON");
             }
         }
-        // Sync marker
-        #sync_marker_trait
     };
     TokenStream::from(expanded)
 }

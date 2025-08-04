@@ -21,13 +21,6 @@ pub struct InferenceClient<Server: InferenceServer + 'static, Channel: 'static> 
     _phantom_server: PhantomData<Server>,
 }
 
-unsafe impl<Server, Channel> Sync for InferenceClient<Server, Channel>
-where
-    Server: InferenceServer,
-    Channel: InferenceChannel<Server>,
-{
-}
-
 impl<Server, Channel> InferenceClient<Server, Channel>
 where
     Server: InferenceServer,

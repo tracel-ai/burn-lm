@@ -162,7 +162,10 @@ impl<B: Backend> MultiHeadAttention<B> {
             .div_scalar((self.head_dim as f32).sqrt());
 
         if let Some(mask) = mask {
-            scores = scores.mask_fill(mask, f32::NEG_INFINITY);
+            let expanded_mask = mask
+                .clone()
+                .expand([batch_size, self.n_heads, seq_len, seq_len]);
+            scores = scores.mask_fill(expanded_mask, f32::NEG_INFINITY);
         }
 
         let scores = softmax(scores, 3);

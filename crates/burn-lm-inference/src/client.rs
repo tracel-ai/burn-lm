@@ -106,10 +106,12 @@ where
         let result = self.channel.unload();
 
         #[cfg(not(feature = "legacy-v018"))]
-        let device = &crate::INFERENCE_DEVICE;
-
-        #[cfg(not(feature = "legacy-v018"))]
-        <crate::InferenceBackend as Backend>::memory_cleanup(device);
+        {
+            let device = &crate::INFERENCE_DEVICE;
+            <crate::InferenceBackend as Backend>::memory_cleanup(device);
+            // Force pending deallocations to complete
+            <crate::InferenceBackend as Backend>::sync(device);
+        }
 
         result
     }

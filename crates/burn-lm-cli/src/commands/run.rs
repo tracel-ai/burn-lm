@@ -89,6 +89,7 @@ fn run(plugin_name: &str, run_args: &clap::ArgMatches) -> super::HandleCommandRe
             if !run_args.get_flag("no-stats") {
                 crate::utils::display_stats(&answer);
             }
+            let _ = plugin.unload();
             Ok(None)
         }
         Err(err) => anyhow::bail!("An error occurred: {err}"),

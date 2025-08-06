@@ -70,12 +70,11 @@ struct Config {
 
 #[allow(dead_code)]
 fn bench<B: Backend>(device: &B::Device) -> Vec<BenchmarkResult> {
-    let batch_size = 1;
     let max_seq_length = 512;
 
     let mut results = Vec::new();
 
-    for seq_length in [1, max_seq_length] {
+    for (batch_size, seq_length) in [(32, 1), (1, max_seq_length)] {
         // Layer of 1 for now.
         for config in [
             Config {

@@ -17,7 +17,6 @@ async fn main() -> anyhow::Result<()> {
     let start = Instant::now();
     let args = init_xtask::<Command>(parse_args::<Command>()?)?;
 
-    println!("HER");
     match args.command {
         Command::Book(book_args) => book_args.parse(),
         _ => {

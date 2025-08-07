@@ -1,0 +1,11 @@
+[book]
+authors = [
+    "Nathaniel Simard",
+]
+language = "en"
+multilingual = false
+src = "src"
+title = "The BurnLM Book 🤖"
+
+[output.html]
+mathjax-support = true

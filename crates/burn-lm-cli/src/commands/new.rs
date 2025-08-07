@@ -2,7 +2,7 @@ use crate::utils::{self, copy_directory};
 use std::io::Write;
 
 const CRATE_DIR: &str = "./crates";
-const TEMPLATE_DIR_NAME: &str = "burn-parrot";
+const TEMPLATE_DIR_NAME: &str = "burn-lm-parrot";
 const REGISTRY_DIR_NAME: &str = "burn-lm-registry";
 
 pub(crate) fn create() -> clap::Command {
@@ -10,7 +10,7 @@ pub(crate) fn create() -> clap::Command {
         .about("Create a new inference server crate")
         .arg(
             clap::Arg::new("name")
-                .help("The name of the crate without the prefx 'burn-lm-inference-'")
+                .help("The name of the crate without the prefx 'burn-lm-'")
                 .required(true),
         )
 }
@@ -21,7 +21,7 @@ pub(crate) fn handle(args: &clap::ArgMatches) -> super::HandleCommandResult {
         .get_one::<String>("name")
         .expect("The name argument should be set.");
     let crate_name = utils::sanitize_crate_name(crate_name);
-    let crate_fullname = format!("burn-lm-inference-{crate_name}");
+    let crate_fullname = format!("burn-lm-{crate_name}");
 
     println!("Check if crate directory already exist...");
     let crate_path = std::path::Path::new(CRATE_DIR).join(&crate_fullname);

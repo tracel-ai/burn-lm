@@ -7,7 +7,6 @@ use super::{Llama, LlamaConfig};
 
 impl LlamaConfig {
     /// Load pre-trained Llama checkpoint.
-    // #[cfg(feature = "import")]
     pub fn load_pretrained<B: Backend, T: Tokenizer>(
         &self,
         checkpoint: &str,

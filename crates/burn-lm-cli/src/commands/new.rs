@@ -2,15 +2,15 @@ use crate::utils::{self, copy_directory};
 use std::io::Write;
 
 const CRATE_DIR: &str = "./crates";
-const TEMPLATE_DIR_NAME: &str = "burnlm-inference-template";
-const REGISTRY_DIR_NAME: &str = "burnlm-registry";
+const TEMPLATE_DIR_NAME: &str = "burn-lm-parrot";
+const REGISTRY_DIR_NAME: &str = "burn-lm-registry";
 
 pub(crate) fn create() -> clap::Command {
     clap::Command::new("new")
         .about("Create a new inference server crate")
         .arg(
             clap::Arg::new("name")
-                .help("The name of the crate without the prefx 'burn-lm-inference-'")
+                .help("The name of the crate without the prefx 'burn-lm-'")
                 .required(true),
         )
 }
@@ -21,7 +21,7 @@ pub(crate) fn handle(args: &clap::ArgMatches) -> super::HandleCommandResult {
         .get_one::<String>("name")
         .expect("The name argument should be set.");
     let crate_name = utils::sanitize_crate_name(crate_name);
-    let crate_fullname = format!("burn-lm-inference-{crate_name}");
+    let crate_fullname = format!("burn-lm-{crate_name}");
 
     println!("Check if crate directory already exist...");
     let crate_path = std::path::Path::new(CRATE_DIR).join(&crate_fullname);
@@ -40,20 +40,17 @@ pub(crate) fn handle(args: &clap::ArgMatches) -> super::HandleCommandResult {
     println!("Update new crate files...");
     // Cargo.toml
     let mut replacements = std::collections::HashMap::new();
-    replacements.insert(
-        "burnlm-inference-template".to_string(),
-        crate_fullname.clone(),
-    );
+    replacements.insert(TEMPLATE_DIR_NAME.to_string(), crate_fullname.clone());
     utils::replace_in_file(crate_path.join("Cargo.toml"), &replacements);
     // lib.rs
     let crate_namespace = crate_fullname.replace("-", "_");
+    let template_namespace = TEMPLATE_DIR_NAME.replace("-", "_");
     let ty_prefix = utils::remove_and_capitalize_dashes(&crate_name);
+
     let mut replacements = std::collections::HashMap::new();
-    replacements.insert(
-        "burnlm_inference_template".to_string(),
-        crate_namespace.clone(),
-    );
+    replacements.insert(template_namespace, crate_namespace.clone());
     replacements.insert("Parrot".to_string(), ty_prefix.clone());
+
     utils::replace_in_file(crate_path.join("src").join("lib.rs"), &replacements);
 
     println!("Register new server in registry...");

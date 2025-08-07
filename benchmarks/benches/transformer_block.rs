@@ -72,57 +72,59 @@ struct Config {
 
 #[allow(dead_code)]
 fn bench<B: Backend>(device: &B::Device) -> Vec<BenchmarkResult> {
-    let batch_size = 1;
     let n_layers = 1;
-    let seq_length = 512;
+    let max_seq_length = 512;
     let norm_eps = 1e-5;
 
     let mut results = Vec::new();
 
-    for config in [
-        Config {
-            n_heads: 32,
-            n_heads_kv: 8,
-            d_model: 2048,
-            hidden_size: 8192,
-            name: "llama-3.2-1B",
-        },
-        Config {
-            n_heads: 24,
-            n_heads_kv: 8,
-            d_model: 3072,
-            hidden_size: 8192,
-            name: "llama-3.2-3B",
-        },
-        Config {
-            n_heads: 32,
-            n_heads_kv: 8,
-            d_model: 4096,
-            hidden_size: 14336,
-            name: "llama-8B",
-        },
-    ] {
-        let block = TransformerBlockConfig::new(
-            n_layers,
-            config.d_model,
-            config.hidden_size,
-            config.n_heads,
-            config.n_heads_kv,
-            norm_eps,
-        )
-        .init(device);
-        let rope =
-            RotaryEncodingConfig::new(seq_length * 2, config.d_model / config.n_heads).init(device);
-        let benchmark = TransformerBlockBenchmark::<B> {
-            batch_size,
-            seq_length,
-            config,
-            device: device.clone(),
-            block,
-            pos_encoding: PositionalEncodingState::new(rope),
-        };
-        let result = run_benchmark(benchmark);
-        results.push(result);
+    for (batch_size, seq_length) in [(32, 1), (1, max_seq_length)] {
+        for config in [
+            Config {
+                n_heads: 32,
+                n_heads_kv: 8,
+                d_model: 2048,
+                hidden_size: 8192,
+                name: "llama-3.2-1B",
+            },
+            Config {
+                n_heads: 24,
+                n_heads_kv: 8,
+                d_model: 3072,
+                hidden_size: 8192,
+                name: "llama-3.2-3B",
+            },
+            Config {
+                n_heads: 32,
+                n_heads_kv: 8,
+                d_model: 4096,
+                hidden_size: 14336,
+                name: "llama-8B",
+            },
+        ] {
+            let block = TransformerBlockConfig::new(
+                n_layers,
+                config.d_model,
+                config.hidden_size,
+                config.n_heads,
+                config.n_heads_kv,
+                norm_eps,
+            )
+            .init(device);
+            let rope =
+                RotaryEncodingConfig::new(max_seq_length * 2, config.d_model / config.n_heads)
+                    .init(device);
+            let benchmark = TransformerBlockBenchmark::<B> {
+                batch_size,
+                seq_length,
+                config,
+                device: device.clone(),
+                block,
+                pos_encoding: PositionalEncodingState::new(rope),
+            };
+            let result = run_benchmark(benchmark);
+            results.push(result);
+        }
     }
 
     results

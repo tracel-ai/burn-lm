@@ -58,25 +58,30 @@ impl<B: Backend> Benchmark for AttentionBenchmark<B> {
 
 #[allow(dead_code)]
 fn bench<B: Backend>(device: &B::Device) -> Vec<BenchmarkResult> {
-    let batch_size = 1;
     let n_heads = 32;
 
-    let seq_length = 512;
+    let max_seq_length = 512;
     let d_model = 4096;
 
-    let attn = MultiHeadAttentionConfig::new(d_model, n_heads, n_heads).init(device);
-    let rope = RotaryEncodingConfig::new(seq_length * 2, d_model / n_heads).init(device);
-    let benchmark = AttentionBenchmark::<B> {
-        batch_size,
-        n_heads,
-        seq_length,
-        d_model,
-        device: device.clone(),
-        attn,
-        rope: PositionalEncodingState::new(rope),
-    };
+    let mut results = Vec::new();
 
-    vec![run_benchmark(benchmark)]
+    for (batch_size, seq_length) in [(32, 1), (1, max_seq_length)] {
+        let attn = MultiHeadAttentionConfig::new(d_model, n_heads, n_heads).init(device);
+        let rope = RotaryEncodingConfig::new(max_seq_length * 2, d_model / n_heads).init(device);
+        let benchmark = AttentionBenchmark::<B> {
+            batch_size,
+            n_heads,
+            seq_length,
+            d_model,
+            device: device.clone(),
+            attn,
+            rope: PositionalEncodingState::new(rope),
+        };
+        let result = run_benchmark(benchmark);
+        results.push(result);
+    }
+
+    results
 }
 
 fn main() {

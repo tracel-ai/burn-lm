@@ -17,7 +17,7 @@ use crate::{
 };
 
 #[cfg(feature = "tiny")]
-use crate::tokenizer::SentiencePieceTokenizer;
+use crate::tokenizer::SentencePieceTokenizer;
 #[cfg(feature = "llama3")]
 use crate::tokenizer::Tiktoken;
 
@@ -237,12 +237,12 @@ impl LlamaConfig {
         tokenizer_path: &str,
         max_seq_len: usize,
         device: &Device<B>,
-    ) -> Result<Llama<B, SentiencePieceTokenizer>, String> {
+    ) -> Result<Llama<B, SentencePieceTokenizer>, String> {
         use burn::record::NamedMpkFileRecorder;
 
         let llama = Self::tiny_llama(tokenizer_path)
             .with_max_seq_len(max_seq_len)
-            .init::<B, SentiencePieceTokenizer>(device)?;
+            .init::<B, SentencePieceTokenizer>(device)?;
 
         let recorder = NamedMpkFileRecorder::<HalfPrecisionSettings>::new();
         let llama = llama

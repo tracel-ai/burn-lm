@@ -6,7 +6,7 @@ use super::{Llama, LlamaConfig, LlamaVersion, TinyLlamaVersion};
 use crate::tokenizer::Tiktoken;
 
 #[cfg(feature = "tiny")]
-use crate::tokenizer::SentiencePieceTokenizer;
+use crate::tokenizer::SentencePieceTokenizer;
 
 /// Pre-trained model metadata.
 pub struct Pretrained {
@@ -280,7 +280,7 @@ impl LlamaConfig {
     pub fn tiny_llama_pretrained<B: Backend>(
         max_seq_len: usize,
         device: &Device<B>,
-    ) -> Result<Llama<B, SentiencePieceTokenizer>, String> {
+    ) -> Result<Llama<B, SentencePieceTokenizer>, String> {
         // TinyLlama models support context length up to 2K tokens.
 
         check_context_length(max_seq_len, 2 * 1024);

@@ -109,9 +109,9 @@ impl Tokenizer for Tiktoken {
             .collect()
     }
 
-    fn decode(&self, tokens: Vec<u32>) -> String {
+    fn decode(&self, tokens: &[u32]) -> String {
         self.bpe
-            .decode(tokens.into_iter().map(|t| t as usize).collect())
+            .decode(tokens.iter().map(|&t| t as usize).collect())
             .expect("Should decode tokens")
     }
 

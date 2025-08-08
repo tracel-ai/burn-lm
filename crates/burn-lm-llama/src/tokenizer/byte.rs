@@ -31,7 +31,7 @@ impl Tokenizer for ByteTokenizer {
             .collect()
     }
 
-    fn decode(&self, tokens: Vec<u32>) -> String {
+    fn decode(&self, tokens: &[u32]) -> String {
         format!("{tokens:?}")
     }
 

@@ -6,13 +6,13 @@ const BOS_TOKEN_ID: u32 = 1;
 const EOS_TOKEN_ID: u32 = 2;
 
 #[derive(Debug, Clone)]
-pub struct SentiencePieceTokenizer {
+pub struct SentencePieceTokenizer {
     bpe: BaseTokenizer,
     bos_token_id: u32,
     eos_token_id: u32,
 }
 
-impl Tokenizer for SentiencePieceTokenizer {
+impl Tokenizer for SentencePieceTokenizer {
     /// Load the [SentenciePiece](https://github.com/google/sentencepiece) tokenizer.
     fn new(tokenizer_path: &str) -> Result<Self, String> {
         let bpe = BaseTokenizer::from_file(tokenizer_path).map_err(|e| e.to_string())?;

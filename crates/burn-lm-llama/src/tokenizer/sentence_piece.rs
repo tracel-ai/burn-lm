@@ -36,10 +36,8 @@ impl Tokenizer for SentencePieceTokenizer {
             .collect()
     }
 
-    fn decode(&self, tokens: Vec<u32>) -> String {
-        self.bpe
-            .decode(&tokens.into_iter().collect::<Vec<u32>>(), true)
-            .unwrap()
+    fn decode(&self, tokens: &[u32]) -> String {
+        self.bpe.decode(tokens, false).unwrap()
     }
 
     fn bos_id(&self) -> u32 {
@@ -52,5 +50,11 @@ impl Tokenizer for SentencePieceTokenizer {
 
     fn stop_ids(&self) -> Vec<u32> {
         vec![self.eos_id()]
+    }
+
+    fn streaming_context_size(&self) -> usize {
+        // SentencePiece tokens represent subwords with special markers (e.g., _ suffix for spaces),
+        // requiring a short token buffer for correct incremental decoding.
+        4 // should be good enough for spacing + utf-8 decoding
     }
 }

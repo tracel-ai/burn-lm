@@ -9,6 +9,8 @@ use burn_lm_inference::{Backend, GeneratedItem, GeneratedItemEmitter};
 
 use crate::tokenizer::Tokenizer;
 
+use super::StreamingDecoder;
+
 #[derive(Clone)]
 /// The text generation context, used to check when a stop token has been reached.
 pub struct GenerationContext<B: Backend> {
@@ -85,7 +87,7 @@ impl<B: Backend> GenerationContext<B> {
 
 struct TokenGeneration<T: Tokenizer> {
     emitter: GeneratedItemEmitter,
-    tokenizer: T,
+    decoder: StreamingDecoder<T>,
     stop_tokens: Vec<u32>,
     stop: Arc<AtomicBool>,
     num_tokens_generated: Arc<AtomicUsize>,
@@ -102,7 +104,7 @@ impl<T: Tokenizer> TokenGeneration<T> {
         Self {
             emitter,
             stop_tokens: tokenizer.stop_ids(),
-            tokenizer,
+            decoder: StreamingDecoder::new(tokenizer),
             stop,
             num_tokens_generated,
             num_generated: 0,
@@ -126,8 +128,9 @@ impl<T: Tokenizer> TokenGeneration<T> {
         }
 
         if !generated.is_empty() {
-            let text = self.tokenizer.decode(generated);
-            self.emitter.completed(GeneratedItem::Text(text));
+            if let Some(text) = self.decoder.push_tokens(&generated) {
+                self.emitter.completed(GeneratedItem::Text(text));
+            }
         }
 
         if finished {

@@ -38,8 +38,8 @@ pub struct ParrotServerConfig {
 #[derive(InferenceServer, Clone, Default, Debug)]
 #[inference_server(
     model_name = "Parrot",
-    model_creation_date = "01/28/2025",
-    owned_by = "Tracel Technologies Inc."
+    model_creation_date = "2025/01/28",
+    created_by = "Tracel Technologies Inc."
 )]
 pub struct ParrotServer<B: Backend> {
     config: ParrotServerConfig,

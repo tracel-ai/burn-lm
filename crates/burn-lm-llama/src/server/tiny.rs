@@ -33,9 +33,10 @@ pub struct TinyLlamaServerConfig {
 #[derive(InferenceServer, Clone, Default, Debug)]
 #[inference_server(
     model_name = "TinyLlama",
-    model_creation_date = "05/01/2024",
-    owned_by = "Tracel Technologies Inc."
+    model_creation_date = "2023/12/30",
+    created_by = "StatNLP Research Group"
 )]
+// [StatNLP Research Group](https://arxiv.org/abs/2401.02385)
 pub struct TinyLlamaServer<B: Backend> {
     config: TinyLlamaServerConfig,
     model: Option<Arc<Mutex<Llama<B, SentiencePieceTokenizer>>>>,

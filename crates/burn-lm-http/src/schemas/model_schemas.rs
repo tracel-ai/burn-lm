@@ -8,7 +8,7 @@ pub struct ModelSchema {
     pub id: String,
     pub created: u32,
     pub object: String,
-    pub owned_by: String,
+    pub created_by: String,
 }
 
 impl From<&Box<dyn InferencePlugin>> for ModelSchema {
@@ -23,7 +23,7 @@ impl From<&Box<dyn InferencePlugin>> for ModelSchema {
         Self {
             id: plugin.model_name().to_string(),
             object: "model".to_string(),
-            owned_by: plugin.owned_by().to_string(),
+            created_by: plugin.created_by().to_string(),
             created,
         }
     }

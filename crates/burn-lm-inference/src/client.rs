@@ -16,7 +16,7 @@ pub struct InferenceClient<Server: InferenceServer + 'static, Channel: 'static> 
     model_name: &'static str,
     model_cli_param_name: &'static str,
     model_creation_date: &'static str,
-    owned_by: &'static str,
+    created_by: &'static str,
     create_cli_flags_fn: CreateCliFlagsFn,
     channel: Channel,
     _phantom_server: PhantomData<Server>,
@@ -32,7 +32,7 @@ where
         model_name: &'static str,
         model_cli_param_name: &'static str,
         model_creation_date: &'static str,
-        owned_by: &'static str,
+        created_by: &'static str,
         create_cli_flags_fn: CreateCliFlagsFn,
         channel: Channel,
     ) -> Self {
@@ -40,7 +40,7 @@ where
             model_name,
             model_cli_param_name,
             model_creation_date,
-            owned_by,
+            created_by,
             create_cli_flags_fn,
             channel,
             _phantom_server: PhantomData,
@@ -132,8 +132,8 @@ where
         self.model_creation_date
     }
 
-    fn owned_by(&self) -> &'static str {
-        self.owned_by
+    fn created_by(&self) -> &'static str {
+        self.created_by
     }
 
     fn create_cli_flags_fn(&self) -> CreateCliFlagsFn {

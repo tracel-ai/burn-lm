@@ -35,7 +35,7 @@ pub struct Llama3ServerConfig {
     model_name = "Llama 3 (8B Instruct)",
     model_cli_param_name = "llama3",
     model_creation_date = "2024/04/18",
-    owned_by = "Tracel Technologies Inc."
+    created_by = "Meta"
 )]
 pub struct Llama3InstructServer<B: Backend> {
     config: Llama3ServerConfig,
@@ -130,7 +130,7 @@ impl InferenceServer for Llama3InstructServer<InferenceBackend> {
     model_name = "Llama 3.1 (8B Instruct)",
     model_cli_param_name = "llama31",
     model_creation_date = "2024/07/23",
-    owned_by = "Tracel Technologies Inc."
+    created_by = "Meta"
 )]
 pub struct Llama31InstructServer<B: Backend> {
     config: Llama3ServerConfig,
@@ -198,7 +198,7 @@ impl InferenceServer for Llama31InstructServer<InferenceBackend> {
     model_name = "Llama 3.2 (1B Instruct)",
     model_cli_param_name = "llama32",
     model_creation_date = "2024/09/25",
-    owned_by = "Tracel Technologies Inc."
+    created_by = "Meta"
 )]
 pub struct Llama321bInstructServer<B: Backend> {
     config: Llama3ServerConfig,
@@ -266,7 +266,7 @@ impl InferenceServer for Llama321bInstructServer<InferenceBackend> {
     model_name = "Llama 3.2 (3B Instruct)",
     model_cli_param_name = "llama32-3b",
     model_creation_date = "2024/09/25",
-    owned_by = "Tracel Technologies Inc."
+    created_by = "Meta"
 )]
 pub struct Llama323bInstructServer<B: Backend> {
     config: Llama3ServerConfig,

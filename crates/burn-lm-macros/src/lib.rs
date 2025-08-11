@@ -178,7 +178,7 @@ struct InferenceServerData {
     model_name: Option<String>,
     model_cli_param_name: Option<String>,
     model_creation_date: Option<String>,
-    owned_by: Option<String>,
+    created_by: Option<String>,
     data: darling::ast::Data<darling::util::Ignored, InferenceServerField>,
 }
 
@@ -189,6 +189,31 @@ struct InferenceServerField {
 }
 
 #[proc_macro_derive(InferenceServer, attributes(inference_server))]
+/// Derive macro for implementing inference server metadata and configuration parsing.
+///
+/// # Attribute Fields
+///
+/// `inference_server`:
+/// * `model_name`: The human-readable name of the model.
+/// * `model_cli_param_name`: The CLI-friendly parameter name. If omitted, will be derived from `model_name`.
+/// * `model_creation_date`: The model release date. Must be in format `YYYY/MM/DD`.
+/// * `created_by`: The name of the organization or individual who created the model.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// #[derive(InferenceServer, Clone, Debug)]
+/// #[inference_server(
+///     model_name = "Llama 3 (8B Instruct)",
+///     model_cli_param_name = "llama3",
+///     model_creation_date = "2024/04/18",
+///     created_by = "Meta"
+/// )]
+/// pub struct Llama3InstructServer<B: Backend> {
+///     config: Llama3ServerConfig,
+///     server: Llama3BaseServer<B>,
+/// }
+/// ```
 pub fn inference_server(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     let input_ident = &input.ident;
@@ -258,11 +283,11 @@ pub fn inference_server(input: TokenStream) -> TokenStream {
             return TokenStream::from(quote! { compile_error!(#err_msg) });
         }
     };
-    // handle owned_by
-    let owned_by = match receiver.owned_by {
+    // handle created_by
+    let created_by = match receiver.created_by {
         Some(ref owner) => quote! { #owner },
         None => {
-            let err_msg = "You must provide an 'owned_by' attribute using '#[inference_server(owned_by=\"OwnerName\")]'";
+            let err_msg = "You must provide an 'created_by' attribute using '#[inference_server(created_by=\"CreatorName\")]'";
             return TokenStream::from(quote! { compile_error!(#err_msg) });
         }
     };
@@ -272,7 +297,7 @@ pub fn inference_server(input: TokenStream) -> TokenStream {
             pub const fn model_name() -> &'static str { #model_name }
             pub const fn model_cli_param_name() -> &'static str { #model_cli_param_name }
             pub const fn model_creation_date() -> &'static str { #model_creation_date }
-            pub const fn owned_by() -> &'static str { #owned_by }
+            pub const fn created_by() -> &'static str { #created_by }
         }
 
         impl #input_generics_impl ServerConfigParsing for #input_ident #input_generics_type #input_generics_where_clause {
@@ -362,7 +387,7 @@ pub fn inference_server_registry(attr: TokenStream, item: TokenStream) -> TokenS
                         S::model_name(),
                         S::model_cli_param_name(),
                         S::model_creation_date(),
-                        S::owned_by(),
+                        S::created_by(),
                         <S as ServerConfigParsing>::Config::command,
                         Channel::<S>::new(),
                     )),

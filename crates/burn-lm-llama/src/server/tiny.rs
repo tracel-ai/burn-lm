@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use crate::{
     generation::{GenerationError, Sampler, TopP},
     pretrained::ModelMeta,
-    tokenizer::SentiencePieceTokenizer,
+    tokenizer::SentencePieceTokenizer,
     Llama, LlamaConfig, TinyLlamaVersion,
 };
 use burn::prelude::Backend;
@@ -39,7 +39,7 @@ pub struct TinyLlamaServerConfig {
 // [StatNLP Research Group](https://arxiv.org/abs/2401.02385)
 pub struct TinyLlamaServer<B: Backend> {
     config: TinyLlamaServerConfig,
-    model: Option<Arc<Mutex<Llama<B, SentiencePieceTokenizer>>>>,
+    model: Option<Arc<Mutex<Llama<B, SentencePieceTokenizer>>>>,
 }
 
 impl TinyLlamaServer<InferenceBackend> {

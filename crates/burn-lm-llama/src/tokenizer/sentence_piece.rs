@@ -6,13 +6,13 @@ const BOS_TOKEN_ID: u32 = 1;
 const EOS_TOKEN_ID: u32 = 2;
 
 #[derive(Debug, Clone)]
-pub struct SentiencePieceTokenizer {
+pub struct SentencePieceTokenizer {
     bpe: BaseTokenizer,
     bos_token_id: u32,
     eos_token_id: u32,
 }
 
-impl Tokenizer for SentiencePieceTokenizer {
+impl Tokenizer for SentencePieceTokenizer {
     /// Load the [SentenciePiece](https://github.com/google/sentencepiece) tokenizer.
     fn new(tokenizer_path: &str) -> Result<Self, String> {
         let bpe = BaseTokenizer::from_file(tokenizer_path).map_err(|e| e.to_string())?;
@@ -36,10 +36,8 @@ impl Tokenizer for SentiencePieceTokenizer {
             .collect()
     }
 
-    fn decode(&self, tokens: Vec<u32>) -> String {
-        self.bpe
-            .decode(&tokens.into_iter().collect::<Vec<u32>>(), true)
-            .unwrap()
+    fn decode(&self, tokens: &[u32]) -> String {
+        self.bpe.decode(tokens, false).unwrap()
     }
 
     fn bos_id(&self) -> u32 {
@@ -52,5 +50,11 @@ impl Tokenizer for SentiencePieceTokenizer {
 
     fn stop_ids(&self) -> Vec<u32> {
         vec![self.eos_id()]
+    }
+
+    fn streaming_context_size(&self) -> usize {
+        // SentencePiece tokens represent subwords with special markers (e.g., _ suffix for spaces),
+        // requiring a short token buffer for correct incremental decoding.
+        4 // should be good enough for spacing + utf-8 decoding
     }
 }

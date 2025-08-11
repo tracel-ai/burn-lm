@@ -245,16 +245,16 @@ pub fn inference_server(input: TokenStream) -> TokenStream {
     // handle model_creation_date
     let model_creation_date = match receiver.model_creation_date {
         Some(ref date_str) => {
-            if NaiveDate::parse_from_str(date_str, "%m/%d/%Y").is_err() {
+            if NaiveDate::parse_from_str(date_str, "%Y/%m/%d").is_err() {
                 let err_msg = format!(
-                    "Invalid 'model_creation_date': {date_str}. Must be in MM/DD/YYYY format."
+                    "Invalid 'model_creation_date': {date_str}. Must be in YYYY/MM/DD format."
                 );
                 return TokenStream::from(quote! { compile_error!(#err_msg) });
             }
             quote! { #date_str }
         }
         None => {
-            let err_msg = "You must provide a 'model_creation_date' using '#[inference_server(model_creation_date=\"MM/DD/YYYY\")]'";
+            let err_msg = "You must provide a 'model_creation_date' using '#[inference_server(model_creation_date=\"YYYY/MM/DD\")]'";
             return TokenStream::from(quote! { compile_error!(#err_msg) });
         }
     };

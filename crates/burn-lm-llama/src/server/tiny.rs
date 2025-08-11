@@ -33,7 +33,7 @@ pub struct TinyLlamaServerConfig {
 #[derive(InferenceServer, Clone, Default, Debug)]
 #[inference_server(
     model_name = "TinyLlama",
-    model_creation_date = "05/01/2024",
+    model_creation_date = "30/12/2023",
     owned_by = "Tracel Technologies Inc."
 )]
 pub struct TinyLlamaServer<B: Backend> {

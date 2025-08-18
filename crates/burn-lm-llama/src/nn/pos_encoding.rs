@@ -6,7 +6,7 @@ use burn_lm_inference::Backend;
 /// Manages shifting of precomputed frequency tables when the sequence length exceeds
 /// the initially allocated range. Used to avoid recomputing RoPE values on-the-fly
 /// while maintaining correct positional alignment across decoding steps.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct PositionalEncodingState<B: Backend> {
     /// Rotary positional encoding (RoPE).
     pub rope: RotaryEncoding<B>,

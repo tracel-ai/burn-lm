@@ -179,9 +179,15 @@ impl LlamaConfig {
             .init::<B, Tiktoken>(device)?;
 
         let recorder = NamedMpkFileRecorder::<HalfPrecisionSettings>::new();
+        // println!("Loading from file {checkpoint:?}");
         let llama = llama
             .load(checkpoint, &recorder)
             .map_err(|err| format!("Failed to load pre-trained Llama model.\nError: {err}"))?;
+
+         llama
+             .clone()
+             .save("/tmp/llama32_col", &recorder)
+             .map_err(|err| format!("Failed to save pre-trained Llama model.\nError: {err}"))?;
 
         Ok(llama)
     }
@@ -201,6 +207,7 @@ impl LlamaConfig {
             .init::<B, Tiktoken>(device)?;
 
         let recorder = NamedMpkFileRecorder::<HalfPrecisionSettings>::new();
+
         let llama = llama
             .load(checkpoint, &recorder)
             .map_err(|err| format!("Failed to load pre-trained Llama model.\nError: {err}"))?;
@@ -299,7 +306,7 @@ impl LlamaConfig {
 }
 
 /// Meta Llama large language model and tokenizer.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Llama<B: Backend, T: Tokenizer> {
     /// The tokenizer.
     pub tokenizer: T,

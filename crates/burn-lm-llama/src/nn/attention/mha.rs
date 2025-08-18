@@ -1,5 +1,5 @@
 use burn::{
-    nn::{Linear, LinearConfig, RotaryEncoding},
+    nn::{Linear, LinearConfig, LinearLayout, RotaryEncoding},
     prelude::*,
     tensor::activation::softmax,
 };
@@ -195,15 +195,19 @@ impl MultiHeadAttentionConfig {
 
         let wq = LinearConfig::new(self.d_model, self.n_heads * head_dim)
             .with_bias(false)
+            .with_layout(LinearLayout::Col)
             .init(device);
         let wk = LinearConfig::new(self.d_model, self.n_kv_heads * head_dim)
             .with_bias(false)
+            .with_layout(LinearLayout::Col)
             .init(device);
         let wv = LinearConfig::new(self.d_model, self.n_kv_heads * head_dim)
             .with_bias(false)
+            .with_layout(LinearLayout::Col)
             .init(device);
         let wo = LinearConfig::new(self.n_heads * head_dim, self.d_model)
             .with_bias(false)
+            .with_layout(LinearLayout::Col)
             .init(device);
 
         MultiHeadAttention {

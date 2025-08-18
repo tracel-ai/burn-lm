@@ -1,7 +1,7 @@
 use burn::{
     config::Config,
     module::Module,
-    nn::{Embedding, EmbeddingConfig, Linear, LinearConfig, RmsNorm, RmsNormConfig},
+    nn::{Embedding, EmbeddingConfig, Linear, LinearConfig, LinearLayout, RmsNorm, RmsNormConfig},
     tensor::{backend::Backend, Bool, Device, Int, Tensor},
 };
 
@@ -60,6 +60,7 @@ impl TransformerConfig {
             .init(device);
         let output = LinearConfig::new(self.d_model, self.vocab_size)
             .with_bias(false)
+            .with_layout(LinearLayout::Col)
             .init(device);
 
         Transformer {

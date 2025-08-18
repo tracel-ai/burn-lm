@@ -19,9 +19,7 @@ async fn main() -> anyhow::Result<()> {
 
     match args.command {
         Command::Book(book_args) => book_args.parse(),
-        _ => {
-            dispatch_base_commands(args)
-        },
+        _ => dispatch_base_commands(args),
     }?;
 
     let duration = start.elapsed();

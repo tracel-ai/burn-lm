@@ -1,6 +1,6 @@
 use burn::config::Config;
 use burn::module::Module;
-use burn::nn::{Linear, LinearConfig, SwiGlu, SwiGluConfig};
+use burn::nn::{Linear, LinearConfig, LinearLayout, SwiGlu, SwiGluConfig};
 use burn::tensor::backend::Backend;
 use burn::tensor::{Device, Tensor};
 
@@ -30,6 +30,7 @@ impl FeedForwardConfig {
             .init(device);
         let w2 = LinearConfig::new(self.hidden_size, self.d_model)
             .with_bias(false)
+            .with_layout(LinearLayout::Col)
             .init(device);
 
         FeedForward { swiglu, w2 }

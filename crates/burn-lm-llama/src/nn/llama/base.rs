@@ -184,10 +184,10 @@ impl LlamaConfig {
             .load(checkpoint, &recorder)
             .map_err(|err| format!("Failed to load pre-trained Llama model.\nError: {err}"))?;
 
-         llama
-             .clone()
-             .save("/tmp/llama32_col", &recorder)
-             .map_err(|err| format!("Failed to save pre-trained Llama model.\nError: {err}"))?;
+        // llama
+        //     .clone()
+        //     .save("/tmp/llama32_col", &recorder)
+        //     .map_err(|err| format!("Failed to save pre-trained Llama model.\nError: {err}"))?;
 
         Ok(llama)
     }

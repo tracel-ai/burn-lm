@@ -24,6 +24,8 @@ mod tests {
     pub type TestBackend = burn::backend::LibTorch<f32>;
     #[cfg(feature = "test-wgpu")]
     pub type TestBackend = burn::backend::Wgpu<f32, i32>;
+    #[cfg(feature = "test-vulkan")]
+    pub type TestBackend = burn::backend::Vulkan<f32, i32>;
 
     pub type TestTensor<const D: usize> = burn::tensor::Tensor<TestBackend, D>;
 }

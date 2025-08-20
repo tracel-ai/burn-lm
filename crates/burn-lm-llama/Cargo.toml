@@ -44,6 +44,12 @@ test-wgpu = [
     # "burn/autotune-checks",
     "test-non-default",
 ]
+test-vulkan = [
+    "burn/vulkan",
+    "burn/default",
+    # "burn/autotune-checks",
+    "test-non-default",
+]
 
 [dependencies]
 burn = { workspace = true, features = [

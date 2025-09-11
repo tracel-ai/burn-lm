@@ -331,7 +331,7 @@ impl InferenceServer for Llama323bInstructServer<InferenceBackend> {
 
 #[derive(InferenceServer, Clone, Debug)]
 #[inference_server(
-    model_name = "Llama 3.2 (1B Instruct 4-bit quantized)",
+    model_name = "Llama 3.2 (1BQ4 Instruct)",
     model_cli_param_name = "llama32-q4",
     model_creation_date = "2024/09/25",
     created_by = "Meta"

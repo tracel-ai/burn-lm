@@ -4,7 +4,7 @@ use burn::nn::{Linear, LinearConfig, SwiGlu, SwiGluConfig};
 use burn::tensor::backend::Backend;
 use burn::tensor::{Device, Tensor};
 
-#[derive(Config)]
+#[derive(Config, Debug)]
 /// Configuration to create a [feed-forward transformation network](FeedForward).
 pub struct FeedForwardConfig {
     /// The size of the model.

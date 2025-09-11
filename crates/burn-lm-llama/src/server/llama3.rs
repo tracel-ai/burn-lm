@@ -329,6 +329,74 @@ impl InferenceServer for Llama323bInstructServer<InferenceBackend> {
     }
 }
 
+#[derive(InferenceServer, Clone, Debug)]
+#[inference_server(
+    model_name = "Llama 3.2 (1B Instruct 4-bit quantized)",
+    model_cli_param_name = "llama32-q4",
+    model_creation_date = "2024/09/25",
+    created_by = "Meta"
+)]
+pub struct Llama321bInstructQ4Server<B: Backend> {
+    config: Llama3ServerConfig,
+    server: Llama3BaseServer<B>,
+}
+
+impl<B: Backend> Default for Llama321bInstructQ4Server<B> {
+    fn default() -> Self {
+        Self {
+            config: Llama3ServerConfig::default(),
+            server: Llama3BaseServer::<B>::new(LlamaVersion::Llama321bInstructQ4FB32),
+        }
+    }
+}
+
+impl InferenceServer for Llama321bInstructQ4Server<InferenceBackend> {
+    fn downloader(&mut self) -> Option<fn() -> InferenceResult<Option<Stats>>> {
+        fn downloader() -> InferenceResult<Option<Stats>> {
+            llama_downloader(
+                LlamaVersion::Llama321bInstructQ4FB32,
+                Llama321bInstructServer::<InferenceBackend>::model_name(),
+            )
+        }
+        Some(downloader)
+    }
+
+    fn is_downloaded(&mut self) -> bool {
+        let model = LlamaVersion::Llama321bInstructQ4FB32.pretrained();
+        model.is_downloaded()
+    }
+
+    fn deleter(&mut self) -> Option<fn() -> InferenceResult<Option<Stats>>> {
+        fn deleter() -> InferenceResult<Option<Stats>> {
+            llama_deleter(
+                LlamaVersion::Llama321bInstructQ4FB32,
+                Llama321bInstructServer::<InferenceBackend>::model_name(),
+            )
+        }
+        Some(deleter)
+    }
+
+    fn load(&mut self) -> InferenceResult<Option<Stats>> {
+        self.server.load(&self.config)
+    }
+
+    fn is_loaded(&mut self) -> bool {
+        self.server.is_loaded()
+    }
+
+    fn unload(&mut self) -> InferenceResult<Option<Stats>> {
+        self.server.unload(Self::model_name())
+    }
+
+    fn run_job(&mut self, job: InferenceJob) -> InferenceResult<Stats> {
+        self.server.run_job(job, &self.config)
+    }
+
+    fn clear_state(&mut self) -> InferenceResult<()> {
+        self.server.clear_state()
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct Llama3BaseServer<B: Backend> {
     model: Option<Arc<Mutex<Llama<B, Tiktoken>>>>,
@@ -476,6 +544,12 @@ impl Llama3BaseServer<InferenceBackend> {
                 )
                 .unwrap(),
                 LlamaVersion::Llama321bInstruct => LlamaConfig::llama3_2_1b_pretrained::<
+                    InferenceBackend,
+                >(
+                    config.max_seq_len, &INFERENCE_DEVICE
+                )
+                .unwrap(),
+                LlamaVersion::Llama321bInstructQ4FB32 => LlamaConfig::llama3_2_1b_pretrained_q4::<
                     InferenceBackend,
                 >(
                     config.max_seq_len, &INFERENCE_DEVICE

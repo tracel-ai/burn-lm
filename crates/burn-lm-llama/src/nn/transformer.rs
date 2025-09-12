@@ -16,7 +16,7 @@ use crate::{
 use super::pos_encoding::PositionalEncodingState;
 
 /// Configuration to create a Llama [decoder-only transformer](Transformer).
-#[derive(Config)]
+#[derive(Config, Debug)]
 pub struct TransformerConfig {
     /// The size of the vocabulary.
     pub vocab_size: usize,
@@ -74,11 +74,12 @@ impl TransformerConfig {
 /// Llama decoder-only transformer.
 #[derive(Module, Debug)]
 pub struct Transformer<B: Backend> {
-    tok_embeddings: Embedding<B>,
-    layers: Vec<TransformerBlock<B>>,
-    norm: RmsNorm<B>,
+    pub tok_embeddings: Embedding<B>,
+    pub layers: Vec<TransformerBlock<B>>,
+    pub norm: RmsNorm<B>,
     // NOTE: Starting with Llama 3.2, the weights of the output layer are tied with the embedding
-    output: Linear<B>,
+    // TODO: tied weights, helps with reduced memory
+    pub output: Linear<B>,
 }
 
 #[derive(Clone, Debug)]
@@ -174,7 +175,7 @@ impl<B: Backend> Transformer<B> {
 }
 
 /// Configuration to create a [decoder-only transformer block](TransformerBlock).
-#[derive(Config)]
+#[derive(Config, Debug)]
 pub struct TransformerBlockConfig {
     /// The number of transformer blocks.
     pub n_layers: usize,

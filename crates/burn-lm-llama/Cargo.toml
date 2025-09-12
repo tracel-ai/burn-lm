@@ -50,7 +50,9 @@ burn = { workspace = true, features = [
     "std",
     "ndarray",
 ], default-features = false }
-burn-import = { workspace = true, optional = true }
+burn-import = { workspace = true, default-features = false, features = [
+    "pytorch",
+], optional = true }
 itertools = { version = "0.12.1", default-features = false, features = [
     "use_alloc",
 ] }

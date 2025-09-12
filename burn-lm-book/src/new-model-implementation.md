@@ -130,7 +130,7 @@ Burn provides a `#[derive(Config)]` macro that simplifies this process. It suppo
 Here's a minimal example:
 
 ```rust
-#[derive(Config)]
+#[derive(Config, Debug)]
 /// Configuration to create a [feed-forward transformation network](FeedForward).
 pub struct FeedForwardConfig {
     /// The size of the model.
@@ -159,7 +159,7 @@ hyperparameters, which are captured in a composite config:
 
 ```rust
 /// Configuration to create a Llama [decoder-only transformer](Transformer).
-#[derive(Config)]
+#[derive(Config, Debug)]
 pub struct TransformerConfig {
     /// The size of the vocabulary.
     pub vocab_size: usize,

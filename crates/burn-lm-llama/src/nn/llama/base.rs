@@ -2,10 +2,14 @@ use std::time::Instant;
 
 use burn::{
     config::Config,
-    module::Module,
+    module::{Module, Quantizer},
     nn::RotaryEncodingConfig,
     record::{FileRecorder, HalfPrecisionSettings, RecorderError},
-    tensor::{backend::Backend, Device, Int, Shape, Tensor, TensorData},
+    tensor::{
+        backend::Backend,
+        quantization::{Calibration, QuantScheme},
+        Device, Int, Shape, Tensor, TensorData,
+    },
 };
 
 use crate::{
@@ -33,6 +37,8 @@ pub enum LlamaVersion {
     #[default]
     /// Llama-3.2-1B-Instruct.
     Llama321bInstruct,
+    /// Llama-3.2-1B-Instruct 4-bit quantized with block size 32.
+    Llama321bInstructQ4FB32,
 }
 
 /// Tiny Llama model variants to load.
@@ -349,5 +355,31 @@ impl<B: Backend, T: Tokenizer> Llama<B, T> {
     /// Reset the model state (used between generations)
     pub fn reset(&mut self) {
         self.cache.reset()
+    }
+
+    /// Quantize the model weights.
+    pub fn quantize(mut self, scheme: QuantScheme) -> Self {
+        let calibration = Calibration::MinMax;
+        let mut quantizer = Quantizer {
+            calibration,
+            scheme,
+        };
+        let device = &self.model.devices()[0];
+
+        // TODO: improve module mapper usage for quantization (currently, this leads to additional memory usage)
+        // self.model = self.model.quantize_weights(&mut quantizer);
+
+        // Quantizing by layer reduces the peak memory usage
+        let mut layers = Vec::with_capacity(self.model.layers.len());
+        for layer in self.model.layers.drain(..) {
+            layers.push(layer.quantize_weights(&mut quantizer));
+        }
+        self.model.layers = layers;
+        B::memory_cleanup(device);
+
+        self.model.tok_embeddings = self.model.tok_embeddings.quantize_weights(&mut quantizer);
+        self.model.output = self.model.output.quantize_weights(&mut quantizer);
+
+        self
     }
 }

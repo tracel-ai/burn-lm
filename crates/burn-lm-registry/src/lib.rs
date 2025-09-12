@@ -25,6 +25,10 @@ pub type DynClients = HashMap<&'static str, Box<dyn InferencePlugin>>;
         server_type = "Llama323bInstructServer<InferenceBackend>",
     ),
     server(
+        crate_namespace = "burn_lm_llama::server::llama3",
+        server_type = "Llama321bInstructQ4Server<InferenceBackend>",
+    ),
+    server(
         crate_namespace = "burn_lm_llama::server::tiny",
         server_type = "TinyLlamaServer<InferenceBackend>",
     ),

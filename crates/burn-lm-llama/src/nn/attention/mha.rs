@@ -9,7 +9,7 @@ use crate::nn::pos_encoding::PositionalEncodingState;
 use super::kv_cache::KeyValueCache;
 
 /// Configuration to create a [multi-head attention](MultiHeadAttention) module.
-#[derive(Config)]
+#[derive(Config, Debug)]
 pub struct MultiHeadAttentionConfig {
     /// The size of the model.
     pub d_model: usize,

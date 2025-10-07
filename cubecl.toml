@@ -10,3 +10,6 @@ cache = "target"
 
 [memory]
 logger = { file = "/tmp/memory.log", level = "basic" }
+
+[streaming]
+max_streams = 1

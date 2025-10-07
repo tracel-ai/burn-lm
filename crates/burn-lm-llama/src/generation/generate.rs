@@ -80,16 +80,16 @@ impl<B: Backend, T: Tokenizer + 'static> Llama<B, T> {
                 .model
                 .forward(x, &mut self.cache, &self.pos_encoding, mask);
 
-            let [batch_size, seq_len, _vocab_size] = logits.dims();
+            let [batch_size, seq_len, vocab_size] = logits.dims();
             let mut next_token_logits = logits
                 .slice([0..batch_size, seq_len - 1..seq_len])
-                .squeeze(1); // [batch_size=1, vocab_size]
+                .reshape([batch_size, vocab_size]);
 
             if temperature > 0.0 {
                 next_token_logits = temperature_scaled_softmax(next_token_logits, temperature);
             };
 
-            let next_token = sampler.sample(next_token_logits).squeeze(0);
+            let next_token = sampler.sample(next_token_logits).reshape([batch_size]);
             // Update with the new generated token
             state.update(next_token);
 

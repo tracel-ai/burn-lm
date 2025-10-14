@@ -16,11 +16,11 @@ readme = "README.md"
 # For dev
 burn = { git = "https://github.com/tracel-ai/burn", features = [
     "std",
-], default-features = false, rev = "6e4863b39e6fbb7df9edd2b743d990877878f2b6" }
+], default-features = false, rev = "00bb44d34c88d054e6a1738ec31cfa7e94f9bbff" }
 burn-common = { git = "https://github.com/tracel-ai/burn", features = [
     "std",
-], default-features = false, rev = "6e4863b39e6fbb7df9edd2b743d990877878f2b6" }
-burn-import = { git = "https://github.com/tracel-ai/burn", default-features = false, rev = "6e4863b39e6fbb7df9edd2b743d990877878f2b6" }
+], default-features = false, rev = "00bb44d34c88d054e6a1738ec31cfa7e94f9bbff" }
+burn-import = { git = "https://github.com/tracel-ai/burn", default-features = false, rev = "00bb44d34c88d054e6a1738ec31cfa7e94f9bbff" }
 
 # For dev we use the local version of burn
 # burn = { path = "../burn/crates/burn", features = [

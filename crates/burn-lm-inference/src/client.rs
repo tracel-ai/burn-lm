@@ -86,16 +86,7 @@ where
     }
 
     fn load(&self) -> InferenceResult<Option<Stats>> {
-        cfg_if::cfg_if! {
-            if #[cfg(not(feature = "legacy-v018"))] {
-                let device = &crate::INFERENCE_DEVICE;
-                <crate::InferenceBackend as Backend>::memory_static_allocations(device, (), |_| {
-                    self.channel.load()
-                })
-            } else {
-                self.channel.load()
-            }
-        }
+        self.channel.load()
     }
 
     fn is_loaded(&self) -> bool {

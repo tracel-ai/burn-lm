@@ -7,3 +7,9 @@ logger = { file = "/tmp/autotune.log", level = "disabled" }
 [compilation]
 logger = { file = "/tmp/compilation.log", level = "disabled" }
 cache = "target"
+
+[memory]
+logger = { file = "/tmp/memory.log", level = "disabled" }
+
+[streaming]
+max_streams = 4

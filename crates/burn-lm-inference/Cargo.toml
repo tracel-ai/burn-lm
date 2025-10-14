@@ -27,20 +27,8 @@ candle-cpu = ["burn/candle", "selected-backend"]
 candle-cuda = ["burn/candle-cuda", "selected-backend"]
 candle-metal = ["burn/candle", "burn/metal", "selected-backend"]
 
-cuda = [
-    "burn/cuda",
-    "burn/default",
-    # The compilation cache really help for the CLI.
-    "burn/compilation-cache",
-    "selected-backend",
-]
-rocm = [
-    "burn/rocm",
-    "burn/default",
-    # The compilation cache really help for the CLI.
-    "burn/compilation-cache",
-    "selected-backend",
-]
+cuda = ["burn/cuda", "burn/default", "selected-backend"]
+rocm = ["burn/rocm", "burn/default", "selected-backend"]
 metal = ["burn/metal", "selected-backend"]
 libtorch = ["burn/tch", "selected-backend"]
 libtorch-cpu = ["burn/tch", "selected-backend"]

@@ -295,9 +295,11 @@ mod tests {
         let input = Tensor::arange(0..(batch_size * seq_length) as i64, &device)
             .reshape([batch_size, seq_length]);
 
+        TestBackend::sync(&device);
         let transformer = Reinitializer::new()
             .range_float(0.0, 5.0)
             .apply(transformer);
+
 
         let mask = cache.prepare(seq_length).unwrap();
         let output = transformer.forward(input, &mut cache, &rope, mask);

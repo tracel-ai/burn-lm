@@ -13,4 +13,5 @@ cache = "target"
 logger = { file = "/tmp/memory.log", level = "disabled" }
 
 [streaming]
+logger = { level = "disabled" }
 max_streams = 4

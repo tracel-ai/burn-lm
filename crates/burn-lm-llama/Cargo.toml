@@ -41,7 +41,7 @@ test-cuda = [
 test-wgpu = [
     "burn/wgpu",
     "burn/fusion",
-    # "burn/default",
+    "burn/default",
     # "burn/autotune-checks",
     "test-non-default",
 ]

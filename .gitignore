@@ -2,3 +2,4 @@ target
 tmp
 mprocs.log
 burnlm.config
+.DS_Store

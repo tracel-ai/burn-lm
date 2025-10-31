@@ -4,88 +4,113 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      dry-run-only:
+        description: "Run xtask publish in dry-run mode (no publish)"
+        type: boolean
+        required: false
+        default: false
 
 jobs:
+  check-version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: tracel-ai/github-actions/check-version@v5
+        with:
+          tag: ${{ github.ref_name }}
+          cargo_toml_path: Cargo.toml
 
   # burn-ml ------------------------------------------------------------------
 
   publish-burn-lm-macros:
-    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v3
+    needs:
+      - check-version
+    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v5
     with:
       crate: burn-lm-macros
+      dry-run-only: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run-only || false }}
     secrets:
       CRATES_IO_API_TOKEN: ${{ secrets.CRATES_IO_API_TOKEN }}
 
   publish-burn-lm-inference:
+    needs:
+      - publish-burn-lm-macros
     uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v3
     with:
       crate: burn-lm-inference
-    needs:
-      - publish-burn-lm-macros
+      dry-run-only: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run-only || false }}
     secrets:
       CRATES_IO_API_TOKEN: ${{ secrets.CRATES_IO_API_TOKEN }}
 
   publish-burn-lm-registry:
-    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v3
-    with:
-      crate: burn-lm-registry
     needs:
       - publish-burn-lm-parrot
       - publish-burn-lm-llama
       - publish-burn-lm-inference
       - publish-burn-lm-macros
+    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v3
+    with:
+      crate: burn-lm-registry
+      dry-run-only: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run-only || false }}
     secrets:
       CRATES_IO_API_TOKEN: ${{ secrets.CRATES_IO_API_TOKEN }}
 
   publish-burn-lm-cli:
-    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v3
-    with:
-      crate: burn-lm-cli
     needs:
       - publish-burn-lm-registry
       - publish-burn-lm-inference
+    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v3
+    with:
+      crate: burn-lm-cli
+      dry-run-only: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run-only || false }}
     secrets:
       CRATES_IO_API_TOKEN: ${{ secrets.CRATES_IO_API_TOKEN }}
 
   publish-burn-lm-http:
-    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v3
-    with:
-      crate: burn-lm-http
     needs:
       - publish-burn-lm-registry
       - publish-burn-lm-inference
+    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v3
+    with:
+      crate: burn-lm-http
+      dry-run-only: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run-only || false }}
     secrets:
       CRATES_IO_API_TOKEN: ${{ secrets.CRATES_IO_API_TOKEN }}
 
   # burn-lm does not depend on anything technically in its cargo.toml but
   # we want it to be the last crate to be published nonetheless
   publish-burn-lm:
-    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v3
-    with:
-      crate: burn-lm
     needs:
       - publish-burn-lm-cli
       - publish-burn-lm-http
       - publish-burn-lm-registry
+    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v3
+    with:
+      crate: burn-lm
+      dry-run-only: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run-only || false }}
     secrets:
       CRATES_IO_API_TOKEN: ${{ secrets.CRATES_IO_API_TOKEN }}
 
   # models -------------------------------------------------------------------
 
   publish-burn-lm-llama:
+    needs:
+      - publish-burn-lm-inference
     uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v3
     with:
       crate: burn-lm-llama
-    needs:
-      - publish-burn-lm-inference
+      dry-run-only: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run-only || false }}
     secrets:
       CRATES_IO_API_TOKEN: ${{ secrets.CRATES_IO_API_TOKEN }}
 
   publish-burn-lm-parrot:
+    needs:
+      - publish-burn-lm-inference
     uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v3
     with:
       crate: burn-lm-parrot
-    needs:
-      - publish-burn-lm-inference
+      dry-run-only: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run-only || false }}
     secrets:
       CRATES_IO_API_TOKEN: ${{ secrets.CRATES_IO_API_TOKEN }}

@@ -14,13 +14,13 @@ readme = "README.md"
 
 [workspace.dependencies]
 # For dev
-burn = { git = "https://github.com/tracel-ai/burn", features = [
-    "std",
-], default-features = false, rev = "5da68bf9c0450ae45a77416f8ea422d6e792e625" }
-burn-common = { git = "https://github.com/tracel-ai/burn", features = [
-    "std",
-], default-features = false, rev = "5da68bf9c0450ae45a77416f8ea422d6e792e625" }
-burn-import = { git = "https://github.com/tracel-ai/burn", default-features = false, rev = "5da68bf9c0450ae45a77416f8ea422d6e792e625" }
+# burn = { git = "https://github.com/tracel-ai/burn", features = [
+#     "std",
+# ], default-features = false, rev = "5da68bf9c0450ae45a77416f8ea422d6e792e625" }
+# burn-common = { git = "https://github.com/tracel-ai/burn", features = [
+#     "std",
+# ], default-features = false, rev = "5da68bf9c0450ae45a77416f8ea422d6e792e625" }
+# burn-import = { git = "https://github.com/tracel-ai/burn", default-features = false, rev = "5da68bf9c0450ae45a77416f8ea422d6e792e625" }
 
 # For dev we use the local version of burn
 # burn = { path = "../burn/crates/burn", features = [
@@ -33,11 +33,13 @@ burn-import = { git = "https://github.com/tracel-ai/burn", default-features = fa
 # burn-import = { path = "../burn/crates/burn-import" }
 
 # For release
-# burn = { version = "0.18.0", features = ["std"], default-features = false }
-# burn-import = { version = "0.18.0", default-features = false }
-# burn-common = { version = "0.18.0", features = [
-#     "std",
-# ], default-features = false }
+burn = { version = "=0.20.0-pre.3", features = [
+    "std",
+], default-features = false }
+burn-import = { version = "=0.20.0-pre.3", default-features = false }
+burn-common = { version = "=0.20.0-pre.3", features = [
+    "std",
+], default-features = false }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }

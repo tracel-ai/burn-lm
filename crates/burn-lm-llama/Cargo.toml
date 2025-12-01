@@ -49,6 +49,8 @@ test-wgpu = [
 burn = { workspace = true, features = [
     "std",
     "ndarray",
+    "network",
+    "dataset",
 ], default-features = false }
 burn-import = { workspace = true, default-features = false, features = [
     "pytorch",

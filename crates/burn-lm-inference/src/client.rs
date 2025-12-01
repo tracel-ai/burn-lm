@@ -101,7 +101,12 @@ where
             let device = &crate::INFERENCE_DEVICE;
             <crate::InferenceBackend as Backend>::memory_cleanup(device);
             // Force pending deallocations to complete
-            <crate::InferenceBackend as Backend>::sync(device);
+            <crate::InferenceBackend as Backend>::sync(device).map_err(|err| {
+                crate::InferenceError::UnloadError(
+                    self.model_name().to_string(),
+                    format!("{err:?}"),
+                )
+            })?;
         }
 
         result

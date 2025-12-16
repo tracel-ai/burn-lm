@@ -58,7 +58,7 @@ impl<B: Backend> Benchmark for TransformerBlockBenchmark<B> {
     }
 
     fn sync(&self) {
-        B::sync(&self.device).unwrap();
+        B::sync(&self.device);
     }
 }
 

@@ -20,10 +20,10 @@ burn = { git = "https://github.com/tracel-ai/burn", features = [
 burn-import = { git = "https://github.com/tracel-ai/burn", default-features = false, rev = "86b6e9d8083c1856f88351e61c59794a7787d2e8" }
 
 # For dev we use the local version of burn
-# burn = { path = "../burn-refactor/crates/burn", features = [
+# burn = { path = "../burn/crates/burn", features = [
 #     "std",
 # ], default-features = false }
-# burn-import = { path = "../burn-refactor/crates/burn-import", default-features = false }
+# burn-import = { path = "../burn/crates/burn-import", default-features = false }
 
 # For release
 # burn = { version = "=0.20.0-pre.4", features = [

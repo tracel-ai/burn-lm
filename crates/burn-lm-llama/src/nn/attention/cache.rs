@@ -1,5 +1,3 @@
-use std::ops::Range;
-
 use burn::tensor::{backend::Backend, Device, Tensor};
 
 /// Strategy for managing the autoregressive cache when its capacity is exceeded.
@@ -73,18 +71,12 @@ impl<const D: usize, B: Backend> AutoregressiveCache<B, D> {
                 indices_output.push(0..*shape);
             }
         }
-        self.cache.inplace(|cache| {
-            cache.slice_assign::<D, [Range<usize>; D]>(
-                indices_added_tokens.try_into().unwrap(),
-                tokens,
-            )
-        });
+        self.cache
+            .inplace(|cache| cache.slice_assign(indices_added_tokens.as_slice(), tokens));
 
         self.cur_seq_len = new_seq_len;
 
-        self.cache
-            .clone()
-            .slice::<D, [Range<usize>; D]>(indices_output.try_into().unwrap())
+        self.cache.clone().slice(indices_output.as_slice())
     }
 
     /// Prepare the cache by applying the configured strategy to make room for new tokens.
@@ -120,11 +112,10 @@ impl<const D: usize, B: Backend> AutoregressiveCache<B, D> {
         }
 
         self.cache.inplace(|cache| {
-            let prev_slice = cache.slice::<D, [Range<usize>; D]>(slices_prev.try_into().unwrap());
+            let prev_slice = cache.slice(slices_prev.as_slice());
             let new_cache = Tensor::empty(shape, &device);
 
-            new_cache
-                .slice_assign::<D, [Range<usize>; D]>(slices_curr.try_into().unwrap(), prev_slice)
+            new_cache.slice_assign(slices_curr.as_slice(), prev_slice)
         });
     }
 
@@ -151,11 +142,9 @@ impl<const D: usize, B: Backend> AutoregressiveCache<B, D> {
 
         // Shift tail -> head
         self.cache.inplace(|cache| {
-            let prev_slice = cache
-                .clone()
-                .slice::<D, [Range<usize>; D]>(slices_prev.try_into().unwrap());
+            let prev_slice = cache.clone().slice(slices_prev.as_slice());
 
-            cache.slice_assign::<D, [Range<usize>; D]>(slices_curr.try_into().unwrap(), prev_slice)
+            cache.slice_assign(slices_curr.as_slice(), prev_slice)
         });
     }
 

@@ -26,10 +26,9 @@ readme = "README.md"
 # burn-import = { path = "../burn/crates/burn-import", default-features = false }
 
 # For release
-burn = { version = "=0.20.0", features = [
-    "std",
-], default-features = false }
+burn = { version = "=0.20.0", features = ["std"], default-features = false }
 burn-import = { version = "=0.20.0", default-features = false }
+burn-store = { version = "=0.20.0", default-features = true }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }

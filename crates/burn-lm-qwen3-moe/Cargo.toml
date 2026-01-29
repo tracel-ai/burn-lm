@@ -1,0 +1,29 @@
+[package]
+name = "burn-lm-qwen3-moe"
+authors = ["nathanielsimard <nathaniel.simard.42@gmail.com>"]
+categories = []
+description = "Burn Large Models Engine - Macros."
+documentation = "https://docs.rs/burn-lm-qwen3-moe"
+repository = "https://github.com/tracel-ai/burn-lm"
+rust-version = "1.88"
+
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+readme.workspace = true
+
+[dependencies]
+burn = { workspace = true }
+burn-lm-inference = { path = "../burn-lm-inference", version = "0.0.1" }
+
+rand = { workspace = true }
+serde = { workspace = true }
+
+hf-hub = { version = "0.4.3", default-features = false, features = [
+    "ureq",
+    "tokio",
+    "rustls-tls",
+] }
+
+tracing = { workspace = true }
+burn-store = { workspace = true }

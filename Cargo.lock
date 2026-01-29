@@ -980,6 +980,7 @@ version = "0.0.1"
 dependencies = [
  "burn",
  "burn-lm-inference",
+ "burn-std",
  "burn-store",
  "hf-hub",
  "rand 0.9.2",

@@ -29,6 +29,7 @@ readme = "README.md"
 burn = { version = "=0.20.0", features = ["std"], default-features = false }
 burn-import = { version = "=0.20.0", default-features = false }
 burn-store = { version = "=0.20.0", default-features = true }
+burn-std = { version = "=0.20.0", default-features = true }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }

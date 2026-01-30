@@ -1,6 +1,8 @@
-use burn::nn::attention::MultiHeadAttention;
+use burn::module::Module;
 use burn::Tensor;
 use burn_lm_inference::Backend;
+
+#[derive(Module, Debug)]
 pub struct Attention<B: Backend> {
     q_proj: Tensor<B, 2>,
     k_proj: Tensor<B, 2>,

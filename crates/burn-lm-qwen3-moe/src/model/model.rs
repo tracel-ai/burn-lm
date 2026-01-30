@@ -1,42 +1,40 @@
-use burn::Tensor;
+use burn::{
+    module::Module,
+    nn::{Embedding, EmbeddingConfig, Linear, LinearConfig, RmsNorm, RmsNormConfig},
+    Tensor,
+};
 use burn_lm_inference::{Backend, InferenceError, InferenceResult};
 
 use crate::{error_wrapper::Wrap, model::decoder_layer::DecoderLayer};
 
+#[derive(Module, Debug)]
 pub struct Qwen3MoeModel<B: Backend> {
-    embed_tokens: Tensor<B, 2>,
-    norm: Tensor<B, 1>,
+    embed_tokens: Embedding<B>,
+
+    pub norm: RmsNorm<B>,
+    pub lm_head: Linear<B>,
     layers: Vec<DecoderLayer<B>>,
-    lm_head: Tensor<B, 2>,
-    cache: (),
+
+    cache: f32, // fixme just to satisfi module derive
 }
 type Tensors = std::collections::BTreeMap<String, burn_store::TensorSnapshot>;
 
 impl<B: Backend> Qwen3MoeModel<B> {
     pub(crate) fn new(
-        tensors: &Tensors,
         config: &super::config::Qwen3MoeConfig,
         device_mappings: Vec<super::basic_device_mapper::DeviceMapping<<B as Backend>::Device>>,
     ) -> Result<Self, burn_lm_inference::InferenceError> {
-        let embeddings = tensors
-            .get("model.embed_tokens.weight")
-            .ok_or(InferenceError::Custom(
-                "Could not find model.embed_tokens.weight".into(),
-            ))?;
-        let norm = tensors
-            .get("model.norm.weight")
-            .ok_or(InferenceError::Custom(
-                "Could not find model.norm.weight".into(),
-            ))?;
-        let lm_head = tensors.get("lm_head.weight").ok_or(InferenceError::Custom(
-            "Could not find lm_head.weight".into(),
-        ))?;
         let last_mapping = device_mappings.last().ok_or(InferenceError::Custom(
             "Device mappings cannot be empty".into(),
         ))?;
-        let embeddings = Tensor::from_data(embeddings.to_data().w()?, &last_mapping.device);
-        let norm = Tensor::from_data(norm.to_data().w()?, &last_mapping.device);
-        let lm_head = Tensor::from_data(lm_head.to_data().w()?, &last_mapping.device);
+        let hidden_size = config.base_config.hidden_size as usize;
+        let vocab_size = config.base_config.vocab_size as usize;
+        let embeddings = EmbeddingConfig::new(vocab_size, hidden_size).init(&last_mapping.device);
+
+        let norm =
+            RmsNormConfig::new(config.base_config.hidden_size as usize).init(&last_mapping.device);
+
+        let lm_head = LinearConfig::new(vocab_size, hidden_size).init(&last_mapping.device);
 
         let layers: Vec<_> = (0..config.base_config.num_hidden_layers - 1)
             .map(|layer| -> InferenceResult<DecoderLayer<B>> {
@@ -48,7 +46,7 @@ impl<B: Backend> Qwen3MoeModel<B> {
                         "No device mapping found for layer {}",
                         layer
                     )))?;
-                let layer = DecoderLayer::<B>::new(layer, &config, &tensors, &device)?;
+                let layer = DecoderLayer::<B>::new(layer, &config, &device)?;
                 Ok(layer)
             })
             .collect();
@@ -63,7 +61,7 @@ impl<B: Backend> Qwen3MoeModel<B> {
             norm: norm,
             layers: final_layers,
             lm_head: lm_head,
-            cache: (),
+            cache: 0.0,
         };
         Ok(model)
     }

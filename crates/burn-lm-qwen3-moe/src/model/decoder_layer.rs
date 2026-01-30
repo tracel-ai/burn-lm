@@ -1,8 +1,8 @@
-use burn::Tensor;
+use burn::{module::Module, Tensor};
 use burn_lm_inference::{Backend, InferenceResult};
 
 use crate::model::{attention::Attention, moe::SparseMoeLayer};
-
+#[derive(Module, Debug)]
 pub struct DecoderLayer<B: Backend> {
     attention: Attention<B>,
     input_layer_norm: Tensor<B, 1>,
@@ -14,7 +14,6 @@ impl<B: Backend> DecoderLayer<B> {
     pub(crate) fn new(
         layer: u32,
         config: &super::config::Qwen3MoeConfig,
-        tensors: &std::collections::BTreeMap<String, burn_store::TensorSnapshot>,
         device: &<B as Backend>::Device,
     ) -> InferenceResult<Self> {
         let total_experts = config.base_config.num_experts;

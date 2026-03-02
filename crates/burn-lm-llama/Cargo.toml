@@ -25,7 +25,7 @@ llama3 = ["dep:tiktoken-rs", "dep:rustc-hash", "dep:base64"]
 tiny = ["dep:tokenizers"]
 
 # To import pytorch weights
-import = ["burn-import"]
+import = ["burn-store"]
 
 # Feature flags for testing
 test-non-default = []
@@ -52,7 +52,7 @@ burn = { workspace = true, features = [
     "network",
     "dataset",
 ], default-features = false }
-burn-import = { workspace = true, default-features = false, features = [
+burn-store = { workspace = true, default-features = false, features = [
     "pytorch",
 ], optional = true }
 itertools = { version = "0.12.1", default-features = false, features = [

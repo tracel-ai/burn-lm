@@ -1,5 +1,3 @@
-use std::time::Instant;
-
 use burn::{
     config::Config,
     module::{Module, Quantizer},
@@ -11,6 +9,7 @@ use burn::{
         Device, Int, Shape, Tensor, TensorData,
     },
 };
+use std::time::Instant;
 
 use crate::{
     nn::{

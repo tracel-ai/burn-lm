@@ -1,7 +1,9 @@
 use burn::{
     config::Config,
     module::Module,
-    nn::{Embedding, EmbeddingConfig, Linear, LinearConfig, RmsNorm, RmsNormConfig},
+    nn::{
+        Embedding, EmbeddingConfig, Linear, LinearConfig, RmsNorm, RmsNormConfig, RotaryEncoding,
+    },
     tensor::{backend::Backend, Bool, Device, Int, Tensor},
 };
 
@@ -82,6 +84,41 @@ pub struct Transformer<B: Backend> {
     pub output: Linear<B>,
 }
 
+impl<B: Backend> Transformer<B> {
+    pub fn forward(
+        &self,
+        input: Tensor<B, 2, Int>,
+        cache: &mut TransformerCache<B>,
+        pos_encoding: &PositionalEncodingState<B>,
+        mask: Option<Tensor<B, 4, Bool>>,
+    ) -> Tensor<B, 3> {
+        let mut h = self.tok_embeddings.forward(input);
+
+        for (layer, c) in self.layers.iter().zip(cache.layers.iter_mut()) {
+            h = layer.forward(h, c, pos_encoding, mask.clone());
+        }
+
+        let h = self.norm.forward(h);
+        self.output.forward(h)
+    }
+
+    /// Forward with non-autoregressive and creates a mask for training.
+    pub fn forward_train(
+        &self,
+        input: Tensor<B, 2, Int>,
+        rope: &RotaryEncoding<B>,
+    ) -> Tensor<B, 3> {
+        let mut h = self.tok_embeddings.forward(input);
+
+        for layer in self.layers.iter() {
+            h = layer.forward_train(h, rope);
+        }
+
+        let h = self.norm.forward(h);
+        self.output.forward(h)
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct TransformerCache<B: Backend> {
     layers: Vec<KeyValueCache<B>>,
@@ -155,25 +192,6 @@ impl<B: Backend> TransformerCache<B> {
     }
 }
 
-impl<B: Backend> Transformer<B> {
-    pub fn forward(
-        &self,
-        input: Tensor<B, 2, Int>,
-        cache: &mut TransformerCache<B>,
-        pos_encoding: &PositionalEncodingState<B>,
-        mask: Option<Tensor<B, 4, Bool>>,
-    ) -> Tensor<B, 3> {
-        let mut h = self.tok_embeddings.forward(input);
-
-        for (layer, c) in self.layers.iter().zip(cache.layers.iter_mut()) {
-            h = layer.forward(h, c, pos_encoding, mask.clone());
-        }
-
-        let h = self.norm.forward(h);
-        self.output.forward(h)
-    }
-}
-
 /// Configuration to create a [decoder-only transformer block](TransformerBlock).
 #[derive(Config, Debug)]
 pub struct TransformerBlockConfig {
@@ -241,6 +259,15 @@ impl<B: Backend> TransformerBlock<B> {
                 pos_encoding,
                 mask,
             );
+        h.clone() + self.feed_forward.forward(self.ffn_norm.forward(h))
+    }
+
+    /// Forward with non-autoregressive and a required mask for training.
+    pub fn forward_train(&self, input: Tensor<B, 3>, rope: &RotaryEncoding<B>) -> Tensor<B, 3> {
+        let h = input.clone()
+            + self
+                .attention
+                .forward_masked(self.attention_norm.forward(input), rope);
         h.clone() + self.feed_forward.forward(self.ffn_norm.forward(h))
     }
 }

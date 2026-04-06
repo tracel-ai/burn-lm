@@ -35,6 +35,10 @@ pub type DynClients = HashMap<&'static str, Box<dyn InferencePlugin>>;
     server(
         crate_namespace = "burn_lm_parrot",
         server_type = "ParrotServer<InferenceBackend>",
+    ),
+    server(
+        crate_namespace = "burn_lm_qwen3_moe",
+        server_type = "Qwen3MoeServer<InferenceBackend>",
     )
 )]
 #[derive(Debug)]

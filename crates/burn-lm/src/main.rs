@@ -164,6 +164,7 @@ fn main() {
         // execute burnlm
         let run_status = Command::new("cargo")
             .args(run_args)
+            .env("RUST_LOG", "debug")
             .status()
             .expect("burnlm command should execute successfully");
         exit_code = run_status.code().unwrap_or(1);

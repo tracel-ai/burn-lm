@@ -17,4 +17,6 @@ pub enum InferenceError {
     UnloadError(String, String),
     #[error("Input sequence length ({0} tokens) exceeds maximum context window ({1} tokens). Please shorten your input or increase the maximum context window.")]
     ContextLengthExceeded(usize, usize),
+    #[error("Custom error{0}")]
+    Custom(String),
 }

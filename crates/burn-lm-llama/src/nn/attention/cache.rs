@@ -55,14 +55,14 @@ impl<const D: usize, B: Backend> AutoregressiveCache<B, D> {
     /// - output: `[batch_size, num_heads, seq_len_previous + seq_len_input, d_model]`
     pub fn append(&mut self, tokens: Tensor<B, D>) -> Tensor<B, D> {
         let shape = tokens.shape();
-        let seq_len_input = shape.dims[self.seq_dim];
+        let seq_len_input = shape[self.seq_dim];
 
         let new_seq_len = self.cur_seq_len + seq_len_input;
 
-        let mut indices_added_tokens = Vec::with_capacity(shape.dims.len());
-        let mut indices_output = Vec::with_capacity(shape.dims.len());
+        let mut indices_added_tokens = Vec::with_capacity(shape.rank());
+        let mut indices_output = Vec::with_capacity(shape.rank());
 
-        for (i, shape) in shape.dims.iter().enumerate() {
+        for (i, shape) in shape.iter().enumerate() {
             if i == self.seq_dim {
                 indices_added_tokens.push(self.cur_seq_len..new_seq_len);
                 indices_output.push(0..new_seq_len);
@@ -98,10 +98,10 @@ impl<const D: usize, B: Backend> AutoregressiveCache<B, D> {
         let shape = self.cache.shape();
         let device = self.cache.device();
 
-        let mut slices_prev = Vec::with_capacity(shape.dims.len());
-        let mut slices_curr = Vec::with_capacity(shape.dims.len());
+        let mut slices_prev = Vec::with_capacity(shape.rank());
+        let mut slices_curr = Vec::with_capacity(shape.rank());
 
-        for (i, shape) in shape.dims.iter().enumerate() {
+        for (i, shape) in shape.iter().enumerate() {
             if i == self.seq_dim {
                 slices_prev.push(num_removed..old_cur_seq_len);
                 slices_curr.push(0..self.cur_seq_len);
@@ -127,10 +127,10 @@ impl<const D: usize, B: Backend> AutoregressiveCache<B, D> {
 
         let shape = self.cache.shape();
 
-        let mut slices_prev = Vec::with_capacity(shape.dims.len());
-        let mut slices_curr = Vec::with_capacity(shape.dims.len());
+        let mut slices_prev = Vec::with_capacity(shape.rank());
+        let mut slices_curr = Vec::with_capacity(shape.rank());
 
-        for (i, shape) in shape.dims.iter().enumerate() {
+        for (i, shape) in shape.iter().enumerate() {
             if i == self.seq_dim {
                 slices_prev.push(num_shifted..old_cur_seq_len);
                 slices_curr.push(0..self.cur_seq_len);

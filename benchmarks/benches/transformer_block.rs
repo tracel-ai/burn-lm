@@ -78,7 +78,7 @@ fn bench<B: Backend>(device: &B::Device) -> Vec<BenchmarkResult> {
 
     let mut results = Vec::new();
 
-    for (batch_size, seq_length) in [(32, 1), (1, max_seq_length)] {
+    for (batch_size, seq_length) in [(1, 1), (32, 1), (1, max_seq_length)] {
         for config in [
             Config {
                 n_heads: 32,

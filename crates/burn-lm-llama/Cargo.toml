@@ -17,9 +17,11 @@ readme.workspace = true
 
 
 [features]
-default = ["pretrained", "inference-server"]
+# default = ["pretrained", "inference-server"]
+default = ["pretrained", "inference-server", "training"]
 inference-server = ["burn-lm-inference"]
 pretrained = ["burn/network", "dep:dirs"]
+training = ["burn/train"]
 
 llama3 = ["dep:tiktoken-rs", "dep:rustc-hash", "dep:base64"]
 tiny = ["dep:tokenizers"]
@@ -78,6 +80,8 @@ rand = { workspace = true, default-features = false, features = [
 ] } # std_rng is for no_std
 
 burn-lm-inference = { path = "../burn-lm-inference", optional = true, version = "0.0.1" }
+
+tracing.workspace = true
 
 [dev-dependencies]
 clap = { version = "4.5.4", features = ["derive"] }

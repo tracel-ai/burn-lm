@@ -951,6 +951,7 @@ dependencies = [
  "serde",
  "tiktoken-rs",
  "tokenizers",
+ "tracing",
 ]
 
 [[package]]

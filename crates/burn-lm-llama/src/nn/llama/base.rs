@@ -4,6 +4,7 @@ use burn::{
     record::HalfPrecisionSettings,
     tensor::{backend::Backend, Device},
 };
+use std::time::Instant;
 
 use crate::{
     inference,

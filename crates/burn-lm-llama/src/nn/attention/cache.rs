@@ -59,8 +59,8 @@ impl<const D: usize, B: Backend> AutoregressiveCache<B, D> {
 
         let new_seq_len = self.cur_seq_len + seq_len_input;
 
-        let mut indices_added_tokens = Vec::with_capacity(shape.rank());
-        let mut indices_output = Vec::with_capacity(shape.rank());
+        let mut indices_added_tokens = Vec::with_capacity(shape.len());
+        let mut indices_output = Vec::with_capacity(shape.len());
 
         for (i, shape) in shape.iter().enumerate() {
             if i == self.seq_dim {
@@ -98,8 +98,8 @@ impl<const D: usize, B: Backend> AutoregressiveCache<B, D> {
         let shape = self.cache.shape();
         let device = self.cache.device();
 
-        let mut slices_prev = Vec::with_capacity(shape.rank());
-        let mut slices_curr = Vec::with_capacity(shape.rank());
+        let mut slices_prev = Vec::with_capacity(shape.len());
+        let mut slices_curr = Vec::with_capacity(shape.len());
 
         for (i, shape) in shape.iter().enumerate() {
             if i == self.seq_dim {
@@ -127,8 +127,8 @@ impl<const D: usize, B: Backend> AutoregressiveCache<B, D> {
 
         let shape = self.cache.shape();
 
-        let mut slices_prev = Vec::with_capacity(shape.rank());
-        let mut slices_curr = Vec::with_capacity(shape.rank());
+        let mut slices_prev = Vec::with_capacity(shape.len());
+        let mut slices_curr = Vec::with_capacity(shape.len());
 
         for (i, shape) in shape.iter().enumerate() {
             if i == self.seq_dim {

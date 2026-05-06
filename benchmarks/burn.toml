@@ -1,8 +1,11 @@
-[profiling]
+[fusion]
+logger = { level = "full", stdout = true }
+
+[cubecl.profiling]
 logger = { file = "/tmp/profiling.log", level = "disabled" }
 
-[autotune]
+[cubecl.autotune]
 logger = { file = "/tmp/autotune.log", level = "disabled" }
 
-[compilation]
+[cubecl.compilation]
 logger = { file = "/tmp/compilation.log", level = "disabled" }

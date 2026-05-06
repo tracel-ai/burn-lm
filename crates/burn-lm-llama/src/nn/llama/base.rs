@@ -1,11 +1,3 @@
-use burn::{
-    config::Config,
-    nn::RotaryEncodingConfig,
-    record::HalfPrecisionSettings,
-    tensor::{backend::Backend, Device},
-};
-use std::time::Instant;
-
 use crate::{
     inference,
     nn::{
@@ -13,6 +5,12 @@ use crate::{
         transformer::{TransformerCache, TransformerConfig},
     },
     tokenizer::Tokenizer,
+};
+use burn::{
+    config::Config,
+    nn::RotaryEncodingConfig,
+    record::HalfPrecisionSettings,
+    tensor::{backend::Backend, Device},
 };
 
 #[cfg(feature = "tiny")]

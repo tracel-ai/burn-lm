@@ -23,9 +23,13 @@ readme = "README.md"
 # burn = { path = "../burn/crates/burn", default-features = false }
 # burn-store = { path = "../burn/crates/burn-store", default-features = false }
 
+# For dev we use the local version of burn
+# burn = { path = "../burn/crates/burn", default-features = false }
+# burn-store = { path = "../burn/crates/burn-store", default-features = false }
+
 # For release
-burn = { version = "=0.21.0-pre.3", default-features = false }
-burn-store = { version = "=0.21.0-pre.3", default-features = false }
+burn = { version = "=0.21.0-pre.5", default-features = false }
+burn-store = { version = "=0.21.0-pre.5", default-features = false }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
@@ -60,10 +64,10 @@ async-trait = "0.1.88"
 tokio = { version = "1.42", features = ["full"] }
 tokio-stream = "0.1"
 tower-http = { version = "0.6", features = [
-    "fs",
-    "cors",
-    "trace",
-    "request-id",
+"fs",
+"cors",
+"trace",
+"request-id",
 ] }
 utoipa = { version = "5.3", features = ["axum_extras"] }
 utoipa-swagger-ui = { version = "9.0", features = ["axum"] }

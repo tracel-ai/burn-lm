@@ -6,3 +6,6 @@ pub mod pretrained;
 
 #[cfg(feature = "import")]
 pub mod import;
+
+pub mod inference;
+pub mod training;

@@ -1,7 +1,7 @@
 use std::time::Instant;
 
 use super::{GenerationContext, Sampler};
-use crate::{tokenizer::Tokenizer, Llama};
+use crate::{inference::Llama, tokenizer::Tokenizer};
 use burn::{prelude::*, tensor::activation::softmax};
 use burn_lm_inference::GeneratedItemEmitter;
 

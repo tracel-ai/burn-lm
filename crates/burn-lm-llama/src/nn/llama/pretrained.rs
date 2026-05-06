@@ -1,6 +1,6 @@
 use burn::prelude::*;
 
-use super::{Llama, LlamaConfig, LlamaVersion, TinyLlamaVersion};
+use super::{inference::Llama, LlamaConfig, LlamaVersion, TinyLlamaVersion};
 
 #[cfg(feature = "llama3")]
 use crate::tokenizer::Tiktoken;

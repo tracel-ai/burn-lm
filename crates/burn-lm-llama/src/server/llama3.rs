@@ -4,9 +4,10 @@ use std::sync::{Arc, Mutex};
 
 use crate::{
     generation::{GenerationError, Sampler, TopP},
+    inference::Llama,
     pretrained::ModelMeta,
     tokenizer::Tiktoken,
-    Llama, LlamaConfig, LlamaVersion,
+    LlamaConfig, LlamaVersion,
 };
 use burn::prelude::Backend;
 use burn_lm_inference::{InferenceJob, *};

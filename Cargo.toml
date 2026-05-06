@@ -14,8 +14,14 @@ readme = "README.md"
 
 [workspace.dependencies]
 # For dev
+# burn = { git = "https://github.com/tracel-ai/burn", features = [
+#     "std",
+# ], default-features = false, rev = "86b6e9d8083c1856f88351e61c59794a7787d2e8" }
+# burn-store = { git = "https://github.com/tracel-ai/burn", default-features = false, rev = "86b6e9d8083c1856f88351e61c59794a7787d2e8" }
+
+# For dev we use the local version of burn
 # burn = { path = "../burn/crates/burn", default-features = false }
-# burn-import = { path = "../burn/crates/burn-import", default-features = false }
+# burn-store = { path = "../burn/crates/burn-store", default-features = false }
 
 # For dev we use the local version of burn
 # burn = { path = "../burn/crates/burn", default-features = false }
@@ -58,10 +64,10 @@ async-trait = "0.1.88"
 tokio = { version = "1.42", features = ["full"] }
 tokio-stream = "0.1"
 tower-http = { version = "0.6", features = [
-    "fs",
-    "cors",
-    "trace",
-    "request-id",
+"fs",
+"cors",
+"trace",
+"request-id",
 ] }
 utoipa = { version = "5.3", features = ["axum_extras"] }
 utoipa-swagger-ui = { version = "9.0", features = ["axum"] }

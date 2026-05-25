@@ -89,7 +89,7 @@ tempfile = "3.16"
 lazy_static = "1.5"
 
 # Random & Bytes manipulation
-rand = { version = "0.9", default-features = false }
+rand = { version = "0.10", default-features = false }
 base64 = { version = "0.22" }
 rustc-hash = { version = "1.1" }
 

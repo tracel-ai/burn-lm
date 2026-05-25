@@ -1,4 +1,4 @@
-use rand::Rng;
+use rand::RngExt;
 use serde::Deserialize;
 use std::sync::{Arc, Mutex};
 

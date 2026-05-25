@@ -987,7 +987,7 @@ dependencies = [
  "clap",
  "dotenvy",
  "lazy_static",
- "rand 0.9.4",
+ "rand 0.10.1",
  "rstest 0.24.0",
  "serde",
  "serde_json",
@@ -1031,7 +1031,7 @@ dependencies = [
  "clap",
  "dirs 5.0.1",
  "itertools 0.12.1",
- "rand 0.9.4",
+ "rand 0.10.1",
  "rustc-hash 1.1.0",
  "serde",
  "tiktoken-rs",
@@ -1056,7 +1056,7 @@ version = "0.0.1"
 dependencies = [
  "burn",
  "burn-lm-inference",
- "rand 0.9.4",
+ "rand 0.10.1",
  "serde",
 ]
 

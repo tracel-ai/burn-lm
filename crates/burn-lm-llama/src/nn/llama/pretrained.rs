@@ -166,10 +166,10 @@ impl LlamaConfig {
     /// - `max_seq_len` - The maximum sequence length for input text.
     /// - `device` - The device to load the model on.
     #[cfg(feature = "llama3")]
-    pub fn llama3_2_3b_pretrained<B: Backend>(
+    pub fn llama3_2_3b_pretrained(
         max_seq_len: usize,
-        device: &Device<B>,
-    ) -> Result<Llama<B, Tiktoken>, String> {
+        device: &Device,
+    ) -> Result<Llama<Tiktoken>, String> {
         // Llama-3.2 models support context length up to 128K tokens.
         check_context_length(max_seq_len, 128 * 1024);
 
@@ -196,10 +196,10 @@ impl LlamaConfig {
     /// - `max_seq_len` - The maximum sequence length for input text.
     /// - `device` - The device to load the model on.
     #[cfg(feature = "llama3")]
-    pub fn llama3_2_1b_pretrained<B: Backend>(
+    pub fn llama3_2_1b_pretrained(
         max_seq_len: usize,
-        device: &Device<B>,
-    ) -> Result<Llama<B, Tiktoken>, String> {
+        device: &Device,
+    ) -> Result<Llama<Tiktoken>, String> {
         // Llama-3.2 models support context length up to 128K tokens.
         check_context_length(max_seq_len, 128 * 1024);
 
@@ -226,10 +226,10 @@ impl LlamaConfig {
     /// - `max_seq_len` - The maximum sequence length for input text.
     /// - `device` - The device to load the model on.
     #[cfg(feature = "llama3")]
-    pub fn llama3_2_1b_pretrained_q4<B: Backend>(
+    pub fn llama3_2_1b_pretrained_q4(
         max_seq_len: usize,
-        device: &Device<B>,
-    ) -> Result<Llama<B, Tiktoken>, String> {
+        device: &Device,
+    ) -> Result<Llama<Tiktoken>, String> {
         // Llama-3.2 models support context length up to 128K tokens.
         check_context_length(max_seq_len, 128 * 1024);
 
@@ -256,10 +256,10 @@ impl LlamaConfig {
     /// - `max_seq_len` - The maximum sequence length for input text.
     /// - `device` - The device to load the model on.
     #[cfg(feature = "llama3")]
-    pub fn llama3_1_8b_pretrained<B: Backend>(
+    pub fn llama3_1_8b_pretrained(
         max_seq_len: usize,
-        device: &Device<B>,
-    ) -> Result<Llama<B, Tiktoken>, String> {
+        device: &Device,
+    ) -> Result<Llama<Tiktoken>, String> {
         // Llama-3.1 models support context length up to 128K tokens.
         check_context_length(max_seq_len, 128 * 1024);
 
@@ -286,10 +286,10 @@ impl LlamaConfig {
     /// - `max_seq_len` - The maximum sequence length for input text.
     /// - `device` - The device to load the model on.
     #[cfg(feature = "llama3")]
-    pub fn llama3_8b_pretrained<B: Backend>(
+    pub fn llama3_8b_pretrained(
         max_seq_len: usize,
-        device: &Device<B>,
-    ) -> Result<Llama<B, Tiktoken>, String> {
+        device: &Device,
+    ) -> Result<Llama<Tiktoken>, String> {
         // Llama-3 models support context length up to 8K tokens.
         check_context_length(max_seq_len, 8 * 1024);
 
@@ -312,10 +312,10 @@ impl LlamaConfig {
 
     /// Load pre-trained TinyLlama-1.1B Chat v1.0 model with [SentenciePiece](https://github.com/google/sentencepiece) tokenizer.
     #[cfg(feature = "tiny")]
-    pub fn tiny_llama_pretrained<B: Backend>(
+    pub fn tiny_llama_pretrained(
         max_seq_len: usize,
-        device: &Device<B>,
-    ) -> Result<Llama<B, SentencePieceTokenizer>, String> {
+        device: &Device,
+    ) -> Result<Llama<SentencePieceTokenizer>, String> {
         // TinyLlama models support context length up to 2K tokens.
 
         check_context_length(max_seq_len, 2 * 1024);

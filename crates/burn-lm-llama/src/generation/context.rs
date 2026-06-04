@@ -4,8 +4,8 @@ use std::sync::{
     Arc,
 };
 
-use burn::tensor::{Int, Tensor};
-use burn_lm_inference::{Backend, GeneratedItem, GeneratedItemEmitter};
+use burn::tensor::{Device, Int, Tensor};
+use burn_lm_inference::{GeneratedItem, GeneratedItemEmitter};
 
 use crate::tokenizer::Tokenizer;
 
@@ -13,23 +13,23 @@ use super::StreamingDecoder;
 
 #[derive(Clone)]
 /// The text generation context, used to check when a stop token has been reached.
-pub struct GenerationContext<B: Backend> {
-    pub tokens: Tensor<B, 1, Int>,
+pub struct GenerationContext {
+    pub tokens: Tensor<1, Int>,
     num_tokens: usize,
     stop: Arc<AtomicBool>,
     num_generated: Arc<AtomicUsize>,
-    sender: Sender<Tensor<B, 1, Int>>,
+    sender: Sender<Tensor<1, Int>>,
 }
 
-impl<B: Backend> GenerationContext<B> {
+impl GenerationContext {
     /// Create a new generation context.
     pub fn new<T: Tokenizer + 'static>(
         max_sample_len: usize,
         emitter: GeneratedItemEmitter,
         tokenizer: T,
-        device: &B::Device,
+        device: &Device,
     ) -> Self {
-        let (sender, receiver) = std::sync::mpsc::channel::<Tensor<B, 1, Int>>();
+        let (sender, receiver) = std::sync::mpsc::channel::<Tensor<1, Int>>();
         let stop = Arc::new(AtomicBool::new(false));
         let num_generated = Arc::new(AtomicUsize::new(0));
 
@@ -58,7 +58,7 @@ impl<B: Backend> GenerationContext<B> {
     }
 
     /// Add generated tokens to the state (without checking for stop condition).
-    pub fn append(&mut self, tokens: Tensor<B, 1, Int>) {
+    pub fn append(&mut self, tokens: Tensor<1, Int>) {
         let num_tokens_prev = self.num_tokens;
         self.num_tokens += tokens.shape().num_elements();
         self.tokens
@@ -66,7 +66,7 @@ impl<B: Backend> GenerationContext<B> {
     }
 
     /// Update the state with newly generated tokens.
-    pub fn update(&mut self, tokens: Tensor<B, 1, Int>) {
+    pub fn update(&mut self, tokens: Tensor<1, Int>) {
         self.append(tokens.clone());
 
         if !self.should_stop() {

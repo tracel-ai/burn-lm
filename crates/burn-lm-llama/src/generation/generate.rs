@@ -5,10 +5,7 @@ use crate::{inference::Llama, tokenizer::Tokenizer};
 use burn::{prelude::*, tensor::activation::softmax};
 use burn_lm_inference::GeneratedItemEmitter;
 
-pub(crate) fn temperature_scaled_softmax<B: Backend>(
-    logits: Tensor<B, 2>,
-    temperature: f64,
-) -> Tensor<B, 2> {
+pub(crate) fn temperature_scaled_softmax(logits: Tensor<2>, temperature: f64) -> Tensor<2> {
     softmax(logits / temperature, 1)
 }
 
@@ -25,7 +22,7 @@ pub enum GenerationError {
     MaxSequenceLengthExceeded { actual: usize, max: usize },
 }
 
-impl<B: Backend, T: Tokenizer + 'static> Llama<B, T> {
+impl<T: Tokenizer + 'static> Llama<T> {
     /// Generate text sample based on the provided prompt.
     ///
     /// # Arguments
@@ -56,7 +53,7 @@ impl<B: Backend, T: Tokenizer + 'static> Llama<B, T> {
         );
         state.append(input_tokens);
 
-        let mut input_pos = Tensor::<B, 1, Int>::arange(0..prompt_len as i64, &self.device);
+        let mut input_pos = Tensor::<1, Int>::arange(0..prompt_len as i64, &self.device);
         let now = Instant::now();
 
         for _ in 0..sample_len {
@@ -112,10 +109,8 @@ mod tests {
     use super::*;
     use crate::{tests::*, tokenizer::byte::ByteTokenizer, LlamaConfig};
 
-    use burn::{
-        module::Reinitializer,
-        tensor::{TensorData, Tolerance},
-    };
+    use crate::tests::reinit_uniform;
+    use burn::tensor::{TensorData, Tolerance};
     use burn_lm_inference::TextGenerationListener;
 
     #[test]
@@ -138,13 +133,11 @@ mod tests {
 
     #[test]
     fn test_llama3_2_3b_test() {
-        let device: Device<TestBackend> = Default::default();
+        let device: Device = Default::default();
         let config = LlamaConfig::llama3_2_1b_test();
-        let mut llama = config.init::<TestBackend, ByteTokenizer>(&device).unwrap();
+        let mut llama = config.init::<ByteTokenizer>(&device).unwrap();
 
-        llama.model = Reinitializer::new()
-            .random_float(0, -1.0, 1.0)
-            .apply(llama.model);
+        llama.model = reinit_uniform(llama.model, -1.0, 1.0);
 
         let (emitter, handle) = GeneratedItemEmitter::init(TextGenerationListener::default());
         llama
@@ -152,8 +145,10 @@ mod tests {
             .unwrap();
 
         let result = handle.join();
-        let expected = "[187][114][51][146][146][250][112][224][192][99][132][0][0][180][192][99][19][114][19][174][0][180][192][131][132][19][99][114][131][132][249][146][82][28][226][226][148][84][19][192][83][99][19][249][19][251][222][19][192][180][192][180][192][0][180][192][146][20][0][180][192][180][20]";
 
-        assert_eq!(result, expected);
+        assert_eq!(
+            result,
+            "[207][253][180][249][148][139][250][232][49][42][140][114][45][76][139][19][97][39][204][110][68][112][138][39][129][90][68][10][219][111][92][112][105][110][62][112][103][4][80][168][30][216][49][99][19][62][56][103][244][49][179][59][224][96][231][187][90][96][3][22][50][240][27]"
+        );
     }
 }

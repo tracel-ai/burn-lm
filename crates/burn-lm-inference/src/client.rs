@@ -1,7 +1,7 @@
 use std::marker::PhantomData;
 
 #[cfg(not(feature = "legacy-v018"))]
-use burn::prelude::Backend;
+use burn::backend::Backend;
 
 use crate::{
     channels::InferenceChannel,
@@ -69,7 +69,7 @@ where
         let result = self.channel.deleter();
 
         #[cfg(not(feature = "legacy-v018"))]
-        let device = &crate::INFERENCE_DEVICE;
+        let device = &*crate::INFERENCE_BACKEND_DEVICE;
 
         #[cfg(not(feature = "legacy-v018"))]
         <crate::InferenceBackend as Backend>::memory_cleanup(device);
@@ -98,7 +98,7 @@ where
 
         #[cfg(not(feature = "legacy-v018"))]
         {
-            let device = &crate::INFERENCE_DEVICE;
+            let device = &*crate::INFERENCE_BACKEND_DEVICE;
             <crate::InferenceBackend as Backend>::memory_cleanup(device);
             // Force pending deallocations to complete
             <crate::InferenceBackend as Backend>::sync(device).unwrap();

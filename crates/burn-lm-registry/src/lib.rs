@@ -10,31 +10,31 @@ pub type DynClients = HashMap<&'static str, Box<dyn InferencePlugin>>;
 #[inference_server_registry(
     server(
         crate_namespace = "burn_lm_llama::server::llama3",
-        server_type = "Llama3InstructServer<InferenceBackend>",
+        server_type = "Llama3InstructServer",
     ),
     server(
         crate_namespace = "burn_lm_llama::server::llama3",
-        server_type = "Llama31InstructServer<InferenceBackend>",
+        server_type = "Llama31InstructServer",
     ),
     server(
         crate_namespace = "burn_lm_llama::server::llama3",
-        server_type = "Llama321bInstructServer<InferenceBackend>",
+        server_type = "Llama321bInstructServer",
     ),
     server(
         crate_namespace = "burn_lm_llama::server::llama3",
-        server_type = "Llama323bInstructServer<InferenceBackend>",
+        server_type = "Llama323bInstructServer",
     ),
     server(
         crate_namespace = "burn_lm_llama::server::llama3",
-        server_type = "Llama321bInstructQ4Server<InferenceBackend>",
+        server_type = "Llama321bInstructQ4Server",
     ),
     server(
         crate_namespace = "burn_lm_llama::server::tiny",
-        server_type = "TinyLlamaServer<InferenceBackend>",
+        server_type = "TinyLlamaServer",
     ),
     server(
         crate_namespace = "burn_lm_parrot",
-        server_type = "ParrotServer<InferenceBackend>",
+        server_type = "ParrotServer",
     )
 )]
 #[derive(Debug)]

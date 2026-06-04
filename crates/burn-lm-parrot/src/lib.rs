@@ -41,17 +41,12 @@ pub struct ParrotServerConfig {
     model_creation_date = "2025/01/28",
     created_by = "Tracel Technologies Inc."
 )]
-pub struct ParrotServer<B: Backend> {
+pub struct ParrotServer {
     config: ParrotServerConfig,
-    // Remove the phantom data and add your model here, see TinyLLama example
-    // in burn-lm-llama crate.
-    // You'll likely need to wrap your model in an Arc Mutex because the server
-    // needs to be clonable.
-    _model: std::marker::PhantomData<B>,
 }
 
 // Implement the `InferenceServer` trait for the server.
-impl InferenceServer for ParrotServer<InferenceBackend> {
+impl InferenceServer for ParrotServer {
     fn downloader(&mut self) -> Option<fn() -> InferenceResult<Option<Stats>>> {
         // Return a closure with code to download the model if available.
         // Return none if there is no possibility to download the model or if

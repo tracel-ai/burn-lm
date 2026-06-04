@@ -1,5 +1,4 @@
 use burn::{config::Config, nn::RotaryEncoding, tensor::Tensor};
-use burn_lm_inference::Backend;
 
 /// Tracks the state of rotary positional encodings during autoregressive inference.
 ///
@@ -7,9 +6,9 @@ use burn_lm_inference::Backend;
 /// the initially allocated range. Used to avoid recomputing RoPE values on-the-fly
 /// while maintaining correct positional alignment across decoding steps.
 #[derive(Debug)]
-pub struct PositionalEncodingState<B: Backend> {
+pub struct PositionalEncodingState {
     /// Rotary positional encoding (RoPE).
-    pub rope: RotaryEncoding<B>,
+    pub rope: RotaryEncoding,
     /// RoPE maximum sequence length.
     pub max_seq_len: usize,
     /// The next position.
@@ -20,8 +19,8 @@ pub struct PositionalEncodingState<B: Backend> {
     pub start_offset: usize,
 }
 
-impl<B: Backend> PositionalEncodingState<B> {
-    pub fn new(rope: RotaryEncoding<B>) -> Self {
+impl PositionalEncodingState {
+    pub fn new(rope: RotaryEncoding) -> Self {
         // Initial max position corresponds to the RoPE max seq len on initialization
         let max_seq_len = rope.freq_complex.dims()[0];
         Self {
@@ -43,11 +42,11 @@ impl<B: Backend> PositionalEncodingState<B> {
         }
     }
 
-    pub fn forward<const D: usize>(&self, x: Tensor<B, D>) -> Tensor<B, D> {
+    pub fn forward<const D: usize>(&self, x: Tensor<D>) -> Tensor<D> {
         self.rope.forward(x)
     }
 
-    pub fn apply<const D: usize>(&self, x: Tensor<B, D>) -> Tensor<B, D> {
+    pub fn apply<const D: usize>(&self, x: Tensor<D>) -> Tensor<D> {
         self.rope.apply(x, self.index())
     }
 
@@ -94,7 +93,7 @@ impl RopeFrequencyScaling {
     /// Applies frequency scaling by parts following Llama 3.1's scheme.
     ///
     /// Adapted from: https://github.com/meta-llama/llama-models/blob/main/models/llama3/reference_impl/model.py#L45
-    pub fn freq_scaling_by_parts<B: Backend>(&self, freqs: Tensor<B, 1>) -> Tensor<B, 1> {
+    pub fn freq_scaling_by_parts(&self, freqs: Tensor<1>) -> Tensor<1> {
         let low_freq_wavelen = self.old_context_len / self.low_freq_factor;
         let high_freq_wavelen = self.old_context_len / self.high_freq_factor;
 
@@ -170,7 +169,7 @@ mod tests {
 
     #[test]
     fn test_rope_shift() {
-        let device: Device<TestBackend> = Default::default();
+        let device: Device = Default::default();
 
         let max_seq_len = 16;
         let rope = RopeConfig::new(500000.0)
@@ -180,7 +179,7 @@ mod tests {
 
         let rope = RotaryEncodingConfig::new(max_seq_len, 4 / 2)
             .with_theta(rope.theta)
-            .init_with_frequency_scaling::<TestBackend>(freq_scaling_fn, &device);
+            .init_with_frequency_scaling(freq_scaling_fn, &device);
 
         let mut pos_encoding = PositionalEncodingState::new(rope);
         assert_eq!(pos_encoding.max_seq_len, max_seq_len);

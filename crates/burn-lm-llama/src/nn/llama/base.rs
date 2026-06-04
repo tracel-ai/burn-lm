@@ -7,10 +7,7 @@ use crate::{
     tokenizer::Tokenizer,
 };
 use burn::{
-    config::Config,
-    nn::RotaryEncodingConfig,
-    record::HalfPrecisionSettings,
-    tensor::{backend::Backend, Device},
+    config::Config, nn::RotaryEncodingConfig, record::HalfPrecisionSettings, tensor::Device,
 };
 
 #[cfg(feature = "tiny")]
@@ -143,17 +140,17 @@ impl LlamaConfig {
 
     /// Load pre-trained Llama-3.2-3B model with [Tiktoken](https://github.com/openai/tiktoken) tokenizer.
     #[cfg(feature = "llama3")]
-    pub fn load_llama3_2_3b<B: Backend>(
+    pub fn load_llama3_2_3b(
         checkpoint: &str,
         tokenizer_path: &str,
         max_seq_len: usize,
-        device: &Device<B>,
-    ) -> Result<inference::Llama<B, Tiktoken>, String> {
+        device: &Device,
+    ) -> Result<inference::Llama<Tiktoken>, String> {
         use burn::record::NamedMpkFileRecorder;
 
         let llama = Self::llama3_2_3b(tokenizer_path)
             .with_max_seq_len(max_seq_len)
-            .init::<B, Tiktoken>(device)?;
+            .init::<Tiktoken>(device)?;
 
         let recorder = NamedMpkFileRecorder::<HalfPrecisionSettings>::new();
         let llama = llama
@@ -165,17 +162,17 @@ impl LlamaConfig {
 
     /// Load pre-trained Llama-3.2-1B model with [Tiktoken](https://github.com/openai/tiktoken) tokenizer.
     #[cfg(feature = "llama3")]
-    pub fn load_llama3_2_1b<B: Backend>(
+    pub fn load_llama3_2_1b(
         checkpoint: &str,
         tokenizer_path: &str,
         max_seq_len: usize,
-        device: &Device<B>,
-    ) -> Result<inference::Llama<B, Tiktoken>, String> {
+        device: &Device,
+    ) -> Result<inference::Llama<Tiktoken>, String> {
         use burn::record::NamedMpkFileRecorder;
 
         let llama = Self::llama3_2_1b(tokenizer_path)
             .with_max_seq_len(max_seq_len)
-            .init::<B, Tiktoken>(device)?;
+            .init::<Tiktoken>(device)?;
 
         let recorder = NamedMpkFileRecorder::<HalfPrecisionSettings>::new();
         let llama = llama
@@ -187,17 +184,17 @@ impl LlamaConfig {
 
     /// Load pre-trained Llama-3.1-8B model with [Tiktoken](https://github.com/openai/tiktoken) tokenizer.
     #[cfg(feature = "llama3")]
-    pub fn load_llama3_1_8b<B: Backend>(
+    pub fn load_llama3_1_8b(
         checkpoint: &str,
         tokenizer_path: &str,
         max_seq_len: usize,
-        device: &Device<B>,
-    ) -> Result<inference::Llama<B, Tiktoken>, String> {
+        device: &Device,
+    ) -> Result<inference::Llama<Tiktoken>, String> {
         use burn::record::NamedMpkFileRecorder;
 
         let llama = Self::llama3_1_8b(tokenizer_path)
             .with_max_seq_len(max_seq_len)
-            .init::<B, Tiktoken>(device)?;
+            .init::<Tiktoken>(device)?;
 
         let recorder = NamedMpkFileRecorder::<HalfPrecisionSettings>::new();
         let llama = llama
@@ -209,17 +206,17 @@ impl LlamaConfig {
 
     /// Load pre-trained Llama-3-8B model with [Tiktoken](https://github.com/openai/tiktoken) tokenizer.
     #[cfg(feature = "llama3")]
-    pub fn load_llama3_8b<B: Backend>(
+    pub fn load_llama3_8b(
         checkpoint: &str,
         tokenizer_path: &str,
         max_seq_len: usize,
-        device: &Device<B>,
-    ) -> Result<inference::Llama<B, Tiktoken>, String> {
+        device: &Device,
+    ) -> Result<inference::Llama<Tiktoken>, String> {
         use burn::record::NamedMpkFileRecorder;
 
         let llama = Self::llama3_8b(tokenizer_path)
             .with_max_seq_len(max_seq_len)
-            .init::<B, Tiktoken>(device)?;
+            .init::<Tiktoken>(device)?;
 
         let recorder = NamedMpkFileRecorder::<HalfPrecisionSettings>::new();
         let llama = llama
@@ -231,17 +228,17 @@ impl LlamaConfig {
 
     /// Load pre-trained TinyLlama-1.1B Chat v1.0 model with [SentenciePiece](https://github.com/google/sentencepiece) tokenizer.
     #[cfg(feature = "tiny")]
-    pub fn load_tiny_llama<B: Backend>(
+    pub fn load_tiny_llama(
         checkpoint: &str,
         tokenizer_path: &str,
         max_seq_len: usize,
-        device: &Device<B>,
-    ) -> Result<inference::Llama<B, SentencePieceTokenizer>, String> {
+        device: &Device,
+    ) -> Result<inference::Llama<SentencePieceTokenizer>, String> {
         use burn::record::NamedMpkFileRecorder;
 
         let llama = Self::tiny_llama(tokenizer_path)
             .with_max_seq_len(max_seq_len)
-            .init::<B, SentencePieceTokenizer>(device)?;
+            .init::<SentencePieceTokenizer>(device)?;
 
         let recorder = NamedMpkFileRecorder::<HalfPrecisionSettings>::new();
         let llama = llama
@@ -252,10 +249,7 @@ impl LlamaConfig {
     }
 
     /// Initialize a new [Llama](Llama) module.
-    pub fn init<B: Backend, T: Tokenizer>(
-        &self,
-        device: &Device<B>,
-    ) -> Result<inference::Llama<B, T>, String> {
+    pub fn init<T: Tokenizer>(&self, device: &Device) -> Result<inference::Llama<T>, String> {
         let tokenizer = T::new(&self.tokenizer)?;
         let num_key_value_heads = self.num_key_value_heads.unwrap_or(self.num_attention_heads);
         let config = TransformerConfig::new(

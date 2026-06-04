@@ -2,7 +2,6 @@ use burn::{
     module::{Module, Quantizer},
     record::{FileRecorder, RecorderError},
     tensor::{
-        backend::Backend,
         quantization::{Calibration, QuantScheme},
         Device, Int, Shape, Tensor, TensorData,
     },
@@ -19,33 +18,29 @@ use crate::{
 
 /// Meta Llama large language model and tokenizer. For inference uses only.
 #[derive(Debug)]
-pub struct Llama<B: Backend, T: Tokenizer> {
+pub struct Llama<T: Tokenizer> {
     /// The tokenizer.
     pub tokenizer: T,
     /// Llama decoder-only transformer.
-    pub model: Transformer<B>,
+    pub model: Transformer,
     /// Key-value cache for each transformer block.
-    pub cache: TransformerCache<B>,
+    pub cache: TransformerCache,
     /// Rotary positional encoding (RoPE).
-    pub pos_encoding: PositionalEncodingState<B>,
-    pub device: Device<B>,
+    pub pos_encoding: PositionalEncodingState,
+    pub device: Device,
 }
 
-impl<B: Backend, T: Tokenizer> Llama<B, T> {
+impl<T: Tokenizer> Llama<T> {
     /// Encode a string into a tensor of tokens.
-    pub fn tokenize(&self, text: &str) -> Tensor<B, 1, Int> {
+    pub fn tokenize(&self, text: &str) -> Tensor<1, Int> {
         let tokens = self.tokenizer.encode(text, false, false);
 
         let shape = Shape::new([tokens.len()]);
-        Tensor::<B, 1, Int>::from_data(TensorData::new(tokens, shape), &self.device)
+        Tensor::<1, Int>::from_data(TensorData::new(tokens, shape), &self.device)
     }
 
     /// Save Llama model to file using the specified recorder.
-    pub fn save<R: FileRecorder<B>>(
-        self,
-        file_path: &str,
-        recorder: &R,
-    ) -> Result<(), RecorderError> {
+    pub fn save<R: FileRecorder>(self, file_path: &str, recorder: &R) -> Result<(), RecorderError> {
         println!("Saving record...");
         let now = Instant::now();
         self.model.save_file(file_path, recorder)?;
@@ -56,7 +51,7 @@ impl<B: Backend, T: Tokenizer> Llama<B, T> {
     }
 
     /// Load Llama model from file using the specified recorder.
-    pub fn load<R: FileRecorder<B>>(
+    pub fn load<R: FileRecorder>(
         mut self,
         file_path: &str,
         recorder: &R,
@@ -88,7 +83,7 @@ impl<B: Backend, T: Tokenizer> Llama<B, T> {
             layers.push(layer.quantize_weights(&mut quantizer));
         }
         self.model.layers = layers;
-        B::memory_cleanup(device);
+        let _ = device.sync();
 
         self.model.tok_embeddings = self.model.tok_embeddings.quantize_weights(&mut quantizer);
         self.model.output = self.model.output.quantize_weights(&mut quantizer);

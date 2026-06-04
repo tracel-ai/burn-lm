@@ -8,6 +8,7 @@ members = ["crates/*", "benchmarks", "xtask"]
 
 [workspace.package]
 edition = "2021"
+rust-version = "1.92"
 version = "0.0.1"
 license = "MIT OR Apache-2.0"
 readme = "README.md"
@@ -23,13 +24,13 @@ readme = "README.md"
 # burn = { path = "../burn/crates/burn", default-features = false }
 # burn-store = { path = "../burn/crates/burn-store", default-features = false }
 
-# For dev we use the local version of burn
-# burn = { path = "../burn/crates/burn", default-features = false }
-# burn-store = { path = "../burn/crates/burn-store", default-features = false }
+# For release — track burn main (rev d0358e057 as of 2026-06-04; includes RotaryEncoding::reset).
+burn = { git = "https://github.com/tracel-ai/burn", branch = "main", default-features = false }
+burn-store = { git = "https://github.com/tracel-ai/burn", branch = "main", default-features = false, package = "burn-store" }
 
-# For release
-burn = { version = "=0.21.0-pre.5", default-features = false }
-burn-store = { version = "=0.21.0-pre.5", default-features = false }
+# crates.io (previous pin)
+# burn = { version = "=0.21.0-pre.5", default-features = false }
+# burn-store = { version = "=0.21.0-pre.5", default-features = false }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }

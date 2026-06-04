@@ -7,11 +7,11 @@ use super::{Llama, LlamaConfig};
 
 impl LlamaConfig {
     /// Load pre-trained Llama checkpoint.
-    pub fn load_pretrained<B: Backend, T: Tokenizer>(
+    pub fn load_pretrained<T: Tokenizer>(
         &self,
         checkpoint: &str,
-        device: &Device<B>,
-    ) -> Result<Llama<B, T>, String> {
+        device: &Device,
+    ) -> Result<Llama<T>, String> {
         let mut llama = self.init(device)?;
 
         // Load weights from torch state_dict
@@ -87,7 +87,7 @@ impl LlamaConfig {
                 // Map norm.weight -> norm.gamma for all layers
                 .with_key_remap("(.*)norm\\.weight", "${1}norm.gamma");
         }
-        let mut record: TransformerRecord<B> = PyTorchFileRecorder::<HalfPrecisionSettings>::new()
+        let mut record: TransformerRecord = PyTorchFileRecorder::<HalfPrecisionSettings>::new()
             .load(load_args, device)
             .map_err(|e| e.to_string())?;
 
@@ -99,7 +99,7 @@ impl LlamaConfig {
             let n_heads = self.num_attention_heads;
             let n_kv_heads = self.num_key_value_heads.unwrap_or(n_heads);
             let wk_dim = self.d_model * n_kv_heads / n_heads;
-            let permute = |w: Tensor<B, 2>, n_heads: usize, dim1: usize, dim2: usize| {
+            let permute = |w: Tensor<2>, n_heads: usize, dim1: usize, dim2: usize| {
                 let w = w // [2048, 256]
                     .reshape([dim1, n_heads, 2, dim2 / n_heads / 2]) // [2048, 4, 2, 32]
                     .swap_dims(2, 3) // [2048, 4, 32, 2]

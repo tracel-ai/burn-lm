@@ -1,20 +1,5 @@
 #[derive(Debug, Clone, PartialEq, Eq, clap::ValueEnum, strum::Display, strum::EnumIter)]
 pub(crate) enum BackendValues {
-    // candle ----------------------------------------------------------------
-    #[strum(to_string = "candle-accelerate")]
-    CandleAccelerate,
-
-    #[strum(to_string = "candle-cpu")]
-    CandleCpu,
-
-    #[cfg(not(target_os = "macos"))]
-    #[strum(to_string = "candle-cuda")]
-    CandleCuda,
-
-    #[cfg(target_os = "macos")]
-    #[strum(to_string = "candle-metal")]
-    CandleMetal,
-
     // cuda ------------------------------------------------------------------
     #[cfg(not(target_os = "macos"))]
     #[strum(to_string = "cuda")]

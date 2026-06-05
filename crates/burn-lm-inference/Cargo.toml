@@ -18,11 +18,6 @@ default = []
 # Feature flag to deactivate the default backend.
 selected-backend = []
 
-candle-accelerate = ["burn/candle", "burn/accelerate", "selected-backend"]
-candle-cpu = ["burn/candle", "selected-backend"]
-candle-cuda = ["burn/candle-cuda", "selected-backend"]
-candle-metal = ["burn/candle", "burn/metal", "selected-backend"]
-
 cuda = ["burn/cuda", "burn/default", "selected-backend"]
 rocm = ["burn/rocm", "burn/default", "selected-backend"]
 metal = ["burn/metal", "selected-backend"]

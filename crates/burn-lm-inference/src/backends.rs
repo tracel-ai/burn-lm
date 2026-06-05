@@ -2,11 +2,11 @@ mod elems {
     cfg_if::cfg_if! {
         // NOTE: f16/bf16 is not always supported on wgpu depending on the hardware
         // https://github.com/gfx-rs/wgpu/issues/7468
-        if #[cfg(all(feature = "f16", any(feature = "cuda", feature = "wgpu", feature = "vulkan", feature = "metal", feature = "rocm", feature = "libtorch", feature = "candle-cuda")))]{
+        if #[cfg(all(feature = "f16", any(feature = "cuda", feature = "wgpu", feature = "vulkan", feature = "metal", feature = "rocm", feature = "libtorch")))]{
             pub type ElemType = burn::tensor::f16;
             pub const DTYPE_NAME: &str = "f16";
         }
-        else if #[cfg(all(feature = "f16", any(feature = "cuda", feature = "wgpu", feature = "vulkan", feature = "metal", feature = "rocm", feature = "libtorch", feature = "candle-cuda")))]{
+        else if #[cfg(all(feature = "f16", any(feature = "cuda", feature = "wgpu", feature = "vulkan", feature = "metal", feature = "rocm", feature = "libtorch")))]{
             pub type ElemType = burn::tensor::bf16;
             pub const DTYPE_NAME: &str = "bf16";
         } else {
@@ -20,36 +20,6 @@ pub use elems::*;
 
 use burn::tensor::Device;
 use std::sync::LazyLock;
-
-// Candle --------------------------------------------------------------------
-// Candle is not part of the dispatch stack on Burn 0.22; use the default device.
-
-#[cfg(any(feature = "candle-accelerate", feature = "candle-cpu"))]
-pub mod burn_backend_types {
-    use super::*;
-
-    pub type InferenceDevice = Device;
-    pub static INFERENCE_DEVICE: LazyLock<Device> = LazyLock::new(Device::default);
-    pub const NAME: &str = "candle-cpu";
-}
-
-#[cfg(feature = "candle-cuda")]
-pub mod burn_backend_types {
-    use super::*;
-
-    pub type InferenceDevice = Device;
-    pub static INFERENCE_DEVICE: LazyLock<Device> = LazyLock::new(Device::default);
-    pub const NAME: &str = "candle-cuda";
-}
-
-#[cfg(feature = "candle-metal")]
-pub mod burn_backend_types {
-    use super::*;
-
-    pub type InferenceDevice = Device;
-    pub static INFERENCE_DEVICE: LazyLock<Device> = LazyLock::new(Device::default);
-    pub const NAME: &str = "candle-metal";
-}
 
 // Cuda ----------------------------------------------------------------------
 

@@ -14,9 +14,7 @@ pub(crate) fn handle() -> super::HandleCommandResult {
     for backend in BackendValues::iter() {
         let backend_string = backend.to_string();
         // prefix is for sorting, prefix can be duplicated
-        let key = if backend_string.starts_with("candle") {
-            "[5]Candle"
-        } else if backend_string.starts_with("cuda") {
+        let key = if backend_string.starts_with("cuda") {
             "[2]CUDA"
         } else if backend_string.starts_with("rocm") {
             "[2]ROCm"

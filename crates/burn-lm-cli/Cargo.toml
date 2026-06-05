@@ -12,11 +12,6 @@ license.workspace = true
 readme.workspace = true
 
 [features]
-candle-accelerate = ["burn-lm-inference/candle-accelerate"]
-candle-cpu = ["burn-lm-inference/candle-cpu"]
-candle-cuda = ["burn-lm-inference/candle-cuda"]
-candle-metal = ["burn-lm-inference/candle-metal"]
-
 f16 = ["burn-lm-inference/f16"]
 bf16 = ["burn-lm-inference/f16"]
 cuda = ["burn-lm-inference/cuda"]

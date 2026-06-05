@@ -314,36 +314,38 @@ mod tests {
         let input = Tensor::arange(0..(batch_size * seq_length) as i64, &device)
             .reshape([batch_size, seq_length]);
 
-        let transformer = crate::tests::reinit_uniform(transformer, 0.0, 5.0);
+        let transformer = Reinitializer::default()
+            .range_float(0.0, 5.0)
+            .apply(transformer);
 
         let mask = cache.prepare(seq_length).unwrap();
         let output = transformer.forward(input, &mut cache, &rope, mask);
 
-        output.into_data().assert_approx_eq::<f32>(
-            &TensorData::from([
+        let expected = TensorData::from([
+            [
                 [
-                    [
-                        79.233871, 57.741943, 57.787495, 43.947308, 47.780247, 33.434143,
-                        58.911636, 33.466335,
-                    ],
-                    [
-                        79.169678, 57.709198, 57.804527, 43.884628, 47.767303, 33.419643,
-                        58.867947, 33.444248,
-                    ],
+                    56.37573, 57.77283, 59.169933, 60.567043, 61.964146, 63.361248, 64.758354,
+                    66.15546,
                 ],
                 [
-                    [
-                        79.165726, 57.703335, 57.798748, 43.885498, 47.763435, 33.415947,
-                        58.859947, 33.442841,
-                    ],
-                    [
-                        79.241425, 57.744629, 57.789532, 43.949627, 47.785873, 33.434845,
-                        58.917313, 33.465443,
-                    ],
+                    56.374626, 57.77171, 59.168793, 60.56588, 61.962963, 63.360046, 64.75713,
+                    66.15422,
                 ],
-            ]),
-            Tolerance::relative(0.05),
-        );
+            ],
+            [
+                [
+                    56.374252, 57.771328, 59.168407, 60.565487, 61.962566, 63.359642, 64.75672,
+                    66.1538,
+                ],
+                [
+                    56.37408, 57.771156, 59.168232, 60.565304, 61.96238, 63.359455, 64.75653,
+                    66.15361,
+                ],
+            ],
+        ]);
+        output
+            .into_data()
+            .assert_approx_eq::<f32>(&expected, Tolerance::relative(0.001));
     }
 
     pub struct ForwardCacheTestCase {

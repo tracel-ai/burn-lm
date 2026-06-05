@@ -50,7 +50,7 @@ impl FeedForward {
 mod tests {
     use burn::tensor::{TensorData, Tolerance};
 
-    use crate::tests::reinit_uniform;
+    use crate::tests::Reinitializer;
 
     use super::*;
 
@@ -69,18 +69,20 @@ mod tests {
             .reshape([batch_size, seq_length, d_model])
             .float();
 
-        let nn = reinit_uniform(transformer, 0.0, 5.0);
+        let nn = Reinitializer::default()
+            .range_float(0.0, 5.0)
+            .apply(transformer);
 
         let output = nn.forward(input);
 
         let expected = TensorData::from([
             [
-                [6205.8174, 8136.716, 3293.2156, 6027.6084],
-                [79597.02, 106373.56, 44417.668, 82802.47],
+                [8661.133, 9206.727, 9752.319, 10297.912],
+                [73848.63, 78356.14, 82863.65, 87371.16],
             ],
             [
-                [235638.03, 316002.06, 132491.31, 247838.31],
-                [474329.06, 637021.25, 267513.06, 501135.06],
+                [202911.13, 215216.48, 227521.86, 239827.2],
+                [395848.63, 419787.78, 443726.94, 467666.06],
             ],
         ]);
 

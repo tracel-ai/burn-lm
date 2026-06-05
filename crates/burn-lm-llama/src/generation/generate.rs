@@ -109,7 +109,7 @@ mod tests {
     use super::*;
     use crate::{tests::*, tokenizer::byte::ByteTokenizer, LlamaConfig};
 
-    use crate::tests::reinit_uniform;
+    use crate::tests::Reinitializer;
     use burn::tensor::{TensorData, Tolerance};
     use burn_lm_inference::TextGenerationListener;
 
@@ -137,7 +137,9 @@ mod tests {
         let config = LlamaConfig::llama3_2_1b_test();
         let mut llama = config.init::<ByteTokenizer>(&device).unwrap();
 
-        llama.model = reinit_uniform(llama.model, -1.0, 1.0);
+        llama.model = Reinitializer::default()
+            .random_float(0, -1.0, 1.0)
+            .apply(llama.model);
 
         let (emitter, handle) = GeneratedItemEmitter::init(TextGenerationListener::default());
         llama
@@ -145,10 +147,8 @@ mod tests {
             .unwrap();
 
         let result = handle.join();
+        let expected = "[187][114][51][146][146][250][112][224][192][99][132][0][0][180][192][99][19][114][19][174][0][180][192][131][132][19][99][114][131][132][249][146][82][28][226][226][148][84][19][192][83][99][19][249][19][251][222][19][192][180][192][180][192][0][180][192][146][20][0][180][192][180][20]";
 
-        assert_eq!(
-            result,
-            "[207][253][180][249][148][139][250][232][49][42][140][114][45][76][139][19][97][39][204][110][68][112][138][39][129][90][68][10][219][111][92][112][105][110][62][112][103][4][80][168][30][216][49][99][19][62][56][103][244][49][179][59][224][96][231][187][90][96][3][22][50][240][27]"
-        );
+        assert_eq!(result, expected);
     }
 }

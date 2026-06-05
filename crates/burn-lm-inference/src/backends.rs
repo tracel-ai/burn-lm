@@ -18,6 +18,15 @@ mod elems {
 
 pub use elems::*;
 
+/// Configure device default float `ElemType`.
+fn configure(mut device: burn::tensor::Device) -> burn::tensor::Device {
+    use burn::tensor::{DeviceConfig, Element};
+    device
+        .configure(DeviceConfig::default().float_dtype(ElemType::dtype()))
+        .unwrap();
+    device
+}
+
 use burn::tensor::Device;
 use std::sync::LazyLock;
 
@@ -29,7 +38,7 @@ pub mod burn_backend_types {
 
     pub type InferenceDevice = Device;
     pub static INFERENCE_DEVICE: LazyLock<Device> =
-        LazyLock::new(|| Device::cuda(burn::tensor::DeviceIndex::Default));
+        LazyLock::new(|| configure(Device::cuda(burn::tensor::DeviceIndex::Default)));
     pub const NAME: &str = "cuda";
 }
 
@@ -41,7 +50,7 @@ pub mod burn_backend_types {
 
     pub type InferenceDevice = Device;
     pub static INFERENCE_DEVICE: LazyLock<Device> =
-        LazyLock::new(|| Device::rocm(burn::tensor::DeviceIndex::Default));
+        LazyLock::new(|| configure(Device::rocm(burn::tensor::DeviceIndex::Default)));
     pub const NAME: &str = "rocm";
 }
 
@@ -53,7 +62,7 @@ pub mod burn_backend_types {
     use super::*;
 
     pub type InferenceDevice = Device;
-    pub static INFERENCE_DEVICE: LazyLock<Device> = LazyLock::new(Device::ndarray);
+    pub static INFERENCE_DEVICE: LazyLock<Device> = LazyLock::new(|| configure(Device::ndarray()));
     pub const NAME: &str = "ndarray";
 }
 
@@ -69,7 +78,8 @@ pub mod burn_backend_types {
     pub static INFERENCE_DEVICE: LazyLock<Device> =
         LazyLock::new(|| Device::libtorch_cuda(burn::tensor::DeviceIndex::Default));
     #[cfg(target_os = "macos")]
-    pub static INFERENCE_DEVICE: LazyLock<Device> = LazyLock::new(Device::libtorch_mps);
+    pub static INFERENCE_DEVICE: LazyLock<Device> =
+        LazyLock::new(|| configure(Device::libtorch_mps()));
     pub const NAME: &str = "libtorch";
 }
 
@@ -78,7 +88,7 @@ pub mod burn_backend_types {
     use super::*;
 
     pub type InferenceDevice = Device;
-    pub static INFERENCE_DEVICE: LazyLock<Device> = LazyLock::new(Device::libtorch);
+    pub static INFERENCE_DEVICE: LazyLock<Device> = LazyLock::new(|| configure(Device::libtorch()));
     pub const NAME: &str = "libtorch-cpu";
 }
 
@@ -90,7 +100,7 @@ pub mod burn_backend_types {
 
     pub type InferenceDevice = Device;
     pub static INFERENCE_DEVICE: LazyLock<Device> =
-        LazyLock::new(|| Device::wgpu(burn::tensor::DeviceKind::DefaultDevice));
+        LazyLock::new(|| configure(Device::wgpu(burn::tensor::DeviceKind::DefaultDevice)));
     #[cfg(all(feature = "wgpu", not(feature = "vulkan"), not(feature = "metal")))]
     pub const NAME: &str = "wgpu";
     #[cfg(feature = "vulkan")]
@@ -105,6 +115,6 @@ pub mod burn_backend_types {
 
     pub type InferenceDevice = Device;
     pub static INFERENCE_DEVICE: LazyLock<Device> =
-        LazyLock::new(|| Device::wgpu(burn::tensor::DeviceKind::Cpu));
+        LazyLock::new(|| configure(Device::wgpu(burn::tensor::DeviceKind::Cpu)));
     pub const NAME: &str = "wgpu-cpu";
 }

@@ -6,14 +6,14 @@ use crate::{
     },
     tokenizer::Tokenizer,
 };
-use burn::{
-    config::Config, nn::RotaryEncodingConfig, record::HalfPrecisionSettings, tensor::Device,
-};
+use burn::{config::Config, nn::RotaryEncodingConfig, tensor::Device};
 
 #[cfg(feature = "tiny")]
 use crate::tokenizer::SentencePieceTokenizer;
 #[cfg(feature = "llama3")]
 use crate::tokenizer::Tiktoken;
+#[cfg(feature = "llama3")]
+use burn::record::HalfPrecisionSettings;
 
 #[derive(Clone, Debug, Default)]
 /// Llama-3 model variants to load.

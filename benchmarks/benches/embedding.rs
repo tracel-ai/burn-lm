@@ -1,23 +1,24 @@
 use burn::{
     nn::{Embedding, EmbeddingConfig},
-    tensor::{backend::Backend, Distribution, Element, Int, Tensor},
+    tensor::{DType, Device, Distribution, Int, Tensor},
 };
 use burnbench::{run_benchmark, Benchmark, BenchmarkResult};
 
-pub struct EmbeddingBenchmark<B: Backend> {
+pub struct EmbeddingBenchmark {
     seq_length: usize,
     batch_size: usize,
     config: Config,
-    device: B::Device,
-    embedding: Embedding<B>,
+    device: Device,
+    embedding: Embedding,
+    dtype: DType,
 }
 
-impl<B: Backend> Benchmark for EmbeddingBenchmark<B> {
-    type Input = Tensor<B, 2, Int>;
-    type Output = Tensor<B, 3>;
+impl Benchmark for EmbeddingBenchmark {
+    type Input = Tensor<2, Int>;
+    type Output = Tensor<3>;
 
     fn name(&self) -> String {
-        format!("embedding-{}-{:?}", self.config.name, B::FloatElem::dtype()).to_lowercase()
+        format!("embedding-{}-{:?}", self.config.name, self.dtype).to_lowercase()
     }
 
     fn shapes(&self) -> Vec<Vec<usize>> {
@@ -29,7 +30,7 @@ impl<B: Backend> Benchmark for EmbeddingBenchmark<B> {
     }
 
     fn prepare(&self) -> Self::Input {
-        let input = Tensor::<B, 2>::random(
+        let input = Tensor::<2>::random(
             [self.batch_size, self.seq_length],
             Distribution::Uniform(0., 10000.0),
             &self.device,
@@ -38,7 +39,7 @@ impl<B: Backend> Benchmark for EmbeddingBenchmark<B> {
     }
 
     fn sync(&self) {
-        B::sync(&self.device).unwrap();
+        self.device.sync().unwrap();
     }
 }
 
@@ -49,7 +50,7 @@ struct Config {
 }
 
 #[allow(dead_code)]
-fn bench<B: Backend>(device: &B::Device) -> Vec<BenchmarkResult> {
+fn bench(device: &Device, dtype: DType) -> Vec<BenchmarkResult> {
     let batch_size = 1;
     let seq_length = 512;
 
@@ -68,12 +69,13 @@ fn bench<B: Backend>(device: &B::Device) -> Vec<BenchmarkResult> {
         },
     ] {
         let embedding = EmbeddingConfig::new(config.vocab_size, config.d_model).init(device);
-        let benchmark = EmbeddingBenchmark::<B> {
+        let benchmark = EmbeddingBenchmark {
             batch_size,
             seq_length,
             config,
             device: device.clone(),
             embedding,
+            dtype,
         };
         let result = run_benchmark(benchmark);
         results.push(result);
@@ -83,5 +85,7 @@ fn bench<B: Backend>(device: &B::Device) -> Vec<BenchmarkResult> {
 }
 
 fn main() {
-    burnbench::bench_on_backend!();
+    // needs and update to burnbench
+    // burnbench::bench_on_backend!();
+    todo!()
 }

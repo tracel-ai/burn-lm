@@ -1,6 +1,6 @@
 use burn::{
     nn::RotaryEncodingConfig,
-    tensor::{backend::Backend, Distribution, Element, Tensor},
+    tensor::{DType, Device, Distribution, Tensor},
 };
 use burn_lm_llama::nn::{
     attention::KeyValueCache,
@@ -9,26 +9,22 @@ use burn_lm_llama::nn::{
 };
 use burnbench::{run_benchmark, Benchmark, BenchmarkResult};
 
-pub struct TransformerBlockBenchmark<B: Backend> {
+pub struct TransformerBlockBenchmark {
     seq_length: usize,
     batch_size: usize,
     config: Config,
-    device: B::Device,
-    block: TransformerBlock<B>,
-    pos_encoding: PositionalEncodingState<B>,
+    device: Device,
+    block: TransformerBlock,
+    pos_encoding: PositionalEncodingState,
+    dtype: DType,
 }
 
-impl<B: Backend> Benchmark for TransformerBlockBenchmark<B> {
-    type Input = (Tensor<B, 3>, KeyValueCache<B>);
-    type Output = Tensor<B, 3>;
+impl Benchmark for TransformerBlockBenchmark {
+    type Input = (Tensor<3>, KeyValueCache);
+    type Output = Tensor<3>;
 
     fn name(&self) -> String {
-        format!(
-            "transformer-block-{}-{:?}",
-            self.config.name,
-            B::FloatElem::dtype()
-        )
-        .to_lowercase()
+        format!("transformer-block-{}-{:?}", self.config.name, self.dtype).to_lowercase()
     }
 
     fn shapes(&self) -> Vec<Vec<usize>> {
@@ -41,7 +37,7 @@ impl<B: Backend> Benchmark for TransformerBlockBenchmark<B> {
     }
 
     fn prepare(&self) -> Self::Input {
-        let input = Tensor::<B, 3>::random(
+        let input = Tensor::<3>::random(
             [self.batch_size, self.seq_length, self.config.d_model],
             Distribution::Default,
             &self.device,
@@ -58,7 +54,7 @@ impl<B: Backend> Benchmark for TransformerBlockBenchmark<B> {
     }
 
     fn sync(&self) {
-        B::sync(&self.device).unwrap();
+        self.device.sync().unwrap();
     }
 }
 
@@ -71,7 +67,7 @@ struct Config {
 }
 
 #[allow(dead_code)]
-fn bench<B: Backend>(device: &B::Device) -> Vec<BenchmarkResult> {
+fn bench(device: &Device, dtype: DType) -> Vec<BenchmarkResult> {
     let n_layers = 1;
     let max_seq_length = 512;
     let norm_eps = 1e-5;
@@ -114,13 +110,14 @@ fn bench<B: Backend>(device: &B::Device) -> Vec<BenchmarkResult> {
             let rope =
                 RotaryEncodingConfig::new(max_seq_length * 2, config.d_model / config.n_heads)
                     .init(device);
-            let benchmark = TransformerBlockBenchmark::<B> {
+            let benchmark = TransformerBlockBenchmark {
                 batch_size,
                 seq_length,
                 config,
                 device: device.clone(),
                 block,
                 pos_encoding: PositionalEncodingState::new(rope),
+                dtype,
             };
             let result = run_benchmark(benchmark);
             results.push(result);
@@ -131,5 +128,7 @@ fn bench<B: Backend>(device: &B::Device) -> Vec<BenchmarkResult> {
 }
 
 fn main() {
-    burnbench::bench_on_backend!();
+    // needs and update to burnbench
+    // burnbench::bench_on_backend!();
+    todo!()
 }

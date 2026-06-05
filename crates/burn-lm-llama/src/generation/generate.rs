@@ -5,10 +5,7 @@ use crate::{inference::Llama, tokenizer::Tokenizer};
 use burn::{prelude::*, tensor::activation::softmax};
 use burn_lm_inference::GeneratedItemEmitter;
 
-pub(crate) fn temperature_scaled_softmax<B: Backend>(
-    logits: Tensor<B, 2>,
-    temperature: f64,
-) -> Tensor<B, 2> {
+pub(crate) fn temperature_scaled_softmax(logits: Tensor<2>, temperature: f64) -> Tensor<2> {
     softmax(logits / temperature, 1)
 }
 
@@ -25,7 +22,7 @@ pub enum GenerationError {
     MaxSequenceLengthExceeded { actual: usize, max: usize },
 }
 
-impl<B: Backend, T: Tokenizer + 'static> Llama<B, T> {
+impl<T: Tokenizer + 'static> Llama<T> {
     /// Generate text sample based on the provided prompt.
     ///
     /// # Arguments
@@ -56,7 +53,7 @@ impl<B: Backend, T: Tokenizer + 'static> Llama<B, T> {
         );
         state.append(input_tokens);
 
-        let mut input_pos = Tensor::<B, 1, Int>::arange(0..prompt_len as i64, &self.device);
+        let mut input_pos = Tensor::<1, Int>::arange(0..prompt_len as i64, &self.device);
         let now = Instant::now();
 
         for _ in 0..sample_len {
@@ -112,10 +109,8 @@ mod tests {
     use super::*;
     use crate::{tests::*, tokenizer::byte::ByteTokenizer, LlamaConfig};
 
-    use burn::{
-        module::Reinitializer,
-        tensor::{TensorData, Tolerance},
-    };
+    use crate::tests::Reinitializer;
+    use burn::tensor::{TensorData, Tolerance};
     use burn_lm_inference::TextGenerationListener;
 
     #[test]
@@ -138,11 +133,11 @@ mod tests {
 
     #[test]
     fn test_llama3_2_3b_test() {
-        let device: Device<TestBackend> = Default::default();
+        let device: Device = Default::default();
         let config = LlamaConfig::llama3_2_1b_test();
-        let mut llama = config.init::<TestBackend, ByteTokenizer>(&device).unwrap();
+        let mut llama = config.init::<ByteTokenizer>(&device).unwrap();
 
-        llama.model = Reinitializer::new()
+        llama.model = Reinitializer::default()
             .random_float(0, -1.0, 1.0)
             .apply(llama.model);
 

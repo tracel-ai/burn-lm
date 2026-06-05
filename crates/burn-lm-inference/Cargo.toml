@@ -5,7 +5,7 @@ categories = []
 description = "Burn Large Models Engine - Inference."
 documentation = "https://docs.rs/burn-lm-inference"
 repository = "https://github.com/tracel-ai/burn-lm"
-rust-version = "1.88"
+rust-version.workspace = true
 
 edition.workspace = true
 version.workspace = true
@@ -14,18 +14,9 @@ readme.workspace = true
 
 [features]
 default = []
-# default = ["legacy-v018"] # Necessary when building with burn-0.18
 
 # Feature flag to deactivate the default backend.
 selected-backend = []
-
-# Feature to make burn-lm compile with burn 0.18.0
-legacy-v018 = []
-
-candle-accelerate = ["burn/candle", "burn/accelerate", "selected-backend"]
-candle-cpu = ["burn/candle", "selected-backend"]
-candle-cuda = ["burn/candle-cuda", "selected-backend"]
-candle-metal = ["burn/candle", "burn/metal", "selected-backend"]
 
 cuda = ["burn/cuda", "burn/default", "selected-backend"]
 rocm = ["burn/rocm", "burn/default", "selected-backend"]

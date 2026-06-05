@@ -209,9 +209,9 @@ struct InferenceServerField {
 ///     model_creation_date = "2024/04/18",
 ///     created_by = "Meta"
 /// )]
-/// pub struct Llama3InstructServer<B: Backend> {
+/// pub struct Llama3InstructServer {
 ///     config: Llama3ServerConfig,
-///     server: Llama3BaseServer<B>,
+///     server: Llama3BaseServer,
 /// }
 /// ```
 pub fn inference_server(input: TokenStream) -> TokenStream {

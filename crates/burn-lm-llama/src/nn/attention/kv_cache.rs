@@ -1,23 +1,22 @@
 use burn::tensor::{Device, Tensor};
-use burn_lm_inference::Backend;
 
 use super::cache::AutoregressiveCache;
 
 /// Key-value cache for autoregressive models.
 #[derive(Debug, Clone)]
-pub struct KeyValueCache<B: Backend> {
-    key: AutoregressiveCache<B, 4>,
-    value: AutoregressiveCache<B, 4>,
+pub struct KeyValueCache {
+    key: AutoregressiveCache<4>,
+    value: AutoregressiveCache<4>,
 }
 
-impl<B: Backend> KeyValueCache<B> {
+impl KeyValueCache {
     /// Create a new [key-value cache](KeyValueCache).
     pub fn new(
         max_batch_size: usize,
         num_heads: usize,
         max_seq_len: usize,
         d_model: usize,
-        device: &Device<B>,
+        device: &Device,
     ) -> Self {
         Self {
             key: AutoregressiveCache::new(
@@ -34,11 +33,7 @@ impl<B: Backend> KeyValueCache<B> {
     }
 
     /// Computes the complete keys and values.
-    pub fn forward(
-        &mut self,
-        key: Tensor<B, 4>,
-        value: Tensor<B, 4>,
-    ) -> (Tensor<B, 4>, Tensor<B, 4>) {
+    pub fn forward(&mut self, key: Tensor<4>, value: Tensor<4>) -> (Tensor<4>, Tensor<4>) {
         let k = self.key.append(key);
         let v = self.value.append(value);
         (k, v)

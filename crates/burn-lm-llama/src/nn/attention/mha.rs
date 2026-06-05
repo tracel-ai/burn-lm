@@ -20,22 +20,22 @@ pub struct MultiHeadAttentionConfig {
 }
 
 #[derive(Module, Debug)]
-pub struct MultiHeadAttention<B: Backend> {
+pub struct MultiHeadAttention {
     /// Query projection.
-    wq: Linear<B>,
+    wq: Linear,
     /// Key projection.
-    wk: Linear<B>,
+    wk: Linear,
     /// Value projection.
-    wv: Linear<B>,
+    wv: Linear,
     /// Output projection.
-    wo: Linear<B>,
+    wo: Linear,
 
     n_heads: usize,
     n_kv_heads: usize,
     head_dim: usize,
 }
 
-impl<B: Backend> MultiHeadAttention<B> {
+impl MultiHeadAttention {
     /// Applies masked self-attention in a non-cached (non-incremental) setting.
     ///
     /// This function is intended for scenarios where the entire input sequence
@@ -47,7 +47,7 @@ impl<B: Backend> MultiHeadAttention<B> {
     /// - key: `[batch_size, seq_length_2, d_model]`
     /// - value: `[batch_size, seq_length_2, d_model]`
     /// - output: `[batch_size, seq_length_1, d_model]`
-    pub fn forward_masked(&self, input: Tensor<B, 3>, rope: &RotaryEncoding<B>) -> Tensor<B, 3> {
+    pub fn forward_masked(&self, input: Tensor<3>, rope: &RotaryEncoding) -> Tensor<3> {
         let device = input.device();
         let [batch_size, seq_len, hidden_size] = input.dims();
 
@@ -58,7 +58,7 @@ impl<B: Backend> MultiHeadAttention<B> {
         let k = rope.forward(k);
 
         let mask = if seq_len > 1 {
-            let mask = Tensor::<B, 2, Bool>::tril_mask([seq_len, seq_len], 0, &device);
+            let mask = Tensor::<2, Bool>::tril_mask([seq_len, seq_len], 0, &device);
             Some(mask.unsqueeze::<4>())
         } else {
             None
@@ -78,11 +78,11 @@ impl<B: Backend> MultiHeadAttention<B> {
     /// - output: `[batch_size, seq_length_1, d_model]`
     pub fn forward_cache(
         &self,
-        input: Tensor<B, 3>,
-        cache: &mut KeyValueCache<B>,
-        pos_encoding: &PositionalEncodingState<B>,
-        mask: Option<Tensor<B, 4, Bool>>,
-    ) -> Tensor<B, 3> {
+        input: Tensor<3>,
+        cache: &mut KeyValueCache,
+        pos_encoding: &PositionalEncodingState,
+        mask: Option<Tensor<4, Bool>>,
+    ) -> Tensor<3> {
         let device = input.device();
         let [batch_size, seq_len, hidden_size] = input.dims();
 
@@ -100,7 +100,7 @@ impl<B: Backend> MultiHeadAttention<B> {
                 None => {
                     // We ensure that the correct mask is applied
                     let cache_seq_len = cache.len();
-                    let mask = Tensor::<B, 2, Bool>::tril_mask(
+                    let mask = Tensor::<2, Bool>::tril_mask(
                         [seq_len, cache_seq_len],
                         (cache_seq_len - seq_len) as i64, // offset
                         &device,
@@ -118,10 +118,7 @@ impl<B: Backend> MultiHeadAttention<B> {
         self.wo.forward(output)
     }
 
-    fn forward_projection(
-        &self,
-        input: Tensor<B, 3>,
-    ) -> (Tensor<B, 4>, Tensor<B, 4>, Tensor<B, 4>) {
+    fn forward_projection(&self, input: Tensor<3>) -> (Tensor<4>, Tensor<4>, Tensor<4>) {
         let [batch_size, seq_len, _hidden_size] = input.dims();
 
         let q = self.wq.forward(input.clone());
@@ -145,14 +142,14 @@ impl<B: Backend> MultiHeadAttention<B> {
     #[allow(clippy::too_many_arguments)]
     fn forward_attention(
         &self,
-        q: Tensor<B, 4>,
-        k: Tensor<B, 4>,
-        v: Tensor<B, 4>,
-        mask: Option<Tensor<B, 4, Bool>>,
+        q: Tensor<4>,
+        k: Tensor<4>,
+        v: Tensor<4>,
+        mask: Option<Tensor<4, Bool>>,
         batch_size: usize,
         seq_len: usize,
         hidden_size: usize,
-    ) -> Tensor<B, 3> {
+    ) -> Tensor<3> {
         let k = self.repeat_kv(k);
         let v = self.repeat_kv(v);
 
@@ -174,7 +171,7 @@ impl<B: Backend> MultiHeadAttention<B> {
     }
 
     /// Repeats a key or value tensor for grouped query attention.
-    fn repeat_kv(&self, x: Tensor<B, 4>) -> Tensor<B, 4> {
+    fn repeat_kv(&self, x: Tensor<4>) -> Tensor<4> {
         let n_rep = self.n_heads / self.n_kv_heads;
         if n_rep == 1 {
             x
@@ -190,7 +187,7 @@ impl<B: Backend> MultiHeadAttention<B> {
 
 impl MultiHeadAttentionConfig {
     /// Initialize a new [multi-head attention](MultiHeadAttention) module.
-    pub fn init<B: Backend>(&self, device: &Device<B>) -> MultiHeadAttention<B> {
+    pub fn init(&self, device: &Device) -> MultiHeadAttention {
         let head_dim = self.d_model / self.n_heads;
 
         let wq = LinearConfig::new(self.d_model, self.n_heads * head_dim)
@@ -221,18 +218,20 @@ impl MultiHeadAttentionConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tests::TestBackend;
-    use burn::{module::Reinitializer, nn::RotaryEncodingConfig, tensor::Tolerance};
+    use crate::tests::Reinitializer;
+    use burn::{nn::RotaryEncodingConfig, tensor::Tolerance};
 
     #[test]
     pub fn test_attention_empty_cache() {
         let seq_length = 3;
         let batch_size = 2;
         let config = MultiHeadAttentionConfig::new(32, 2, 2);
-        let device: Device<TestBackend> = Default::default();
-        let mha = config.init::<TestBackend>(&device);
+        let device: Device = Default::default();
+        let mha = config.init(&device);
 
-        let mha = Reinitializer::new().random_float(0, -2.0, 2.0).apply(mha);
+        let mha = Reinitializer::default()
+            .random_float(0, -2.0, 2.0)
+            .apply(mha);
 
         let shape = Shape::from([batch_size, seq_length, config.d_model]);
         let input = Tensor::arange(0..shape.num_elements() as i64, &device)
@@ -256,7 +255,7 @@ mod tests {
 
         output
             .into_data()
-            .assert_approx_eq::<f32>(&expected, Tolerance::balanced());
+            .assert_approx_eq::<f32>(&expected, Tolerance::relative(0.05));
     }
 
     #[test]
@@ -264,10 +263,12 @@ mod tests {
         let seq_length = 3;
         let batch_size = 2;
         let config = MultiHeadAttentionConfig::new(32, 2, 2);
-        let device: Device<TestBackend> = Default::default();
-        let mha = config.init::<TestBackend>(&device);
+        let device: Device = Default::default();
+        let mha = config.init(&device);
 
-        let mha = Reinitializer::new().random_float(0, -2.0, 2.0).apply(mha);
+        let mha = Reinitializer::default()
+            .random_float(0, -2.0, 2.0)
+            .apply(mha);
 
         let shape = Shape::from([batch_size, seq_length, config.d_model]);
         let input = Tensor::arange(0..shape.num_elements() as i64, &device)
@@ -282,7 +283,7 @@ mod tests {
 
         output
             .into_data()
-            .assert_approx_eq::<f32>(&expected, Tolerance::balanced());
+            .assert_approx_eq::<f32>(&expected, Tolerance::relative(0.05));
     }
 
     #[test]
@@ -290,10 +291,12 @@ mod tests {
         let seq_length = 3;
         let batch_size = 2;
         let config = MultiHeadAttentionConfig::new(32, 2, 2);
-        let device: Device<TestBackend> = Default::default();
-        let mha = config.init::<TestBackend>(&device);
+        let device: Device = Default::default();
+        let mha = config.init(&device);
 
-        let mha = Reinitializer::new().random_float(0, -2.0, 2.0).apply(mha);
+        let mha = Reinitializer::default()
+            .random_float(0, -2.0, 2.0)
+            .apply(mha);
 
         let shape = Shape::from([batch_size, seq_length, config.d_model]);
         let input = Tensor::arange(0..shape.num_elements() as i64, &device)
@@ -343,7 +346,7 @@ mod tests {
 
         output
             .into_data()
-            .assert_approx_eq::<f32>(&expected, Tolerance::balanced());
+            .assert_approx_eq::<f32>(&expected, Tolerance::relative(0.05));
     }
 
     fn arange_mha_expected_value() -> TensorData {

@@ -9,7 +9,6 @@ use crate::{
     tokenizer::Tiktoken,
     LlamaConfig, LlamaVersion,
 };
-use burn::prelude::Backend;
 use burn_lm_inference::{InferenceJob, *};
 
 #[inference_server_config]
@@ -38,16 +37,16 @@ pub struct Llama3ServerConfig {
     model_creation_date = "2024/04/18",
     created_by = "Meta"
 )]
-pub struct Llama3InstructServer<B: Backend> {
+pub struct Llama3InstructServer {
     config: Llama3ServerConfig,
-    server: Llama3BaseServer<B>,
+    server: Llama3BaseServer,
 }
 
-impl<B: Backend> Default for Llama3InstructServer<B> {
+impl Default for Llama3InstructServer {
     fn default() -> Self {
         Self {
             config: Llama3ServerConfig::default(),
-            server: Llama3BaseServer::<B>::new(LlamaVersion::Llama3Instruct),
+            server: Llama3BaseServer::new(LlamaVersion::Llama3Instruct),
         }
     }
 }
@@ -79,12 +78,12 @@ fn llama_deleter(version: LlamaVersion, name: &'static str) -> InferenceResult<O
     Ok(None)
 }
 
-impl InferenceServer for Llama3InstructServer<InferenceBackend> {
+impl InferenceServer for Llama3InstructServer {
     fn downloader(&mut self) -> Option<fn() -> InferenceResult<Option<Stats>>> {
         fn downloader() -> InferenceResult<Option<Stats>> {
             llama_downloader(
                 LlamaVersion::Llama3Instruct,
-                Llama3InstructServer::<InferenceBackend>::model_name(),
+                Llama3InstructServer::model_name(),
             )
         }
         Some(downloader)
@@ -99,7 +98,7 @@ impl InferenceServer for Llama3InstructServer<InferenceBackend> {
         fn deleter() -> InferenceResult<Option<Stats>> {
             llama_deleter(
                 LlamaVersion::Llama3Instruct,
-                Llama3InstructServer::<InferenceBackend>::model_name(),
+                Llama3InstructServer::model_name(),
             )
         }
         Some(deleter)
@@ -133,26 +132,26 @@ impl InferenceServer for Llama3InstructServer<InferenceBackend> {
     model_creation_date = "2024/07/23",
     created_by = "Meta"
 )]
-pub struct Llama31InstructServer<B: Backend> {
+pub struct Llama31InstructServer {
     config: Llama3ServerConfig,
-    server: Llama3BaseServer<B>,
+    server: Llama3BaseServer,
 }
 
-impl<B: Backend> Default for Llama31InstructServer<B> {
+impl Default for Llama31InstructServer {
     fn default() -> Self {
         Self {
             config: Llama3ServerConfig::default(),
-            server: Llama3BaseServer::<B>::new(LlamaVersion::Llama31Instruct),
+            server: Llama3BaseServer::new(LlamaVersion::Llama31Instruct),
         }
     }
 }
 
-impl InferenceServer for Llama31InstructServer<InferenceBackend> {
+impl InferenceServer for Llama31InstructServer {
     fn downloader(&mut self) -> Option<fn() -> InferenceResult<Option<Stats>>> {
         fn downloader() -> InferenceResult<Option<Stats>> {
             llama_downloader(
                 LlamaVersion::Llama31Instruct,
-                Llama31InstructServer::<InferenceBackend>::model_name(),
+                Llama31InstructServer::model_name(),
             )
         }
         Some(downloader)
@@ -167,7 +166,7 @@ impl InferenceServer for Llama31InstructServer<InferenceBackend> {
         fn deleter() -> InferenceResult<Option<Stats>> {
             llama_deleter(
                 LlamaVersion::Llama31Instruct,
-                Llama31InstructServer::<InferenceBackend>::model_name(),
+                Llama31InstructServer::model_name(),
             )
         }
         Some(deleter)
@@ -201,26 +200,26 @@ impl InferenceServer for Llama31InstructServer<InferenceBackend> {
     model_creation_date = "2024/09/25",
     created_by = "Meta"
 )]
-pub struct Llama321bInstructServer<B: Backend> {
+pub struct Llama321bInstructServer {
     config: Llama3ServerConfig,
-    server: Llama3BaseServer<B>,
+    server: Llama3BaseServer,
 }
 
-impl<B: Backend> Default for Llama321bInstructServer<B> {
+impl Default for Llama321bInstructServer {
     fn default() -> Self {
         Self {
             config: Llama3ServerConfig::default(),
-            server: Llama3BaseServer::<B>::new(LlamaVersion::Llama321bInstruct),
+            server: Llama3BaseServer::new(LlamaVersion::Llama321bInstruct),
         }
     }
 }
 
-impl InferenceServer for Llama321bInstructServer<InferenceBackend> {
+impl InferenceServer for Llama321bInstructServer {
     fn downloader(&mut self) -> Option<fn() -> InferenceResult<Option<Stats>>> {
         fn downloader() -> InferenceResult<Option<Stats>> {
             llama_downloader(
                 LlamaVersion::Llama321bInstruct,
-                Llama321bInstructServer::<InferenceBackend>::model_name(),
+                Llama321bInstructServer::model_name(),
             )
         }
         Some(downloader)
@@ -235,7 +234,7 @@ impl InferenceServer for Llama321bInstructServer<InferenceBackend> {
         fn deleter() -> InferenceResult<Option<Stats>> {
             llama_deleter(
                 LlamaVersion::Llama321bInstruct,
-                Llama321bInstructServer::<InferenceBackend>::model_name(),
+                Llama321bInstructServer::model_name(),
             )
         }
         Some(deleter)
@@ -269,26 +268,26 @@ impl InferenceServer for Llama321bInstructServer<InferenceBackend> {
     model_creation_date = "2024/09/25",
     created_by = "Meta"
 )]
-pub struct Llama323bInstructServer<B: Backend> {
+pub struct Llama323bInstructServer {
     config: Llama3ServerConfig,
-    server: Llama3BaseServer<B>,
+    server: Llama3BaseServer,
 }
 
-impl<B: Backend> Default for Llama323bInstructServer<B> {
+impl Default for Llama323bInstructServer {
     fn default() -> Self {
         Self {
             config: Llama3ServerConfig::default(),
-            server: Llama3BaseServer::<B>::new(LlamaVersion::Llama323bInstruct),
+            server: Llama3BaseServer::new(LlamaVersion::Llama323bInstruct),
         }
     }
 }
 
-impl InferenceServer for Llama323bInstructServer<InferenceBackend> {
+impl InferenceServer for Llama323bInstructServer {
     fn downloader(&mut self) -> Option<fn() -> InferenceResult<Option<Stats>>> {
         fn downloader() -> InferenceResult<Option<Stats>> {
             llama_downloader(
                 LlamaVersion::Llama323bInstruct,
-                Llama323bInstructServer::<InferenceBackend>::model_name(),
+                Llama323bInstructServer::model_name(),
             )
         }
         Some(downloader)
@@ -303,7 +302,7 @@ impl InferenceServer for Llama323bInstructServer<InferenceBackend> {
         fn deleter() -> InferenceResult<Option<Stats>> {
             llama_deleter(
                 LlamaVersion::Llama323bInstruct,
-                Llama323bInstructServer::<InferenceBackend>::model_name(),
+                Llama323bInstructServer::model_name(),
             )
         }
         Some(deleter)
@@ -337,26 +336,26 @@ impl InferenceServer for Llama323bInstructServer<InferenceBackend> {
     model_creation_date = "2024/09/25",
     created_by = "Meta"
 )]
-pub struct Llama321bInstructQ4Server<B: Backend> {
+pub struct Llama321bInstructQ4Server {
     config: Llama3ServerConfig,
-    server: Llama3BaseServer<B>,
+    server: Llama3BaseServer,
 }
 
-impl<B: Backend> Default for Llama321bInstructQ4Server<B> {
+impl Default for Llama321bInstructQ4Server {
     fn default() -> Self {
         Self {
             config: Llama3ServerConfig::default(),
-            server: Llama3BaseServer::<B>::new(LlamaVersion::Llama321bInstructQ4FB32),
+            server: Llama3BaseServer::new(LlamaVersion::Llama321bInstructQ4FB32),
         }
     }
 }
 
-impl InferenceServer for Llama321bInstructQ4Server<InferenceBackend> {
+impl InferenceServer for Llama321bInstructQ4Server {
     fn downloader(&mut self) -> Option<fn() -> InferenceResult<Option<Stats>>> {
         fn downloader() -> InferenceResult<Option<Stats>> {
             llama_downloader(
                 LlamaVersion::Llama321bInstructQ4FB32,
-                Llama321bInstructServer::<InferenceBackend>::model_name(),
+                Llama321bInstructServer::model_name(),
             )
         }
         Some(downloader)
@@ -371,7 +370,7 @@ impl InferenceServer for Llama321bInstructQ4Server<InferenceBackend> {
         fn deleter() -> InferenceResult<Option<Stats>> {
             llama_deleter(
                 LlamaVersion::Llama321bInstructQ4FB32,
-                Llama321bInstructServer::<InferenceBackend>::model_name(),
+                Llama321bInstructServer::model_name(),
             )
         }
         Some(deleter)
@@ -399,21 +398,19 @@ impl InferenceServer for Llama321bInstructQ4Server<InferenceBackend> {
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct Llama3BaseServer<B: Backend> {
-    model: Option<Arc<Mutex<Llama<B, Tiktoken>>>>,
+pub struct Llama3BaseServer {
+    model: Option<Arc<Mutex<Llama<Tiktoken>>>>,
     version: LlamaVersion,
 }
 
-impl<B: Backend> Llama3BaseServer<B> {
+impl Llama3BaseServer {
     pub fn new(version: LlamaVersion) -> Self {
         Self {
             model: None,
             version,
         }
     }
-}
 
-impl Llama3BaseServer<InferenceBackend> {
     fn unload(&mut self, model_name: &str) -> InferenceResult<Option<Stats>> {
         if let Some(arc_model) = self.model.take() {
             match Arc::try_unwrap(arc_model) {
@@ -526,36 +523,25 @@ impl Llama3BaseServer<InferenceBackend> {
             let now = std::time::Instant::now();
             let model = match self.version {
                 LlamaVersion::Llama3Instruct => {
-                    LlamaConfig::llama3_8b_pretrained::<InferenceBackend>(
-                        config.max_seq_len,
-                        &INFERENCE_DEVICE,
-                    )
-                    .unwrap()
+                    LlamaConfig::llama3_8b_pretrained(config.max_seq_len, &*INFERENCE_DEVICE)
+                        .unwrap()
                 }
-                LlamaVersion::Llama31Instruct => LlamaConfig::llama3_1_8b_pretrained::<
-                    InferenceBackend,
-                >(
-                    config.max_seq_len, &INFERENCE_DEVICE
-                )
-                .unwrap(),
-                LlamaVersion::Llama323bInstruct => LlamaConfig::llama3_2_3b_pretrained::<
-                    InferenceBackend,
-                >(
-                    config.max_seq_len, &INFERENCE_DEVICE
-                )
-                .unwrap(),
-                LlamaVersion::Llama321bInstruct => LlamaConfig::llama3_2_1b_pretrained::<
-                    InferenceBackend,
-                >(
-                    config.max_seq_len, &INFERENCE_DEVICE
-                )
-                .unwrap(),
-                LlamaVersion::Llama321bInstructQ4FB32 => LlamaConfig::llama3_2_1b_pretrained_q4::<
-                    InferenceBackend,
-                >(
-                    config.max_seq_len, &INFERENCE_DEVICE
-                )
-                .unwrap(),
+                LlamaVersion::Llama31Instruct => {
+                    LlamaConfig::llama3_1_8b_pretrained(config.max_seq_len, &*INFERENCE_DEVICE)
+                        .unwrap()
+                }
+                LlamaVersion::Llama323bInstruct => {
+                    LlamaConfig::llama3_2_3b_pretrained(config.max_seq_len, &*INFERENCE_DEVICE)
+                        .unwrap()
+                }
+                LlamaVersion::Llama321bInstruct => {
+                    LlamaConfig::llama3_2_1b_pretrained(config.max_seq_len, &*INFERENCE_DEVICE)
+                        .unwrap()
+                }
+                LlamaVersion::Llama321bInstructQ4FB32 => {
+                    LlamaConfig::llama3_2_1b_pretrained_q4(config.max_seq_len, &*INFERENCE_DEVICE)
+                        .unwrap()
+                }
             };
             self.model = Some(Arc::new(Mutex::new(model)));
             let mut stats = Stats::new();

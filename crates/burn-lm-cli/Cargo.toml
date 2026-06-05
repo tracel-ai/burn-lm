@@ -5,18 +5,13 @@ categories = []
 description = "Burn Large Models Engine - CLI."
 documentation = "https://docs.rs/burn-lm-cli"
 repository = "https://github.com/tracel-ai/burn-lm"
-rust-version = "1.88"
 edition.workspace = true
+rust-version.workspace = true
 version.workspace = true
 license.workspace = true
 readme.workspace = true
 
 [features]
-candle-accelerate = ["burn-lm-inference/candle-accelerate"]
-candle-cpu = ["burn-lm-inference/candle-cpu"]
-candle-cuda = ["burn-lm-inference/candle-cuda"]
-candle-metal = ["burn-lm-inference/candle-metal"]
-
 f16 = ["burn-lm-inference/f16"]
 bf16 = ["burn-lm-inference/f16"]
 cuda = ["burn-lm-inference/cuda"]

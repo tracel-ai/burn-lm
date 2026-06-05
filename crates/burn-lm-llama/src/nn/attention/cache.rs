@@ -1,4 +1,4 @@
-use burn::tensor::{backend::Backend, Device, Tensor};
+use burn::tensor::{Device, Tensor};
 
 /// Strategy for managing the autoregressive cache when its capacity is exceeded.
 #[derive(Debug, Clone, Default)]
@@ -16,16 +16,16 @@ pub(crate) enum CacheStrategy {
 
 #[derive(Debug, Clone)]
 /// Cache that keeps track of a tensor state in an autoregressive decoding process.
-pub(crate) struct AutoregressiveCache<B: Backend, const D: usize> {
-    cache: Tensor<B, D>,
+pub(crate) struct AutoregressiveCache<const D: usize> {
+    cache: Tensor<D>,
     seq_dim: usize,
     cur_seq_len: usize,
     strategy: CacheStrategy,
 }
 
-impl<const D: usize, B: Backend> AutoregressiveCache<B, D> {
+impl<const D: usize> AutoregressiveCache<D> {
     /// Creates a new empty cache.
-    pub fn new(shape: [usize; D], seq_dim: usize, device: &Device<B>) -> Self {
+    pub fn new(shape: [usize; D], seq_dim: usize, device: &Device) -> Self {
         Self {
             cache: Tensor::empty(shape, device),
             seq_dim,
@@ -53,7 +53,7 @@ impl<const D: usize, B: Backend> AutoregressiveCache<B, D> {
     ///
     /// - input:  `[batch_size, num_heads, seq_len_input, d_model]`
     /// - output: `[batch_size, num_heads, seq_len_previous + seq_len_input, d_model]`
-    pub fn append(&mut self, tokens: Tensor<B, D>) -> Tensor<B, D> {
+    pub fn append(&mut self, tokens: Tensor<D>) -> Tensor<D> {
         let shape = tokens.shape();
         let seq_len_input = shape[self.seq_dim];
 
@@ -154,7 +154,7 @@ impl<const D: usize, B: Backend> AutoregressiveCache<B, D> {
     }
 
     #[allow(dead_code)]
-    pub fn device(&self) -> Device<B> {
+    pub fn device(&self) -> Device {
         self.cache.device()
     }
 }
@@ -162,12 +162,10 @@ impl<const D: usize, B: Backend> AutoregressiveCache<B, D> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tests::TestBackend;
-
-    fn test_autoregressive_cache<B: Backend>(mut cache: AutoregressiveCache<B, 2>) {
+    fn test_autoregressive_cache(mut cache: AutoregressiveCache<2>) {
         let device = cache.device();
-        let tokens_1 = Tensor::<B, 2>::full([4, 8], 1.0, &device);
-        let tokens_2 = Tensor::<B, 2>::full([4, 8], 2.0, &device);
+        let tokens_1 = Tensor::<2>::full([4, 8], 1.0, &device);
+        let tokens_2 = Tensor::<2>::full([4, 8], 2.0, &device);
 
         let received_1 = cache.append(tokens_1.clone());
         assert_eq!(cache.len(), 4);
@@ -188,7 +186,7 @@ mod tests {
         cache.prepare(2);
         assert_eq!(cache.len(), 6);
 
-        let tokens_3 = Tensor::<B, 2>::full([2, 8], 3.0, &device);
+        let tokens_3 = Tensor::<2>::full([2, 8], 3.0, &device);
         let received_3 = cache.append(tokens_3.clone());
         assert_eq!(cache.len(), 8);
 
@@ -210,14 +208,14 @@ mod tests {
 
     #[test]
     fn test_autoregressive_cache_shrink() {
-        let cache = AutoregressiveCache::<TestBackend, 2>::new([8, 8], 0, &Default::default())
+        let cache = AutoregressiveCache::<2>::new([8, 8], 0, &Default::default())
             .with_strategy(CacheStrategy::Shrink);
         test_autoregressive_cache(cache);
     }
 
     #[test]
     fn test_autoregressive_cache_shift() {
-        let cache = AutoregressiveCache::<TestBackend, 2>::new([8, 8], 0, &Default::default())
+        let cache = AutoregressiveCache::<2>::new([8, 8], 0, &Default::default())
             .with_strategy(CacheStrategy::Shift);
         test_autoregressive_cache(cache);
     }

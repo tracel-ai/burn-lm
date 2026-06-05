@@ -9,7 +9,6 @@ use crate::{
     tokenizer::SentencePieceTokenizer,
     LlamaConfig, TinyLlamaVersion,
 };
-use burn::prelude::Backend;
 use burn_lm_inference::{InferenceJob, *};
 
 #[inference_server_config]
@@ -38,12 +37,12 @@ pub struct TinyLlamaServerConfig {
     created_by = "StatNLP Research Group"
 )]
 // [StatNLP Research Group](https://arxiv.org/abs/2401.02385)
-pub struct TinyLlamaServer<B: Backend> {
+pub struct TinyLlamaServer {
     config: TinyLlamaServerConfig,
-    model: Option<Arc<Mutex<Llama<B, SentencePieceTokenizer>>>>,
+    model: Option<Arc<Mutex<Llama<SentencePieceTokenizer>>>>,
 }
 
-impl TinyLlamaServer<InferenceBackend> {
+impl TinyLlamaServer {
     fn run_prompt(
         &mut self,
         prompt: Prompt,
@@ -102,7 +101,7 @@ impl TinyLlamaServer<InferenceBackend> {
         Ok(stats)
     }
 }
-impl InferenceServer for TinyLlamaServer<InferenceBackend> {
+impl InferenceServer for TinyLlamaServer {
     fn downloader(&mut self) -> Option<fn() -> InferenceResult<Option<Stats>>> {
         Some(|| {
             let now = std::time::Instant::now();
@@ -142,11 +141,9 @@ impl InferenceServer for TinyLlamaServer<InferenceBackend> {
     fn load(&mut self) -> InferenceResult<Option<Stats>> {
         if !self.is_loaded() {
             let now = std::time::Instant::now();
-            let model = LlamaConfig::tiny_llama_pretrained::<InferenceBackend>(
-                self.config.max_seq_len,
-                &INFERENCE_DEVICE,
-            )
-            .unwrap();
+            let model =
+                LlamaConfig::tiny_llama_pretrained(self.config.max_seq_len, &*INFERENCE_DEVICE)
+                    .unwrap();
             self.model = Some(Arc::new(Mutex::new(model)));
             let mut stats = Stats::new();
             stats
@@ -205,7 +202,7 @@ impl InferenceServer for TinyLlamaServer<InferenceBackend> {
     }
 }
 
-impl TinyLlamaServer<InferenceBackend> {
+impl TinyLlamaServer {
     fn prompt(&self, messages: Vec<Message>) -> InferenceResult<burn_lm_inference::Prompt> {
         let mut prompt: Vec<String> = vec![];
         for message in messages {

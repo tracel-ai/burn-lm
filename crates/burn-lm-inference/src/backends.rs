@@ -2,11 +2,11 @@ mod elems {
     cfg_if::cfg_if! {
         // NOTE: f16/bf16 is not always supported on wgpu depending on the hardware
         // https://github.com/gfx-rs/wgpu/issues/7468
-        if #[cfg(all(feature = "f16", any(feature = "cuda", feature = "wgpu", feature = "vulkan", feature = "metal", feature = "rocm", feature = "libtorch", feature = "candle-cuda")))]{
+        if #[cfg(all(feature = "f16", any(feature = "cuda", feature = "wgpu", feature = "vulkan", feature = "metal", feature = "rocm", feature = "libtorch")))]{
             pub type ElemType = burn::tensor::f16;
             pub const DTYPE_NAME: &str = "f16";
         }
-        else if #[cfg(all(feature = "f16", any(feature = "cuda", feature = "wgpu", feature = "vulkan", feature = "metal", feature = "rocm", feature = "libtorch", feature = "candle-cuda")))]{
+        else if #[cfg(all(feature = "f16", any(feature = "cuda", feature = "wgpu", feature = "vulkan", feature = "metal", feature = "rocm", feature = "libtorch")))]{
             pub type ElemType = burn::tensor::bf16;
             pub const DTYPE_NAME: &str = "bf16";
         } else {
@@ -18,51 +18,27 @@ mod elems {
 
 pub use elems::*;
 
-// Candle --------------------------------------------------------------------
-
-#[cfg(any(feature = "candle-accelerate", feature = "candle-cpu"))]
-pub mod burn_backend_types {
-    use super::*;
-    use burn::backend::candle::{Candle, CandleDevice};
-    pub type InferenceBackend = Candle<ElemType>;
-    pub type InferenceDevice = CandleDevice;
-    pub const INFERENCE_DEVICE: std::sync::LazyLock<CandleDevice> =
-        std::sync::LazyLock::new(|| CandleDevice::Cpu);
-    pub const NAME: &str = "candle-cpu";
+/// Configure device default float `ElemType`.
+fn configure(mut device: burn::tensor::Device) -> burn::tensor::Device {
+    use burn::tensor::{DeviceConfig, Element};
+    device
+        .configure(DeviceConfig::default().float_dtype(ElemType::dtype()))
+        .unwrap();
+    device
 }
 
-#[cfg(feature = "candle-cuda")]
-pub mod burn_backend_types {
-    use super::*;
-    use burn::backend::candle::{Candle, CandleDevice};
-    pub type InferenceBackend = Candle<ElemType>;
-    pub type InferenceDevice = CandleDevice;
-    pub const INFERENCE_DEVICE: std::sync::LazyLock<CandleDevice> =
-        std::sync::LazyLock::new(|| CandleDevice::cuda(0));
-    pub const NAME: &str = "candle-cuda";
-}
-
-#[cfg(feature = "candle-metal")]
-pub mod burn_backend_types {
-    use super::*;
-    use burn::backend::candle::{Candle, CandleDevice};
-    pub type InferenceBackend = Candle<ElemType>;
-    pub type InferenceDevice = CandleDevice;
-    pub const INFERENCE_DEVICE: std::sync::LazyLock<CandleDevice> =
-        std::sync::LazyLock::new(|| CandleDevice::metal(0));
-    pub const NAME: &str = "candle-metal";
-}
+use burn::tensor::Device;
+use std::sync::LazyLock;
 
 // Cuda ----------------------------------------------------------------------
 
 #[cfg(feature = "cuda")]
 pub mod burn_backend_types {
     use super::*;
-    use burn::backend::cuda::{Cuda, CudaDevice};
-    pub type InferenceBackend = Cuda<ElemType>;
-    pub type InferenceDevice = CudaDevice;
-    pub const INFERENCE_DEVICE: std::sync::LazyLock<CudaDevice> =
-        std::sync::LazyLock::new(|| CudaDevice::default());
+
+    pub type InferenceDevice = Device;
+    pub static INFERENCE_DEVICE: LazyLock<Device> =
+        LazyLock::new(|| configure(Device::cuda(burn::tensor::DeviceIndex::Default)));
     pub const NAME: &str = "cuda";
 }
 
@@ -71,11 +47,10 @@ pub mod burn_backend_types {
 #[cfg(feature = "rocm")]
 pub mod burn_backend_types {
     use super::*;
-    use burn::backend::rocm::{Rocm, RocmDevice};
-    pub type InferenceBackend = Rocm<ElemType>;
-    pub type InferenceDevice = RocmDevice;
-    pub const INFERENCE_DEVICE: std::sync::LazyLock<RocmDevice> =
-        std::sync::LazyLock::new(|| RocmDevice::default());
+
+    pub type InferenceDevice = Device;
+    pub static INFERENCE_DEVICE: LazyLock<Device> =
+        LazyLock::new(|| configure(Device::rocm(burn::tensor::DeviceIndex::Default)));
     pub const NAME: &str = "rocm";
 }
 
@@ -85,11 +60,9 @@ pub mod burn_backend_types {
 #[cfg(any(feature = "ndarray", not(feature = "selected-backend")))]
 pub mod burn_backend_types {
     use super::*;
-    use burn::backend::ndarray::{NdArray, NdArrayDevice};
 
-    pub type InferenceBackend = NdArray<ElemType>;
-    pub type InferenceDevice = NdArrayDevice;
-    pub const INFERENCE_DEVICE: InferenceDevice = NdArrayDevice::Cpu;
+    pub type InferenceDevice = Device;
+    pub static INFERENCE_DEVICE: LazyLock<Device> = LazyLock::new(|| configure(Device::ndarray()));
     pub const NAME: &str = "ndarray";
 }
 
@@ -98,27 +71,24 @@ pub mod burn_backend_types {
 #[cfg(feature = "libtorch")]
 pub mod burn_backend_types {
     use super::*;
-    use burn::backend::libtorch::{LibTorch, LibTorchDevice};
 
-    pub type InferenceBackend = LibTorch<ElemType>;
-    pub type InferenceDevice = LibTorchDevice;
+    pub type InferenceDevice = Device;
 
     #[cfg(not(target_os = "macos"))]
-    pub const INFERENCE_DEVICE: std::sync::LazyLock<LibTorchDevice> =
-        std::sync::LazyLock::new(|| LibTorchDevice::Cuda(0));
+    pub static INFERENCE_DEVICE: LazyLock<Device> =
+        LazyLock::new(|| Device::libtorch_cuda(burn::tensor::DeviceIndex::Default));
     #[cfg(target_os = "macos")]
-    pub const INFERENCE_DEVICE: InferenceDevice = LibTorchDevice::Mps;
+    pub static INFERENCE_DEVICE: LazyLock<Device> =
+        LazyLock::new(|| configure(Device::libtorch_mps()));
     pub const NAME: &str = "libtorch";
 }
 
 #[cfg(feature = "libtorch-cpu")]
 pub mod burn_backend_types {
     use super::*;
-    use burn::backend::libtorch::{LibTorch, LibTorchDevice};
 
-    pub type InferenceBackend = LibTorch<ElemType>;
-    pub type InferenceDevice = LibTorchDevice;
-    pub const INFERENCE_DEVICE: InferenceDevice = LibTorchDevice::Cpu;
+    pub type InferenceDevice = Device;
+    pub static INFERENCE_DEVICE: LazyLock<Device> = LazyLock::new(|| configure(Device::libtorch()));
     pub const NAME: &str = "libtorch-cpu";
 }
 
@@ -127,10 +97,10 @@ pub mod burn_backend_types {
 #[cfg(any(feature = "wgpu", feature = "vulkan", feature = "metal"))]
 pub mod burn_backend_types {
     use super::*;
-    use burn::backend::wgpu::{Wgpu, WgpuDevice};
-    pub type InferenceBackend = Wgpu<ElemType>;
-    pub type InferenceDevice = WgpuDevice;
-    pub const INFERENCE_DEVICE: InferenceDevice = WgpuDevice::DefaultDevice;
+
+    pub type InferenceDevice = Device;
+    pub static INFERENCE_DEVICE: LazyLock<Device> =
+        LazyLock::new(|| configure(Device::wgpu(burn::tensor::DeviceKind::DefaultDevice)));
     #[cfg(all(feature = "wgpu", not(feature = "vulkan"), not(feature = "metal")))]
     pub const NAME: &str = "wgpu";
     #[cfg(feature = "vulkan")]
@@ -142,9 +112,9 @@ pub mod burn_backend_types {
 #[cfg(feature = "wgpu-cpu")]
 pub mod burn_backend_types {
     use super::*;
-    use burn::backend::wgpu::{Wgpu, WgpuDevice};
-    pub type InferenceBackend = Wgpu<ElemType>;
-    pub type InferenceDevice = WgpuDevice;
-    pub const INFERENCE_DEVICE: InferenceDevice = WgpuDevice::Cpu;
+
+    pub type InferenceDevice = Device;
+    pub static INFERENCE_DEVICE: LazyLock<Device> =
+        LazyLock::new(|| configure(Device::wgpu(burn::tensor::DeviceKind::Cpu)));
     pub const NAME: &str = "wgpu-cpu";
 }

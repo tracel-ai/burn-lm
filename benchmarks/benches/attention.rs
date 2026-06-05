@@ -1,6 +1,6 @@
 use burn::{
     nn::RotaryEncodingConfig,
-    tensor::{backend::Backend, Distribution, Element, Tensor},
+    tensor::{DType, Device, Distribution, Tensor},
 };
 use burn_lm_llama::nn::{
     attention::{KeyValueCache, MultiHeadAttention, MultiHeadAttentionConfig},
@@ -8,22 +8,23 @@ use burn_lm_llama::nn::{
 };
 use burnbench::{run_benchmark, Benchmark, BenchmarkResult};
 
-pub struct AttentionBenchmark<B: Backend> {
+pub struct AttentionBenchmark {
     seq_length: usize,
     batch_size: usize,
     d_model: usize,
     n_heads: usize,
-    device: B::Device,
-    attn: MultiHeadAttention<B>,
-    rope: PositionalEncodingState<B>,
+    device: Device,
+    attn: MultiHeadAttention,
+    rope: PositionalEncodingState,
+    dtype: DType,
 }
 
-impl<B: Backend> Benchmark for AttentionBenchmark<B> {
-    type Input = (Tensor<B, 3>, KeyValueCache<B>);
-    type Output = Tensor<B, 3>;
+impl Benchmark for AttentionBenchmark {
+    type Input = (Tensor<3>, KeyValueCache);
+    type Output = Tensor<3>;
 
     fn name(&self) -> String {
-        format!("llama-attention-{:?}", B::FloatElem::dtype()).to_lowercase()
+        format!("llama-attention-{:?}", self.dtype).to_lowercase()
     }
 
     fn shapes(&self) -> Vec<Vec<usize>> {
@@ -35,7 +36,7 @@ impl<B: Backend> Benchmark for AttentionBenchmark<B> {
     }
 
     fn prepare(&self) -> Self::Input {
-        let input = Tensor::<B, 3>::random(
+        let input = Tensor::<3>::random(
             [self.batch_size, self.seq_length, self.d_model],
             Distribution::Default,
             &self.device,
@@ -52,12 +53,12 @@ impl<B: Backend> Benchmark for AttentionBenchmark<B> {
     }
 
     fn sync(&self) {
-        B::sync(&self.device).unwrap();
+        self.device.sync().unwrap();
     }
 }
 
 #[allow(dead_code)]
-fn bench<B: Backend>(device: &B::Device) -> Vec<BenchmarkResult> {
+fn bench(device: &Device, dtype: DType) -> Vec<BenchmarkResult> {
     let n_heads = 32;
 
     let max_seq_length = 512;
@@ -68,7 +69,7 @@ fn bench<B: Backend>(device: &B::Device) -> Vec<BenchmarkResult> {
     for (batch_size, seq_length) in [(32, 1), (1, max_seq_length)] {
         let attn = MultiHeadAttentionConfig::new(d_model, n_heads, n_heads).init(device);
         let rope = RotaryEncodingConfig::new(max_seq_length * 2, d_model / n_heads).init(device);
-        let benchmark = AttentionBenchmark::<B> {
+        let benchmark = AttentionBenchmark {
             batch_size,
             n_heads,
             seq_length,
@@ -76,6 +77,7 @@ fn bench<B: Backend>(device: &B::Device) -> Vec<BenchmarkResult> {
             device: device.clone(),
             attn,
             rope: PositionalEncodingState::new(rope),
+            dtype,
         };
         let result = run_benchmark(benchmark);
         results.push(result);
@@ -85,5 +87,7 @@ fn bench<B: Backend>(device: &B::Device) -> Vec<BenchmarkResult> {
 }
 
 fn main() {
-    burnbench::bench_on_backend!();
+    // needs and update to burnbench
+    // burnbench::bench_on_backend!();
+    todo!()
 }

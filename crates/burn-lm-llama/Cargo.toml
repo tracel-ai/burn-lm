@@ -8,7 +8,7 @@ categories = []
 description = "Burn Large Models Engine - Inference."
 documentation = "https://docs.rs/burn-lm-inference"
 repository = "https://github.com/tracel-ai/burn-lm"
-rust-version = "1.88"
+rust-version.workspace = true
 
 edition.workspace = true
 version.workspace = true

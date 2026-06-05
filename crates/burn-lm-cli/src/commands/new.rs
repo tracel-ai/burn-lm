@@ -59,7 +59,7 @@ pub(crate) fn handle(args: &clap::ArgMatches) -> super::HandleCommandResult {
         .join(REGISTRY_DIR_NAME)
         .join("src")
         .join("lib.rs");
-    let server_type = format!("{ty_prefix}Server<InferenceBackend>");
+    let server_type = format!("{ty_prefix}Server");
     add_inference_server_registration(registry_lib, &crate_namespace, &server_type)?;
     // append the server crate to the registry Cargo.toml
     let registry_cargo_path = std::path::Path::new(CRATE_DIR)
@@ -149,19 +149,19 @@ pub type DynClients = HashMap<&'static str, Box<dyn InferencePlugin>>;
 #[inference_server_registry(
     server(
         crate_namespace = "burn_lm_inference_llama3",
-        server_type = "LlamaV3Params8BInstructServer<InferenceBackend>",
+        server_type = "LlamaV3Params8BInstructServer",
     ),
     server(
         crate_namespace = "burn_lm_inference_llama3",
-        server_type = "LlamaV31Params8BInstructServer<InferenceBackend>",
+        server_type = "LlamaV31Params8BInstructServer",
     ),
     server(
         crate_namespace = "burnlm_inference_template",
-        server_type = "ParrotServer<InferenceBackend>",
+        server_type = "ParrotServer",
     ),
     server(
         crate_namespace = "burn_lm_inference_tinyllama",
-        server_type = "TinyLlamaServer<InferenceBackend>",
+        server_type = "TinyLlamaServer",
     )
 )]
 #[derive(Debug)]
@@ -179,13 +179,13 @@ use burn_lm_macros::inference_server_registry;
     #[case::success_new_entry(
         BASE_LIB_RS,
         "burn_lm_inference_extra",
-        "ExtraServer<InferenceBackend>",
+        "ExtraServer",
         true
     )]
     #[case::duplicate_entry(
         BASE_LIB_RS,
         "burn_lm_inference_llama3",
-        "LlamaV3Params8BInstructServer<InferenceBackend>",
+        "LlamaV3Params8BInstructServer",
         false
     )]
     #[case::missing_macro(NO_MACRO_LIB_RS, "anything", "anything", false)]

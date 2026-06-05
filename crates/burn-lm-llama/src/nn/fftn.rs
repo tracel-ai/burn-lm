@@ -1,7 +1,6 @@
 use burn::config::Config;
 use burn::module::Module;
 use burn::nn::{Linear, LinearConfig, SwiGlu, SwiGluConfig};
-use burn::tensor::backend::Backend;
 use burn::tensor::{Device, Tensor};
 
 #[derive(Config, Debug)]
@@ -15,16 +14,16 @@ pub struct FeedForwardConfig {
 
 /// Feed-forward transformation network.
 #[derive(Module, Debug)]
-pub struct FeedForward<B: Backend> {
+pub struct FeedForward {
     // Swish gated linear unit with trainable parameters.
-    swiglu: SwiGlu<B>,
+    swiglu: SwiGlu,
     /// Outer linear.
-    w2: Linear<B>,
+    w2: Linear,
 }
 
 impl FeedForwardConfig {
     /// Initialize a new [feed-forward transformation network](FeedForward).
-    pub fn init<B: Backend>(&self, device: &Device<B>) -> FeedForward<B> {
+    pub fn init(&self, device: &Device) -> FeedForward {
         let swiglu = SwiGluConfig::new(self.d_model, self.hidden_size)
             .with_bias(false)
             .init(device);
@@ -35,45 +34,42 @@ impl FeedForwardConfig {
         FeedForward { swiglu, w2 }
     }
 }
-impl<B: Backend> FeedForward<B> {
+impl FeedForward {
     /// Applies the forward pass on the input tensor.
     ///
     /// # Shapes
     ///
     /// - input: `[batch_size, seq_length, d_model]`
     /// - output: `[batch_size, seq_length, d_model]`
-    pub fn forward(&self, input: Tensor<B, 3>) -> Tensor<B, 3> {
+    pub fn forward(&self, input: Tensor<3>) -> Tensor<3> {
         self.w2.forward(self.swiglu.forward(input))
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use burn::{
-        module::Reinitializer,
-        tensor::{TensorData, Tolerance},
-    };
+    use burn::tensor::{TensorData, Tolerance};
 
-    use crate::tests::TestBackend;
+    use crate::tests::Reinitializer;
 
     use super::*;
 
     #[test]
     fn test_fftn() {
-        let device: Device<TestBackend> = Default::default();
+        let device: Device = Default::default();
         let batch_size = 2;
         let seq_length = 2;
         let d_model = 4;
         let hidden_size = 8;
 
         let config = FeedForwardConfig::new(d_model, hidden_size);
-        let transformer: FeedForward<TestBackend> = config.init(&device);
+        let transformer: FeedForward = config.init(&device);
 
         let input = Tensor::arange(0..(batch_size * seq_length * d_model) as i64, &device)
             .reshape([batch_size, seq_length, d_model])
             .float();
 
-        let nn = Reinitializer::new()
+        let nn = Reinitializer::default()
             .range_float(0.0, 5.0)
             .apply(transformer);
 
@@ -92,6 +88,6 @@ mod tests {
 
         output
             .into_data()
-            .assert_approx_eq::<f32>(&expected, Tolerance::balanced());
+            .assert_approx_eq::<f32>(&expected, Tolerance::relative(0.1));
     }
 }

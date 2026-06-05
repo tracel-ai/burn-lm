@@ -53,7 +53,6 @@ burn = { workspace = true, features = [
     "ndarray",
     "network",
     "dataset",
-    "extension",
 ], default-features = false }
 burn-store = { workspace = true, default-features = false, features = [
     "pytorch",

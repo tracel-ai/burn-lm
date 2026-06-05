@@ -14,13 +14,9 @@ readme.workspace = true
 
 [features]
 default = []
-# default = ["legacy-v018"] # Necessary when building with burn-0.18
 
 # Feature flag to deactivate the default backend.
 selected-backend = []
-
-# Feature to make burn-lm compile with burn 0.18.0
-legacy-v018 = []
 
 candle-accelerate = ["burn/candle", "burn/accelerate", "selected-backend"]
 candle-cpu = ["burn/candle", "selected-backend"]
@@ -45,7 +41,7 @@ bf16 = []
 f32 = []
 
 [dependencies]
-burn = { workspace = true, default-features = false, features = ["ndarray", "extension"] }
+burn = { workspace = true, default-features = false, features = ["ndarray"] }
 burn-lm-macros = { path = "../burn-lm-macros", version = "0.0.1" }
 
 cfg-if = { workspace = true }

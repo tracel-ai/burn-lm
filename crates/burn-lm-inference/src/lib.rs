@@ -24,7 +24,6 @@ pub use crate::server::{InferenceServer, InferenceServerConfig, ServerConfigPars
 pub use crate::stats::{StatEntry, Stats, STATS_MARKER};
 pub use backends::burn_backend_types::*;
 pub use backends::DTYPE_NAME;
-pub use burn::backend::Backend;
 pub use burn_lm_macros::inference_server_config;
 pub use burn_lm_macros::InferenceServer;
 // external re-export

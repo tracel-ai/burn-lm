@@ -21,8 +21,7 @@ pub struct ParrotServerConfig {
 }
 
 // Declare the model server info using the `InferenceServer` derive
-// and `inference_server` attribute. The structure must be generic over the
-// Burn backends.
+// and `inference_server` attribute.
 //
 // Register the model by adding a dependency on this crate in the
 // `burn-lm-registry` crate.
@@ -32,7 +31,7 @@ pub struct ParrotServerConfig {
 //
 //     server(
 //         crate_namespace = "burnlm_inference_template",
-//         server_type = "ParrotServer<InferenceBackend>",
+//         server_type = "ParrotServer",
 //     ),
 //
 #[derive(InferenceServer, Clone, Default, Debug)]

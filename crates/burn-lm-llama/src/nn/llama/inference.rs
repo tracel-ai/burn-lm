@@ -54,7 +54,8 @@ impl LlamaDecoder {
 
     /// Reset decoder state between independent generations.
     pub fn reset(&mut self) {
-        self.cache.reset()
+        self.cache.reset();
+        self.pos_encoding.reset();
     }
 }
 

@@ -1,7 +1,7 @@
 use burn::{
     nn::{Linear, LinearConfig, RotaryEncoding},
     prelude::*,
-    tensor::activation::softmax,
+    tensor::{module::attention, ops::AttentionModuleOptions},
 };
 
 use crate::nn::pos_encoding::PositionalEncodingState;
@@ -153,17 +153,7 @@ impl MultiHeadAttention {
         let k = self.repeat_kv(k);
         let v = self.repeat_kv(v);
 
-        // Attention scores
-        let mut scores = q
-            .matmul(k.swap_dims(2, 3))
-            .div_scalar((self.head_dim as f32).sqrt());
-
-        if let Some(mask) = mask {
-            scores = scores.mask_fill(mask, f32::NEG_INFINITY);
-        }
-
-        let scores = softmax(scores, 3);
-        let output = scores.matmul(v);
+        let output = attention(q, k, v, mask, None, AttentionModuleOptions::default());
 
         output
             .swap_dims(1, 2)

@@ -62,7 +62,8 @@ impl<T: Tokenizer> Llama<T> {
 
     /// Reset the model state (used between generations)
     pub fn reset(&mut self) {
-        self.cache.reset()
+        self.cache.reset();
+        self.pos_encoding.reset();
     }
 
     /// Quantize the model weights.

@@ -1,6 +1,4 @@
-use std::time::Instant;
-
-use super::{GenerationContext, Sampler};
+use super::{Sampler, SingleRequestEngine};
 use crate::{inference::Llama, tokenizer::Tokenizer};
 use burn::{prelude::*, tensor::activation::softmax};
 use burn_lm_inference::GeneratedItemEmitter;
@@ -43,64 +41,10 @@ impl<T: Tokenizer + 'static> Llama<T> {
         emitter: GeneratedItemEmitter,
     ) -> Result<GenerationOutput, GenerationError> {
         let input_tokens = self.tokenize(prompt);
-        let prompt_len = input_tokens.dims()[0];
+        let tokenizer = self.tokenizer.clone();
+        let mut engine = SingleRequestEngine::new(&mut self.decoder, tokenizer);
 
-        let mut state = GenerationContext::new(
-            prompt_len + sample_len,
-            emitter,
-            self.tokenizer.clone(),
-            &self.device,
-        );
-        state.append(input_tokens);
-
-        let mut input_pos = Tensor::<1, Int>::arange(0..prompt_len as i64, &self.device);
-        let now = Instant::now();
-
-        for _ in 0..sample_len {
-            if state.should_stop() {
-                break;
-            }
-
-            let x = state
-                .tokens
-                .clone()
-                .select(0, input_pos.clone())
-                .reshape([1, -1]);
-
-            let [_, seq_len] = x.dims();
-
-            // Prepare cache and RoPE for current sequence length and position
-            let mask = self.cache.prepare(seq_len)?;
-            self.pos_encoding.prepare(seq_len);
-
-            let logits = self
-                .model
-                .forward(x, &mut self.cache, &self.pos_encoding, mask);
-
-            let [batch_size, seq_len, vocab_size] = logits.dims();
-            let mut next_token_logits = logits
-                .slice([0..batch_size, seq_len - 1..seq_len])
-                .reshape([batch_size, vocab_size]);
-
-            if temperature > 0.0 {
-                next_token_logits = temperature_scaled_softmax(next_token_logits, temperature);
-            };
-
-            let next_token = sampler.sample(next_token_logits).reshape([batch_size]);
-            // Update with the new generated token
-            state.update(next_token);
-
-            // Advance
-            let t = input_pos.dims()[0];
-            input_pos = input_pos.slice(t - 1..t) + 1;
-        }
-
-        let num_tokens = state.num_tokens_generated();
-
-        Ok(GenerationOutput {
-            tokens: num_tokens,
-            time: now.elapsed(),
-        })
+        engine.generate(input_tokens, sample_len, temperature, sampler, emitter)
     }
 }
 
@@ -137,9 +81,9 @@ mod tests {
         let config = LlamaConfig::llama3_2_1b_test();
         let mut llama = config.init::<ByteTokenizer>(&device).unwrap();
 
-        llama.model = Reinitializer::default()
+        llama.decoder.model = Reinitializer::default()
             .random_float(0, -1.0, 1.0)
-            .apply(llama.model);
+            .apply(llama.decoder.model);
 
         let (emitter, handle) = GeneratedItemEmitter::init(TextGenerationListener::default());
         llama

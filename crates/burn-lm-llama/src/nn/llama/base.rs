@@ -1,5 +1,5 @@
 use crate::{
-    inference,
+    inference::{self, LlamaDecoder},
     nn::{
         pos_encoding::{PositionalEncodingState, RopeConfig, RopeFrequencyScaling},
         transformer::{TransformerCache, TransformerConfig},
@@ -281,12 +281,13 @@ impl LlamaConfig {
 
         let pos_encoding = PositionalEncodingState::new(rope);
 
-        Ok(inference::Llama {
-            tokenizer,
+        let decoder = LlamaDecoder {
             model,
             cache,
             pos_encoding,
             device: device.clone(),
-        })
+        };
+
+        Ok(inference::Llama { tokenizer, decoder })
     }
 }

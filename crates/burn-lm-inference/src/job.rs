@@ -123,38 +123,75 @@ pub trait InferenceJobListener: Send + 'static {
     fn on_finished(self) -> Self::CompletedItem;
 }
 
+/// A listener that writes intermediary [generated items](GeneratedItem) to a writer as soon as
+/// they are produced.
+pub struct WriteListener<W: Write + Send + 'static> {
+    writer: W,
+}
+
+impl<W: Write + Default + Send + 'static> Default for WriteListener<W> {
+    fn default() -> Self {
+        Self::new(W::default())
+    }
+}
+
+impl<W: Write + Send + 'static> WriteListener<W> {
+    pub fn new(writer: W) -> Self {
+        Self { writer }
+    }
+}
+
+impl<W: Write + Send + 'static> InferenceJobListener for WriteListener<W> {
+    type CompletedItem = W;
+
+    fn on_text(&mut self, text: String) {
+        write!(self.writer, "{text}").unwrap();
+        self.writer.flush().unwrap();
+    }
+
+    fn on_finished(self) -> Self::CompletedItem {
+        self.writer
+    }
+}
+
 #[derive(Default)]
 /// The text generation listener accumulate the generated text in a string that can be
 /// obtained at the end of the job with the [handle finished method](JobHandle::finished).
 pub struct TextGenerationListener {
-    value: String,
+    inner: WriteListener<Vec<u8>>,
 }
 
 impl InferenceJobListener for TextGenerationListener {
     type CompletedItem = String;
 
     fn on_text(&mut self, text: String) {
-        self.value += &text;
+        self.inner.on_text(text);
     }
 
     fn on_finished(self) -> Self::CompletedItem {
-        self.value
+        String::from_utf8_lossy(&self.inner.on_finished()).into_owned()
     }
 }
 
-#[derive(Default)]
 /// The stdout listener directly writes the intermediary [generated item](GeneratedItem) to
 /// [std::io::stdout].
-pub struct StdOutListener {}
+pub struct StdOutListener {
+    inner: WriteListener<std::io::Stdout>,
+}
+
+impl Default for StdOutListener {
+    fn default() -> Self {
+        Self {
+            inner: WriteListener::new(std::io::stdout()),
+        }
+    }
+}
 
 impl InferenceJobListener for StdOutListener {
     type CompletedItem = ();
 
     fn on_text(&mut self, text: String) {
-        let mut io = std::io::stdout();
-
-        write!(io, "{text}").unwrap();
-        io.flush().unwrap();
+        self.inner.on_text(text);
     }
 
     fn on_finished(self) -> Self::CompletedItem {}

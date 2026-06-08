@@ -1,15 +1,14 @@
 use rand::RngExt;
 use serde::Deserialize;
-use std::sync::{Arc, Mutex};
-
 use crate::{
-    generation::{GenerationError, Sampler, TopP},
-    inference::Llama,
+    generation::{Sampler, TopP},
     pretrained::ModelMeta,
     tokenizer::SentencePieceTokenizer,
     LlamaConfig, TinyLlamaVersion,
 };
 use burn_lm_inference::{InferenceJob, *};
+
+use super::loaded_model::LoadedModel;
 
 #[inference_server_config]
 pub struct TinyLlamaServerConfig {
@@ -30,7 +29,7 @@ pub struct TinyLlamaServerConfig {
     pub seed: u64,
 }
 
-#[derive(InferenceServer, Clone, Default, Debug)]
+#[derive(InferenceServer, Default, Debug)]
 #[inference_server(
     model_name = "TinyLlama",
     model_creation_date = "2023/12/30",
@@ -39,7 +38,7 @@ pub struct TinyLlamaServerConfig {
 // [StatNLP Research Group](https://arxiv.org/abs/2401.02385)
 pub struct TinyLlamaServer {
     config: TinyLlamaServerConfig,
-    model: Option<Arc<Mutex<Llama<SentencePieceTokenizer>>>>,
+    model: LoadedModel<SentencePieceTokenizer>,
 }
 
 impl TinyLlamaServer {
@@ -58,23 +57,15 @@ impl TinyLlamaServer {
         } else {
             Sampler::Argmax
         };
-        let generated = match &self.model {
-            Some(arc_model) => match arc_model
-                .lock()
-                .expect("should be able to lock the model for inference")
-                .generate(
-                    &prompt,
-                    self.config.sample_len,
-                    self.config.temperature,
-                    &mut sampler,
-                    emitter,
-                ) {
-                Ok(result) => result,
-                Err(GenerationError::MaxSequenceLengthExceeded { actual, max }) => {
-                    return Err(InferenceError::ContextLengthExceeded(actual, max));
-                }
-            },
-            _ => return Err(InferenceError::ModelNotLoaded),
+        let generated = {
+            let model = self.model.get_mut()?;
+            model.generate(
+                &prompt,
+                self.config.sample_len,
+                self.config.temperature,
+                &mut sampler,
+                emitter,
+            )?
         };
         let mut stats = Stats::default();
         let mut total_duration = generated.time;
@@ -144,7 +135,7 @@ impl InferenceServer for TinyLlamaServer {
             let model =
                 LlamaConfig::tiny_llama_pretrained(self.config.max_seq_len, &*INFERENCE_DEVICE)
                     .unwrap();
-            self.model = Some(Arc::new(Mutex::new(model)));
+            self.model.store(model);
             let mut stats = Stats::new();
             stats
                 .entries
@@ -156,27 +147,11 @@ impl InferenceServer for TinyLlamaServer {
     }
 
     fn is_loaded(&mut self) -> bool {
-        self.model.is_some()
+        self.model.is_loaded()
     }
 
     fn unload(&mut self) -> InferenceResult<Option<Stats>> {
-        if let Some(arc_model) = self.model.take() {
-            match Arc::try_unwrap(arc_model) {
-                Ok(mutex) => {
-                    let model = mutex
-                        .into_inner()
-                        .expect("should be able to extract model from mutex");
-                    drop(model);
-                }
-                Err(_) => {
-                    return Err(InferenceError::UnloadError(
-                        Self::model_name().to_string(),
-                        "Multiple references exist".to_string(),
-                    ))
-                }
-            }
-        }
-        Ok(None)
+        self.model.unload()
     }
 
     fn run_job(&mut self, job: InferenceJob) -> InferenceResult<Stats> {
@@ -189,16 +164,8 @@ impl InferenceServer for TinyLlamaServer {
     }
 
     fn clear_state(&mut self) -> InferenceResult<()> {
-        match &self.model {
-            Some(arc_model) => {
-                let mut model = arc_model
-                    .lock()
-                    .expect("should lock the model for inference");
-                model.reset();
-                Ok(())
-            }
-            None => Err(InferenceError::ModelNotLoaded),
-        }
+        self.model.get_mut()?.reset();
+        Ok(())
     }
 }
 

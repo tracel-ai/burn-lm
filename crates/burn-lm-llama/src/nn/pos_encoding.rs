@@ -5,7 +5,7 @@ use burn::{config::Config, nn::RotaryEncoding, tensor::Tensor};
 /// Manages shifting of precomputed frequency tables when the sequence length exceeds
 /// the initially allocated range. Used to avoid recomputing RoPE values on-the-fly
 /// while maintaining correct positional alignment across decoding steps.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PositionalEncodingState {
     /// Rotary positional encoding (RoPE).
     pub rope: RotaryEncoding,

@@ -6,12 +6,21 @@ use super::InferenceChannel;
 
 /// Simple passthrough channel that just provides interior mutability.
 /// Not meant to be used in multithreaded environment.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct SingleThreadedChannel<Server: InferenceServer> {
     server: Arc<RefCell<Server>>,
 }
 unsafe impl<Server: InferenceServer> Send for SingleThreadedChannel<Server> {}
 unsafe impl<Server: InferenceServer> Sync for SingleThreadedChannel<Server> {}
+
+// Manual `Clone` (clones the shared `Arc`) so we don't require `Server: Clone`.
+impl<Server: InferenceServer> Clone for SingleThreadedChannel<Server> {
+    fn clone(&self) -> Self {
+        Self {
+            server: Arc::clone(&self.server),
+        }
+    }
+}
 
 impl<Server: InferenceServer> Default for SingleThreadedChannel<Server> {
     fn default() -> Self {

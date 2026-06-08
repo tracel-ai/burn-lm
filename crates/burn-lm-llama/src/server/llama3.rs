@@ -1,15 +1,16 @@
 use rand::RngExt;
 use serde::Deserialize;
-use std::sync::{Arc, Mutex};
 
 use crate::{
-    generation::{GenerationError, Sampler, TopP},
-    inference::Llama,
+    generation::{Sampler, TopP},
+    inference::LlamaDecoder,
     pretrained::ModelMeta,
-    tokenizer::Tiktoken,
+    tokenizer::{Tiktoken, Tokenizer},
     LlamaConfig, LlamaVersion,
 };
 use burn_lm_inference::{InferenceJob, *};
+
+use super::loaded_model::LoadedModel;
 
 #[inference_server_config]
 pub struct Llama3ServerConfig {
@@ -30,7 +31,7 @@ pub struct Llama3ServerConfig {
     pub seed: u64,
 }
 
-#[derive(InferenceServer, Clone, Debug)]
+#[derive(InferenceServer, Debug)]
 #[inference_server(
     model_name = "Llama 3 (8B Instruct)",
     model_cli_param_name = "llama3",
@@ -125,7 +126,7 @@ impl InferenceServer for Llama3InstructServer {
     }
 }
 
-#[derive(InferenceServer, Clone, Debug)]
+#[derive(InferenceServer, Debug)]
 #[inference_server(
     model_name = "Llama 3.1 (8B Instruct)",
     model_cli_param_name = "llama31",
@@ -193,7 +194,7 @@ impl InferenceServer for Llama31InstructServer {
     }
 }
 
-#[derive(InferenceServer, Clone, Debug)]
+#[derive(InferenceServer, Debug)]
 #[inference_server(
     model_name = "Llama 3.2 (1B Instruct)",
     model_cli_param_name = "llama32",
@@ -261,7 +262,47 @@ impl InferenceServer for Llama321bInstructServer {
     }
 }
 
-#[derive(InferenceServer, Clone, Debug)]
+impl BatchedInferenceServer for Llama321bInstructServer {
+    type Decoder = LlamaDecoder;
+
+    fn decoder(&mut self) -> InferenceResult<&mut LlamaDecoder> {
+        self.server.decoder(&self.config)
+    }
+
+    fn batch_capacity(&self) -> BatchCapacity {
+        // `free_slots = 1` means the engine keeps at most one sequence active, i.e. requests are
+        // processed SEQUENTIALLY (no interleaving). The engine round-robins only when free_slots > 1
+        // (advancing several active sequences one token per sweep). Each round-robin step is still a
+        // batch-1 `forward`; Phase 2 raises this and fuses the active rows into one GPU forward.
+        BatchCapacity {
+            free_slots: 1,
+            free_kv_tokens: self.config.max_seq_len,
+        }
+    }
+
+    fn tokenize(&self, task: &InferenceTask) -> InferenceResult<Vec<u32>> {
+        let prompt = match task {
+            InferenceTask::Message(message) => self.server.prompt(vec![message.clone()])?,
+            InferenceTask::Context(messages) => self.server.prompt(messages.clone())?,
+            InferenceTask::Prompt(prompt) => prompt.clone(),
+        };
+        self.server.encode(&prompt)
+    }
+
+    fn detokenize(&self, tokens: &[u32]) -> String {
+        self.server.decode(tokens)
+    }
+
+    fn stop_ids(&self) -> Vec<u32> {
+        self.server.stop_ids()
+    }
+
+    fn max_gen_tokens(&self) -> usize {
+        self.config.sample_len
+    }
+}
+
+#[derive(InferenceServer, Debug)]
 #[inference_server(
     model_name = "Llama 3.2 (3B Instruct)",
     model_cli_param_name = "llama32-3b",
@@ -329,7 +370,7 @@ impl InferenceServer for Llama323bInstructServer {
     }
 }
 
-#[derive(InferenceServer, Clone, Debug)]
+#[derive(InferenceServer, Debug)]
 #[inference_server(
     model_name = "Llama 3.2 (1BQ4 Instruct)",
     model_cli_param_name = "llama32-q4",
@@ -397,38 +438,22 @@ impl InferenceServer for Llama321bInstructQ4Server {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Default)]
 pub struct Llama3BaseServer {
-    model: Option<Arc<Mutex<Llama<Tiktoken>>>>,
+    model: LoadedModel<Tiktoken>,
     version: LlamaVersion,
 }
 
 impl Llama3BaseServer {
     pub fn new(version: LlamaVersion) -> Self {
         Self {
-            model: None,
+            model: LoadedModel::default(),
             version,
         }
     }
 
-    fn unload(&mut self, model_name: &str) -> InferenceResult<Option<Stats>> {
-        if let Some(arc_model) = self.model.take() {
-            match Arc::try_unwrap(arc_model) {
-                Ok(mutex) => {
-                    let model = mutex
-                        .into_inner()
-                        .expect("should be able to extract model from mutex");
-                    drop(model);
-                }
-                Err(_) => {
-                    return Err(InferenceError::UnloadError(
-                        model_name.to_string(),
-                        "Multiple references exist".to_string(),
-                    ))
-                }
-            }
-        }
-        Ok(None)
+    fn unload(&mut self, _model_name: &str) -> InferenceResult<Option<Stats>> {
+        self.model.unload()
     }
 
     fn run_job(
@@ -460,25 +485,17 @@ impl Llama3BaseServer {
         } else {
             Sampler::Argmax
         };
-        let generated = match &self.model {
-            Some(arc_model) => {
-                let mut model = arc_model
-                    .lock()
-                    .expect("should lock the model for inference");
-                match model.generate(
-                    &prompt,
-                    config.sample_len,
-                    config.temperature,
-                    &mut sampler,
-                    emitter,
-                ) {
-                    Ok(result) => result,
-                    Err(GenerationError::MaxSequenceLengthExceeded { actual, max }) => {
-                        return Err(InferenceError::ContextLengthExceeded(actual, max));
-                    }
-                }
-            }
-            None => return Err(InferenceError::ModelNotLoaded),
+        // Drive the single request through the batched path (batch size 1 for now).
+        let generated = {
+            let model = self.model.get_mut()?;
+            let mut outputs = model.generate_batch(
+                vec![&prompt],
+                config.sample_len,
+                config.temperature,
+                &mut sampler,
+                vec![emitter],
+            )?;
+            outputs.pop().expect("one sequence in yields one output")
         };
         let mut stats = Stats::default();
         let mut total_duration = generated.time;
@@ -506,16 +523,40 @@ impl Llama3BaseServer {
     }
 
     fn clear_state(&mut self) -> InferenceResult<()> {
-        match &self.model {
-            Some(arc_model) => {
-                let mut model = arc_model
-                    .lock()
-                    .expect("should lock the model for inference");
-                model.reset();
-                Ok(())
-            }
-            None => Err(InferenceError::ModelNotLoaded),
-        }
+        self.model.get_mut()?.reset();
+        Ok(())
+    }
+
+    /// Mutably borrow the loaded decoder, loading the model first if needed.
+    /// Used by [`BatchedInferenceServer::decoder`].
+    fn decoder(&mut self, config: &Llama3ServerConfig) -> InferenceResult<&mut LlamaDecoder> {
+        self.load(config)?;
+        Ok(&mut self.model.get_mut()?.decoder)
+    }
+
+    /// Encode a prompt into token ids using the loaded model's tokenizer.
+    ///
+    /// Thin wrapper over the existing Tiktoken tokenizer, exposed so the framework continuous loop
+    /// can tokenize without owning the tokenizer. Requires the model to be loaded (the engine
+    /// allocates the per-sequence cache, which loads the model, before tokenizing).
+    fn encode(&self, prompt: &str) -> InferenceResult<Vec<u32>> {
+        Ok(self.model.get()?.tokenizer.encode(prompt, false, false))
+    }
+
+    /// Decode token ids back to text using the loaded model's tokenizer.
+    fn decode(&self, tokens: &[u32]) -> String {
+        self.model
+            .get()
+            .map(|model| model.tokenizer.decode(tokens))
+            .unwrap_or_default()
+    }
+
+    /// Stop token ids from the loaded model's tokenizer (EOS/EOT/EOM).
+    fn stop_ids(&self) -> Vec<u32> {
+        self.model
+            .get()
+            .map(|model| model.tokenizer.stop_ids())
+            .unwrap_or_default()
     }
 
     fn load(&mut self, config: &Llama3ServerConfig) -> InferenceResult<Option<Stats>> {
@@ -543,7 +584,7 @@ impl Llama3BaseServer {
                         .unwrap()
                 }
             };
-            self.model = Some(Arc::new(Mutex::new(model)));
+            self.model.store(model);
             let mut stats = Stats::new();
             stats
                 .entries
@@ -555,7 +596,7 @@ impl Llama3BaseServer {
     }
 
     fn is_loaded(&mut self) -> bool {
-        self.model.is_some()
+        self.model.is_loaded()
     }
 
     fn prompt(

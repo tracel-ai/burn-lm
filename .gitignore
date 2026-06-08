@@ -3,3 +3,6 @@ tmp
 mprocs.log
 burnlm.config
 .DS_Store
+
+# Local-only docs / scratch notes (not committed)
+local-docs/

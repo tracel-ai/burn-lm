@@ -8,6 +8,11 @@ use burn::{
 };
 use std::time::Instant;
 
+use burn_lm_inference::{
+    batching::{BatchCapacity, BatchedDecoder, ForwardBatch, ForwardOutput},
+    InferenceError, InferenceResult,
+};
+
 use crate::{
     generation::GenerationError,
     nn::{
@@ -56,6 +61,64 @@ impl LlamaDecoder {
     pub fn reset(&mut self) {
         self.cache.reset();
         self.pos_encoding.reset();
+    }
+}
+
+/// Per-sequence decoder state OWNED BY THE FRAMEWORK engine.
+///
+/// The KV cache and RoPE state used to live inside `LlamaDecoder`, which made it single-sequence.
+/// For continuous batching the engine allocates one of these per active sequence and hands it back
+/// to [`forward`](BatchedDecoder::forward) on every step; the decoder swaps it into its own slots
+/// for the duration of the call. This keeps each sequence's KV history independent while the model
+/// author still "just writes forward".
+#[derive(Debug, Clone)]
+pub struct LlamaSeqCache {
+    cache: TransformerCache,
+    pos_encoding: PositionalEncodingState,
+}
+
+impl BatchedDecoder for LlamaDecoder {
+    type Cache = LlamaSeqCache;
+
+    /// Allocate a fresh, empty per-sequence cache by cloning the decoder's (weights-independent)
+    /// cache + RoPE templates and resetting them. `capacity` is unused for now: the round-robin
+    /// stub uses one batch-1 cache per sequence rather than a slot-indexed shared cache.
+    fn allocate_cache(&self, _capacity: BatchCapacity) -> Self::Cache {
+        let mut cache = self.cache.clone();
+        cache.reset();
+        let mut pos_encoding = self.pos_encoding.clone();
+        pos_encoding.reset();
+        LlamaSeqCache {
+            cache,
+            pos_encoding,
+        }
+    }
+
+    /// Forward a (currently 1-row) batch against the PASSED-IN, engine-owned cache.
+    ///
+    /// The decoder temporarily swaps the engine's cache + RoPE state into its own slots, runs the
+    /// inner forward, then swaps them back, so the per-sequence history lives in `cache` and not in
+    /// the shared decoder. `positions`/`cache_slots` are part of the shape but not yet consumed (the
+    /// swapped-in state already tracks position); Phase 2's fused kernel will use them.
+    fn forward(
+        &mut self,
+        batch: ForwardBatch,
+        cache: &mut Self::Cache,
+    ) -> InferenceResult<ForwardOutput> {
+        std::mem::swap(&mut self.cache, &mut cache.cache);
+        std::mem::swap(&mut self.pos_encoding, &mut cache.pos_encoding);
+
+        let result = self.forward(batch.input_tokens);
+
+        std::mem::swap(&mut self.cache, &mut cache.cache);
+        std::mem::swap(&mut self.pos_encoding, &mut cache.pos_encoding);
+
+        let logits = result.map_err(|err| match err {
+            GenerationError::MaxSequenceLengthExceeded { actual, max } => {
+                InferenceError::ContextLengthExceeded(actual, max)
+            }
+        })?;
+        Ok(ForwardOutput { logits })
     }
 }
 

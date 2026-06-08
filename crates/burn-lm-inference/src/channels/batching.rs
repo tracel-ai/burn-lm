@@ -175,10 +175,15 @@ impl<Server: BatchedInferenceServer + 'static> BatchingChannel<Server> {
             let mut sampler = Sampler::default();
 
             loop {
-                // When idle (no active work AND nothing queued), block for the next command so the
-                // thread parks instead of spinning.
+                // Block for the next command whenever there is no active work to advance. This
+                // includes the case where jobs are QUEUED but currently unadmittable because the
+                // server reports `free_slots == 0`: with `free_slots >= 1` a queued job is admitted
+                // the same iteration its submit arrives, so reaching the top with `active` empty and
+                // a non-empty queue means there is no capacity right now — busy-looping there would
+                // peg a core while the queued client waits. Parking yields until the next command
+                // (which may change the server's capacity).
                 let mut shutdown = false;
-                if active.is_empty() && queue.is_empty() {
+                if active.is_empty() {
                     match receiver.recv() {
                         Ok(command) => {
                             shutdown = handle_command(&mut server, &mut queue, command);
@@ -427,20 +432,37 @@ fn forward_one<S: BatchedInferenceServer>(
     batch: ForwardBatch,
     sampler: &mut Sampler,
 ) -> InferenceResult<u32> {
+    let in_rows = batch.input_tokens.dims()[0];
     let output = server.decoder()?.forward(batch, cache)?;
 
+    // Forward contract: the decoder must return exactly one logits row per input row, with at least
+    // one position. Enforce it as a per-sequence error (never a panic): on the worker thread a
+    // panic here would unwind and brick the whole channel, and a wrong row count would otherwise
+    // silently sample the wrong sequence. step()'s per-sequence error path retires just this one.
     let [batch_size, seq_len, vocab_size] = output.logits.dims();
+    if batch_size != in_rows || seq_len == 0 {
+        return Err(InferenceError::BatchContractViolation(format!(
+            "forward returned logits {:?} for {in_rows} input row(s); expected [{in_rows}, >=1, vocab]",
+            [batch_size, seq_len, vocab_size]
+        )));
+    }
+
     let next_token_logits = output
         .logits
         .slice([0..batch_size, seq_len - 1..seq_len])
         .reshape([batch_size, vocab_size]);
 
     let token = sampler.sample(next_token_logits);
-    let id = token
+    let ids = token
         .into_data()
         .convert::<u32>()
         .into_vec::<u32>()
-        .expect("sampled token tensor should convert to u32")[0];
+        .map_err(|_| {
+            InferenceError::BatchContractViolation("sampled token tensor did not convert to u32".to_string())
+        })?;
+    let id = *ids
+        .first()
+        .ok_or_else(|| InferenceError::BatchContractViolation("sampler produced no token".to_string()))?;
     Ok(id)
 }
 
@@ -507,7 +529,10 @@ mod tests {
         server::{InferenceServer, ServerConfigParsing},
         InferenceServerConfig,
     };
-    use std::sync::{Arc, Mutex};
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc, Mutex,
+    };
 
     #[derive(Debug, Default, Clone, serde::Deserialize, clap::Parser)]
     struct FakeConfig {}
@@ -526,6 +551,9 @@ mod tests {
         log: OrderLog,
         /// How many tokens each sequence emits before stopping.
         emit: usize,
+        /// Extra logits rows beyond the single input row — simulates a decoder that violates the
+        /// rows-in==rows-out contract. 0 = well-behaved.
+        extra_rows: usize,
     }
 
     const VOCAB: usize = 64;
@@ -562,10 +590,13 @@ mod tests {
                 0 // stop id
             };
 
-            let mut data = vec![0.0f32; VOCAB];
+            let rows = 1 + self.extra_rows;
+            let mut data = vec![0.0f32; rows * VOCAB];
             data[token] = 1.0;
-            let logits =
-                Tensor::<3>::from_data(TensorData::new(data, [1, 1, VOCAB]), &*INFERENCE_DEVICE);
+            let logits = Tensor::<3>::from_data(
+                TensorData::new(data, [rows, 1, VOCAB]),
+                &*INFERENCE_DEVICE,
+            );
             Ok(ForwardOutput { logits })
         }
     }
@@ -575,6 +606,8 @@ mod tests {
         loaded: bool,
         slots: usize,
         decoder: FakeDecoder,
+        /// Counts `batch_capacity` calls — lets the `free_slots == 0` test detect a busy-spin.
+        capacity_calls: Arc<AtomicUsize>,
     }
 
     impl Default for FakeServer {
@@ -588,7 +621,42 @@ mod tests {
             Self {
                 loaded: false,
                 slots,
-                decoder: FakeDecoder { log, emit: 4 },
+                decoder: FakeDecoder {
+                    log,
+                    emit: 4,
+                    extra_rows: 0,
+                },
+                capacity_calls: Arc::new(AtomicUsize::new(0)),
+            }
+        }
+
+        /// A server whose decoder returns 2 logits rows for a 1-row input — violates the forward
+        /// rows-in==rows-out contract.
+        fn new_bad(slots: usize, log: OrderLog) -> Self {
+            Self {
+                loaded: false,
+                slots,
+                decoder: FakeDecoder {
+                    log,
+                    emit: 4,
+                    extra_rows: 1,
+                },
+                capacity_calls: Arc::new(AtomicUsize::new(0)),
+            }
+        }
+
+        /// A server reporting `slots` free slots that records every `batch_capacity` call into
+        /// `calls`, so a test can tell whether the worker busy-spins when nothing is admittable.
+        fn with_capacity_probe(slots: usize, calls: Arc<AtomicUsize>) -> Self {
+            Self {
+                loaded: false,
+                slots,
+                decoder: FakeDecoder {
+                    log: Arc::new(Mutex::new(Vec::new())),
+                    emit: 4,
+                    extra_rows: 0,
+                },
+                capacity_calls: calls,
             }
         }
     }
@@ -627,6 +695,7 @@ mod tests {
         }
 
         fn batch_capacity(&self) -> BatchCapacity {
+            self.capacity_calls.fetch_add(1, Ordering::Relaxed);
             BatchCapacity {
                 free_slots: self.slots,
                 free_kv_tokens: 1024,
@@ -697,6 +766,55 @@ mod tests {
             .recv()
             .expect("channel must survive a client panic")
             .expect("job B should still complete");
+    }
+
+    /// A decoder that breaks the forward rows-in==rows-out contract must retire that sequence with
+    /// an error, NOT panic the worker — and the channel must keep serving.
+    #[test]
+    fn worker_survives_a_decoder_contract_violation() {
+        let channel = BatchingChannel::<FakeServer>::with_server(FakeServer::new_bad(
+            1,
+            Arc::new(Mutex::new(Vec::new())),
+        ));
+
+        let (job1, _h1) = InferenceJob::create(InferenceTask::Prompt("a".into()), NullListener);
+        let out1 = channel.submit(job1).unwrap().recv().expect("worker must survive");
+        assert!(
+            matches!(out1, Err(crate::InferenceError::BatchContractViolation(_))),
+            "contract violation should retire the sequence with a BatchContractViolation error"
+        );
+
+        // The worker is still alive: a second job is accepted and processed (likewise retired).
+        let (job2, _h2) = InferenceJob::create(InferenceTask::Prompt("b".into()), NullListener);
+        let out2 = channel
+            .submit(job2)
+            .expect("worker must still accept jobs")
+            .recv()
+            .expect("worker must survive");
+        assert!(out2.is_err(), "second job should also retire with an error");
+    }
+
+    /// A server reporting `free_slots == 0` with a job queued must PARK the worker, not busy-spin a
+    /// core. We detect a spin via the `batch_capacity` call count: parked ⇒ a couple of calls;
+    /// spinning ⇒ thousands over the same window.
+    #[test]
+    fn free_slots_zero_parks_instead_of_spinning() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let channel = BatchingChannel::<FakeServer>::with_server(FakeServer::with_capacity_probe(
+            0,
+            calls.clone(),
+        ));
+
+        // Queued, but never admittable while free_slots == 0.
+        let (job, _h) = InferenceJob::create(InferenceTask::Prompt("a".into()), NullListener);
+        let _rx = channel.submit(job).unwrap();
+
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        let n = calls.load(Ordering::Relaxed);
+        assert!(
+            n < 100,
+            "worker busy-spun on free_slots==0 (batch_capacity called {n} times in 50ms); it should park"
+        );
     }
 
     fn submit_two(slots: usize) -> Vec<usize> {

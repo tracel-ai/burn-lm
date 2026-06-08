@@ -38,6 +38,13 @@ pub struct ForwardBatch {
 }
 
 /// Output of a single decoder forward pass.
+///
+/// Contract enforced by the engine: `logits` must have exactly one row per input row
+/// (`logits.dims()[0] == batch.input_tokens.dims()[0]`) and at least one position. A decoder that
+/// violates this retires the offending sequence with a [`BatchContractViolation`] error rather than
+/// silently sampling the wrong sequence or panicking the worker.
+///
+/// [`BatchContractViolation`]: crate::InferenceError::BatchContractViolation
 #[derive(Debug, Clone)]
 pub struct ForwardOutput {
     /// Logits for every position, shaped `[batch, seq, vocab]`.

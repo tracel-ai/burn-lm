@@ -664,6 +664,41 @@ mod tests {
         fn on_finished(self) {}
     }
 
+    /// A listener that panics on the first emitted token — stands in for a client whose stream
+    /// broke (a dropped SSE connection makes `WriteListener::on_text`'s write `.unwrap()` panic),
+    /// which kills the listener thread out from under the worker.
+    struct PanicOnText;
+    impl crate::job::InferenceJobListener for PanicOnText {
+        type CompletedItem = ();
+        fn on_text(&mut self, _text: String) {
+            panic!("simulated broken pipe: client dropped its stream");
+        }
+        fn on_finished(self) {}
+    }
+
+    /// A client whose stream errors mid-generation must NOT brick the channel for everyone else.
+    /// Before the fix, the worker's `emitter.completed()` `.unwrap()` panicked when that listener
+    /// died, permanently killing the single worker thread. (The stderr panic from `PanicOnText` is
+    /// the simulated disconnect and is expected.)
+    #[test]
+    fn worker_survives_a_client_stream_panic() {
+        let channel =
+            BatchingChannel::<FakeServer>::with_server(FakeServer::new(1, Arc::new(Mutex::new(Vec::new()))));
+
+        // Job A: its listener panics on the first emitted token (broken pipe).
+        let (job_a, _ha) = InferenceJob::create(InferenceTask::Prompt("a".into()), PanicOnText);
+        let rx_a = channel.submit(job_a).unwrap();
+        let _ = rx_a.recv(); // A's own outcome is irrelevant; its listener died.
+
+        // Job B: a healthy client must still be served — proving the worker survived A.
+        let (job_b, _hb) = InferenceJob::create(InferenceTask::Prompt("b".into()), NullListener);
+        let rx_b = channel.submit(job_b).unwrap();
+        rx_b
+            .recv()
+            .expect("channel must survive a client panic")
+            .expect("job B should still complete");
+    }
+
     fn submit_two(slots: usize) -> Vec<usize> {
         let log: OrderLog = Arc::new(Mutex::new(Vec::new()));
         let channel = BatchingChannel::<FakeServer>::with_server(FakeServer::new(slots, log.clone()));

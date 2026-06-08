@@ -103,7 +103,14 @@ impl GeneratedItemEmitter {
             let msg = match item {
                 GeneratedItem::Text(text) => Msg::Text(text),
             };
-            self.sender.send(msg).unwrap();
+            // The listener thread may already be gone — e.g. the client dropped its stream and the
+            // writer's pipe broke, panicking the listener. A failed send must NOT panic the caller:
+            // on the batching worker thread a single panic here would unwind and brick the channel
+            // for every other client. Treat a closed channel as "stop delivering" and latch `done`
+            // so we don't keep retrying for this job.
+            if self.sender.send(msg).is_err() {
+                self.done.store(true, Ordering::Relaxed);
+            }
         }
     }
 }

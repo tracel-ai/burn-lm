@@ -121,6 +121,11 @@ async fn handle_streaming_response(
             let json_params = serde_json::to_string(&payload.params)
                 .expect("ChatCompletionParams should serialize to a JSON string");
             plugin.parse_json_config(&json_params);
+            // Release the store lock before loading/generating. Holding it across the blocking run
+            // serializes every request and defeats the batching channel (the worker never sees two
+            // jobs at once). `plugin` is an owned handle that shares the channel internally, so it
+            // stays valid afterwards.
+            drop(store);
             let now = chrono::Utc::now().timestamp();
             let model = plugin.model_name();
 

@@ -42,6 +42,17 @@ impl PositionalEncodingState {
         }
     }
 
+    pub fn reset(&mut self) {
+        // A counter-only reset is valid until the RoPE table has shifted. After a shift,
+        // table index 0 represents `start_offset` instead of absolute position 0, so
+        // stateless generation must restore the original position window.
+        self.rope.reset();
+
+        self.next_position = 0;
+        self.curr_seq_len = 0;
+        self.start_offset = 0;
+    }
+
     pub fn forward<const D: usize>(&self, x: Tensor<D>) -> Tensor<D> {
         self.rope.forward(x)
     }
@@ -218,5 +229,58 @@ mod tests {
         pos_encoding.prepare(1);
         assert_eq!(pos_encoding.position(), 33);
         assert_eq!(pos_encoding.index(), 8);
+    }
+
+    #[test]
+    fn test_rope_reset_after_shift() {
+        let device: Device = Default::default();
+
+        let max_seq_len = 16;
+        let rope = RopeConfig::new(500000.0)
+            .with_scaled(Some(RopeFrequencyScaling::new().with_scale_factor(32.)));
+        let scaling = rope.scaled.unwrap();
+        let freq_scaling_fn = move |x| scaling.freq_scaling_by_parts(x);
+
+        let rope = RotaryEncodingConfig::new(max_seq_len, 4 / 2)
+            .with_theta(rope.theta)
+            .init_with_frequency_scaling(freq_scaling_fn, &device);
+
+        let mut pos_encoding = PositionalEncodingState::new(rope);
+        let input = TestTensor::<4>::from([[
+            [[-0.60253906, -0.035308838], [0.41357422, 0.15100098]],
+            [[-0.044677734, -0.094177246], [0.60546875, 0.2442627]],
+        ]]);
+        let expected = pos_encoding.apply(input.clone()).into_data();
+
+        // Drive the state far enough to shift the cached RoPE frequencies.
+        pos_encoding.prepare(14);
+        pos_encoding.prepare(1);
+        pos_encoding.prepare(1);
+        pos_encoding.prepare(8);
+        assert_eq!(pos_encoding.start_offset, 16);
+
+        pos_encoding.reset();
+        assert_eq!(pos_encoding.position(), 0);
+        assert_eq!(pos_encoding.index(), 0);
+        assert_eq!(pos_encoding.start_offset, 0);
+
+        pos_encoding
+            .apply(input.clone())
+            .into_data()
+            .assert_approx_eq::<f32>(&expected, Tolerance::relative(0.05));
+
+        // Shift and reset a second time to ensure the saved original window wasn't
+        // aliased and mutated by the first shift.
+        pos_encoding.prepare(14);
+        pos_encoding.prepare(1);
+        pos_encoding.prepare(1);
+        pos_encoding.prepare(8);
+        assert_eq!(pos_encoding.start_offset, 16);
+
+        pos_encoding.reset();
+        pos_encoding
+            .apply(input.clone())
+            .into_data()
+            .assert_approx_eq::<f32>(&expected, Tolerance::relative(0.05));
     }
 }

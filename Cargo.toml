@@ -65,10 +65,10 @@ async-trait = "0.1.88"
 tokio = { version = "1.42", features = ["full"] }
 tokio-stream = "0.1"
 tower-http = { version = "0.6", features = [
-"fs",
-"cors",
-"trace",
-"request-id",
+    "fs",
+    "cors",
+    "trace",
+    "request-id",
 ] }
 utoipa = { version = "5.3", features = ["axum_extras"] }
 utoipa-swagger-ui = { version = "9.0", features = ["axum"] }

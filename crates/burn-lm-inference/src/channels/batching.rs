@@ -175,15 +175,16 @@ impl<Server: BatchedInferenceServer + 'static> BatchingChannel<Server> {
             let mut sampler = Sampler::default();
 
             loop {
-                // Block for the next command whenever there is no active work to advance. This
-                // includes the case where jobs are QUEUED but currently unadmittable because the
-                // server reports `free_slots == 0`: with `free_slots >= 1` a queued job is admitted
-                // the same iteration its submit arrives, so reaching the top with `active` empty and
-                // a non-empty queue means there is no capacity right now — busy-looping there would
-                // peg a core while the queued client waits. Parking yields until the next command
-                // (which may change the server's capacity).
+                // Park (block for the next command) only when there is genuinely nothing to do:
+                // nothing active to advance AND nothing admittable right now. A queued job is
+                // admittable when the queue is non-empty and the server has a free slot. Parking
+                // while such a job waits would HANG it: a slot frees when a sequence retires (which
+                // can leave `active` empty) and no new command arrives to wake `recv()`. Parking
+                // when there is no free slot (or the queue is empty) still avoids busy-spinning.
                 let mut shutdown = false;
-                if active.is_empty() {
+                let can_admit =
+                    !queue.is_empty() && server.batch_capacity().free_slots > active.len();
+                if active.is_empty() && !can_admit {
                     match receiver.recv() {
                         Ok(command) => {
                             shutdown = handle_command(&mut server, &mut queue, command);

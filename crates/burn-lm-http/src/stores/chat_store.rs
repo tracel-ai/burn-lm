@@ -5,7 +5,8 @@ use burn_lm_inference::InferencePlugin;
 use burn_lm_registry::Registry;
 
 use crate::{
-    controllers::chat_controllers::ChatController, errors::ServerResult,
+    controllers::chat_controllers::ChatController,
+    errors::{ServerError, ServerResult},
     schemas::model_schemas::ModelSchema,
 };
 
@@ -59,7 +60,7 @@ impl ChatController for ChatStore {
             .find(|(pname, _)| (**pname).to_lowercase() == name.to_lowercase())
             .map(|(_, plugin)| plugin);
         let requested_plugin =
-            requested_plugin.unwrap_or_else(|| panic!("plugin '{name}' should be registered"));
+            requested_plugin.ok_or_else(|| ServerError::ModelNotFound(name.to_string()))?;
 
         // unload plugin if we request a different plugin than the current one
         let mut old_model_name = None;
@@ -88,5 +89,34 @@ impl ChatController for ChatStore {
 
         self.current_plugin_name = Some(requested_plugin.model_name().to_string());
         Ok((requested_plugin.clone(), old_model_name))
+    }
+}
+
+/// Store-locking helpers on the shared [`ModelStoreState`].
+#[async_trait]
+pub trait ModelStoreExt {
+    /// Resolve (and possibly switch to) the requested model and apply this request's config,
+    /// returning an OWNED plugin handle. The store lock is held only for the duration of this call,
+    /// so model loading and generation afterwards run un-serialized — which is what lets the
+    /// batching channel interleave concurrent requests. Returns [`ServerError::ModelNotFound`] for
+    /// an unregistered model.
+    async fn acquire_plugin(
+        &self,
+        model: &str,
+        json_params: &str,
+    ) -> ServerResult<(Box<dyn InferencePlugin>, Option<String>)>;
+}
+
+#[async_trait]
+impl ModelStoreExt for ModelStoreState {
+    async fn acquire_plugin(
+        &self,
+        model: &str,
+        json_params: &str,
+    ) -> ServerResult<(Box<dyn InferencePlugin>, Option<String>)> {
+        let mut store = self.lock().await;
+        let (plugin, old_model_name) = store.get_plugin(model).await?;
+        plugin.parse_json_config(json_params);
+        Ok((plugin, old_model_name))
     }
 }

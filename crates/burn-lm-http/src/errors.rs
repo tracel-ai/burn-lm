@@ -12,6 +12,8 @@ pub type ServerOptionalResult<T> = core::result::Result<Option<T>, ServerError>;
 pub enum ServerError {
     #[error("Resource not found")]
     NotFound,
+    #[error("Model '{0}' is not registered")]
+    ModelNotFound(String),
     #[error("Error loading model (reason: {0})")]
     LoadingError(String),
     #[error("")]
@@ -22,6 +24,7 @@ impl IntoResponse for ServerError {
     fn into_response(self) -> Response {
         match self {
             ServerError::NotFound => handle_not_found_error(),
+            ServerError::ModelNotFound(name) => handle_model_not_found_error(name),
             ServerError::UserRoleExpected(role) => handle_user_role_expected_error(role),
             ServerError::LoadingError(reason) => handle_loading_model_error(reason),
         }
@@ -35,6 +38,12 @@ fn handle_not_found_error() -> Response {
     tracing::error!("{msg}");
     let status = StatusCode::NOT_FOUND;
     (status, msg).into_response()
+}
+
+fn handle_model_not_found_error(name: String) -> Response {
+    let msg = format!("Model '{name}' is not registered.");
+    tracing::error!("{msg}");
+    (StatusCode::NOT_FOUND, msg).into_response()
 }
 
 fn handle_loading_model_error(reason: String) -> Response {

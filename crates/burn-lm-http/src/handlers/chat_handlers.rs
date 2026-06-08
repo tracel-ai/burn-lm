@@ -12,14 +12,13 @@ use tokio::sync::mpsc;
 use tokio_stream::{wrappers::ReceiverStream, StreamExt};
 
 use crate::{
-    controllers::chat_controllers::ChatController,
     errors::ServerResult,
     schemas::chat_schemas::{
         ChatCompletionChunkSchema, ChatCompletionRequestSchema, ChatCompletionSchema,
         ChoiceMessageRoleSchema, ChoiceMessageSchema, ChoiceSchema, FinishReasonSchema,
         StreamingChunk, UsageSchema,
     },
-    stores::chat_store::ModelStoreState,
+    stores::chat_store::{ModelStoreExt, ModelStoreState},
     utils::id::ChatCompletionId,
 };
 
@@ -70,14 +69,13 @@ async fn handle_non_streaming_response(
     state: ModelStoreState,
     payload: ChatCompletionRequestSchema,
 ) -> ServerResult<Response> {
-    let mut store = state.lock().await;
-    let (plugin, _) = store.get_plugin(&payload.model).await?;
-    let messages: Vec<burn_lm_inference::Message> =
-        payload.messages.into_iter().map(Into::into).collect();
     let json_params = serde_json::to_string(&payload.params)
         .expect("ChatCompletionParams should serialize to a JSON string");
     tracing::debug!("Json params from payload: {}", json_params);
-    plugin.parse_json_config(&json_params);
+    // Lock held only inside `acquire_plugin`; released before generation so requests don't serialize.
+    let (plugin, _) = state.acquire_plugin(&payload.model, &json_params).await?;
+    let messages: Vec<burn_lm_inference::Message> =
+        payload.messages.into_iter().map(Into::into).collect();
     let task = InferenceTask::Context(messages);
     let (job, handle) = InferenceJob::create(task, TextGenerationListener::default());
     let _stats = plugin.run_job(job).unwrap();
@@ -109,23 +107,18 @@ async fn handle_streaming_response(
     state: ModelStoreState,
     payload: ChatCompletionRequestSchema,
 ) -> ServerResult<Response> {
+    let json_params = serde_json::to_string(&payload.params)
+        .expect("ChatCompletionParams should serialize to a JSON string");
+    // Resolve the model up front (lock held only inside `acquire_plugin`). Doing it before the 200
+    // stream starts returns a clean 4xx for an unknown model instead of panicking a worker
+    // mid-stream, and the lock is released before generation so concurrent requests interleave
+    // through the batching channel.
+    let (plugin, old_model_name) = state.acquire_plugin(&payload.model, &json_params).await?;
+
     let (tx, rx) = mpsc::channel(10);
     tokio::spawn({
         async move {
-            let mut store = state.lock().await;
             let id = ChatCompletionId::new().to_string();
-            let (plugin, old_model_name) = store
-                .get_plugin(&payload.model)
-                .await
-                .expect("should get model plugin");
-            let json_params = serde_json::to_string(&payload.params)
-                .expect("ChatCompletionParams should serialize to a JSON string");
-            plugin.parse_json_config(&json_params);
-            // Release the store lock before loading/generating. Holding it across the blocking run
-            // serializes every request and defeats the batching channel (the worker never sees two
-            // jobs at once). `plugin` is an owned handle that shares the channel internally, so it
-            // stays valid afterwards.
-            drop(store);
             let now = chrono::Utc::now().timestamp();
             let model = plugin.model_name();
 

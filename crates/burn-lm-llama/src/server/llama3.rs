@@ -270,12 +270,12 @@ impl BatchedInferenceServer for Llama321bInstructServer {
     }
 
     fn batch_capacity(&self) -> BatchCapacity {
-        // `free_slots = 1` means the engine keeps at most one sequence active, i.e. requests are
-        // processed SEQUENTIALLY (no interleaving). The engine round-robins only when free_slots > 1
-        // (advancing several active sequences one token per sweep). Each round-robin step is still a
-        // batch-1 `forward`; Phase 2 raises this and fuses the active rows into one GPU forward.
+        // `free_slots = 2` lets the engine keep two sequences active and INTERLEAVE them round-robin
+        // (advancing each by one token per sweep), so two concurrent requests stream back
+        // interleaved. Each round-robin step is still a batch-1 `forward` (one row at a time); Phase 2
+        // fuses the active rows into a single GPU forward and raises this further.
         BatchCapacity {
-            free_slots: 1,
+            free_slots: 2,
             free_kv_tokens: self.config.max_seq_len,
         }
     }

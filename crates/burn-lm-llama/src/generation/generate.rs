@@ -283,6 +283,48 @@ mod tests {
         );
     }
 
+    /// Round-robin must be ISOLATED: a sequence's output is identical whether it runs alone or
+    /// interleaved with another. This is the per-sequence KV-cache isolation that makes batch>1
+    /// safe — a leak across the engine's cache swap would change a sequence's tokens when batched.
+    #[test]
+    fn generate_batch_isolates_each_sequence() {
+        fn run(llama: &mut Llama<ByteTokenizer>, prompts: Vec<&str>) -> Vec<String> {
+            llama.reset(); // each run starts from clean state (generation mutates shared KV)
+            let (emitters, handles): (Vec<_>, Vec<_>) = prompts
+                .iter()
+                .map(|_| GeneratedItemEmitter::init(TextGenerationListener::default()))
+                .unzip();
+            llama
+                .generate_batch(prompts, 16, 0.0, &mut Sampler::Argmax, emitters)
+                .unwrap();
+            handles.into_iter().map(|h| h.join()).collect()
+        }
+
+        let device: Device = Default::default();
+        let mut llama = LlamaConfig::llama3_2_1b_test()
+            .init::<ByteTokenizer>(&device)
+            .unwrap();
+        llama.decoder.model = Reinitializer::default()
+            .random_float(0, -1.0, 1.0)
+            .apply(llama.decoder.model);
+
+        // Each prompt run solo, then the two run interleaved (batch of 2).
+        let a_alone = run(&mut llama, vec!["First request"]).remove(0);
+        let b_alone = run(&mut llama, vec!["Second request"]).remove(0);
+        let together = run(&mut llama, vec!["First request", "Second request"]);
+
+        assert_eq!(
+            together[0], a_alone,
+            "sequence A's output changed when batched with B (KV cache not isolated)"
+        );
+        assert_eq!(
+            together[1], b_alone,
+            "sequence B's output changed when batched with A (KV cache not isolated)"
+        );
+        // Guard against a trivially-true test: the two prompts must actually diverge.
+        assert_ne!(a_alone, b_alone, "test prompts produced identical output");
+    }
+
     #[test]
     fn test_temperature_softmax() {
         let tensor = TestTensor::<2>::from([[21.3125, 19.859375, 19.0625, 18.75, 18.171875]]);

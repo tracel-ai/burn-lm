@@ -4,7 +4,10 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
-use burn_lm_inference::{InferenceJob, InferenceTask, StatEntry, TextGenerationListener};
+use burn_lm_inference::{
+    InferenceJob, InferenceTask, StatEntry, TextGenerationListener, WriteListener,
+};
+use std::io::Write;
 use tokio::sync::mpsc;
 use tokio_stream::{wrappers::ReceiverStream, StreamExt};
 
@@ -21,6 +24,35 @@ use crate::{
 };
 
 pub const REPLY_MARKER: &str = "##### Model Reply";
+
+struct SseWriter {
+    tx: mpsc::Sender<String>,
+    id: String,
+    model: String,
+    created: i64,
+}
+
+impl Write for SseWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let text = String::from_utf8_lossy(buf);
+        let chunk = StreamingChunk::Data(ChatCompletionChunkSchema::new(
+            &self.id,
+            &self.model,
+            self.created,
+            &text,
+        ));
+
+        self.tx
+            .blocking_send(chunk.to_event_stream())
+            .map_err(|_| std::io::ErrorKind::BrokenPipe)?;
+
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
 
 pub async fn chat_completions(
     State(state): State<ModelStoreState>,
@@ -172,7 +204,13 @@ async fn handle_streaming_response(
                 .for_each(|m| m.cleanup(REPLY_MARKER, burn_lm_inference::STATS_MARKER));
             tracing::debug!("Cleaned up messages: {:?}", messages);
             let task = InferenceTask::Context(messages);
-            let (job, handle) = InferenceJob::create(task, TextGenerationListener::default());
+            let listener = WriteListener::new(SseWriter {
+                tx: tx.clone(),
+                id: id.clone(),
+                model: model.to_string(),
+                created: now,
+            });
+            let (job, handle) = InferenceJob::create(task, listener);
             let stats = tokio::task::spawn_blocking({
                 let plugin = plugin.clone();
                 move || plugin.run_job(job).expect("should generate answer")
@@ -180,14 +218,13 @@ async fn handle_streaming_response(
             .await
             .expect("should complete answer generation");
 
-            let content = handle.join();
-            let content = format!("{}\n\n{}", content, stats.display_stats());
-            tracing::debug!("Answer: {}", content);
+            handle.join();
+            let stats = format!("\n\n{}", stats.display_stats());
             let chunk =
-                StreamingChunk::Data(ChatCompletionChunkSchema::new(&id, model, now, &content));
+                StreamingChunk::Data(ChatCompletionChunkSchema::new(&id, model, now, &stats));
             tx.send(chunk.to_event_stream())
                 .await
-                .expect("should send answer chunk");
+                .expect("should send stats chunk");
 
             // Done chunk
             let done_chunk = StreamingChunk::Done;
@@ -219,4 +256,79 @@ async fn handle_streaming_response(
         axum::body::Body::from_stream(stream),
     )
         .into_response())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use burn_lm_inference::{GeneratedItem, WriteListener};
+    use std::io::Write;
+    use std::time::Duration;
+
+    struct ChannelWriter {
+        tx: mpsc::Sender<String>,
+    }
+
+    impl Write for ChannelWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            let text = String::from_utf8_lossy(buf).to_string();
+            self.tx
+                .blocking_send(text)
+                .map_err(|_| std::io::ErrorKind::BrokenPipe)?;
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn write_listener_streams_text_as_soon_as_it_is_emitted() {
+        let (tx, mut rx) = mpsc::channel(1);
+        let task = InferenceTask::Prompt("prompt".to_string());
+        let listener = WriteListener::new(ChannelWriter { tx });
+        let (job, handle) = InferenceJob::create(task, listener);
+
+        std::thread::spawn(move || {
+            // This simulates the model emitting a token while generation is still running.
+            job.emitter
+                .completed(GeneratedItem::Text("first".to_string()));
+            std::thread::sleep(Duration::from_millis(200));
+            handle.join();
+        });
+
+        let first = tokio::time::timeout(Duration::from_millis(50), rx.recv())
+            .await
+            .expect("write listener should stream emitted text without waiting to finish")
+            .expect("stream should still be open");
+        assert_eq!(first, "first");
+    }
+
+    #[tokio::test]
+    async fn rest_generation_streams_text_as_soon_as_it_is_emitted() {
+        let (tx, mut rx) = mpsc::channel(1);
+        let task = InferenceTask::Prompt("prompt".to_string());
+        let listener = WriteListener::new(SseWriter {
+            tx,
+            id: "chatcmpl-test".to_string(),
+            model: "test-model".to_string(),
+            created: 42,
+        });
+        let (job, handle) = InferenceJob::create(task, listener);
+
+        std::thread::spawn(move || {
+            // This simulates the model emitting a token while generation is still running.
+            job.emitter
+                .completed(GeneratedItem::Text("first".to_string()));
+            std::thread::sleep(Duration::from_millis(200));
+            handle.join();
+        });
+
+        let first = tokio::time::timeout(Duration::from_millis(50), rx.recv())
+            .await
+            .expect("REST should stream emitted text without waiting for generation to finish")
+            .expect("stream should still be open");
+        assert!(first.contains("\"content\":\"first\""));
+    }
 }

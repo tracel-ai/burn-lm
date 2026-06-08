@@ -1,7 +1,10 @@
-use std::sync::{
-    atomic::{AtomicBool, AtomicUsize, Ordering},
-    mpsc::Sender,
-    Arc,
+use std::{
+    sync::{
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+        mpsc::Sender,
+        Arc,
+    },
+    thread::JoinHandle,
 };
 
 use burn::tensor::{Device, Int, Tensor};
@@ -11,14 +14,17 @@ use crate::tokenizer::Tokenizer;
 
 use super::StreamingDecoder;
 
-#[derive(Clone)]
 /// The text generation context, used to check when a stop token has been reached.
+///
+/// Not `Clone`: it owns the [`JoinHandle`] of the background decoder thread and is finalized via
+/// [`finish`](Self::finish), so cloning it would not make sense.
 pub struct GenerationContext {
     pub tokens: Tensor<1, Int>,
     num_tokens: usize,
     stop: Arc<AtomicBool>,
     num_generated: Arc<AtomicUsize>,
     sender: Sender<Tensor<1, Int>>,
+    decoder_handle: JoinHandle<()>,
 }
 
 impl GenerationContext {
@@ -36,7 +42,7 @@ impl GenerationContext {
         let mut generation =
             TokenGeneration::new(emitter, tokenizer, stop.clone(), num_generated.clone());
 
-        std::thread::spawn(move || {
+        let decoder_handle = std::thread::spawn(move || {
             for tokens in receiver.iter() {
                 let tokens = tokens
                     .into_data()
@@ -54,7 +60,29 @@ impl GenerationContext {
             stop,
             num_generated,
             sender,
+            decoder_handle,
         }
+    }
+
+    /// Finish the generation, ensuring every generated token has been decoded and emitted.
+    ///
+    /// Drops the channel sender so the decoder thread's `receiver.iter()` loop terminates, joins
+    /// that thread so all in-flight tokens are emitted before returning, and returns the final
+    /// number of generated tokens.
+    pub fn finish(self) -> usize {
+        let Self {
+            sender,
+            decoder_handle,
+            num_generated,
+            ..
+        } = self;
+
+        // Dropping the sender closes the channel, ending the decoder thread's `receiver.iter()`.
+        drop(sender);
+        // Join so the final in-flight token is decoded and emitted before we return.
+        decoder_handle.join().unwrap();
+
+        num_generated.load(Ordering::Relaxed)
     }
 
     /// Add generated tokens to the state (without checking for stop condition).

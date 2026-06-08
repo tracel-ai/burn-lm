@@ -95,7 +95,10 @@ impl<T: Tokenizer + 'static> Llama<T> {
             input_pos = input_pos.slice(t - 1..t) + 1;
         }
 
-        let num_tokens = state.num_tokens_generated();
+        // Join the decoder thread so every generated token is decoded and emitted before we
+        // return; otherwise the caller's `handle.join()` races the decoder and the final
+        // in-flight token is dropped.
+        let num_tokens = state.finish();
 
         Ok(GenerationOutput {
             tokens: num_tokens,
@@ -147,7 +150,10 @@ mod tests {
             .unwrap();
 
         let result = handle.join();
-        let expected = "[187][114][51][146][146][250][112][224][192][99][132][0][0][180][192][99][19][114][19][174][0][180][192][131][132][19][99][114][131][132][249][146][82][28][226][226][148][84][19][192][83][99][19][249][19][251][222][19][192][180][192][180][192][0][180][192][146][20][0][180][192][180][20]";
+        // The previous expected value was one token short ([...][180][20]): the final streamed
+        // token was dropped by the now-fixed unjoined decoder-thread race. This is the complete
+        // 64-token (sample_len) deterministic output.
+        let expected = "[187][114][51][146][146][250][112][224][192][99][132][0][0][180][192][99][19][114][19][174][0][180][192][131][132][19][99][114][131][132][249][146][82][28][226][226][148][84][19][192][83][99][19][249][19][251][222][19][192][180][192][180][192][0][180][192][146][20][0][180][192][180][20][0]";
 
         assert_eq!(result, expected);
     }

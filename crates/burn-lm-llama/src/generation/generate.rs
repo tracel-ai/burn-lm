@@ -2,9 +2,10 @@ use std::time::Instant;
 
 use super::Sampler;
 use crate::{inference::Llama, tokenizer::Tokenizer};
-use burn::{prelude::*, tensor::activation::softmax, tensor::TensorData};
+use burn::{prelude::*, tensor::activation::softmax};
 use burn_lm_inference::{
-    batching::{BatchCapacity, BatchedDecoder, ForwardBatch},
+    batching::{step_round, ActiveSeq, BatchCapacity, BatchedDecoder, StepOutcome},
+    sampler::NextTokenSampler,
     GeneratedItemEmitter, InferenceResult,
 };
 
@@ -12,6 +13,34 @@ use super::GenerationContext;
 
 pub(crate) fn temperature_scaled_softmax(logits: Tensor<2>, temperature: f64) -> Tensor<2> {
     softmax(logits / temperature, 1)
+}
+
+/// Adapts the library's [`Sampler`] (argmax / top-p) to the framework's
+/// [`NextTokenSampler`] seam, applying the request's temperature scaling first.
+///
+/// The generic decode core ([`step_round`]) slices the last-position logits and asks this for the
+/// next token. To keep request-parameterized sampling (temperature, top-p) working exactly as the
+/// old bespoke loop did, the scaling that used to sit inline in `generate_batch` lives here: when
+/// `temperature > 0.0` the logits are softmaxed by `1/temperature` before sampling (argmax with
+/// `temperature == 0.0` is unchanged, so greedy decoding stays byte-identical).
+///
+/// Generic over how it holds the [`Sampler`] so one adapter serves both drivers:
+/// `generate_batch` borrows the caller's sampler (`&mut Sampler`), while the server's
+/// `next_token_sampler` config primitive returns it boxed and therefore OWNING its `Sampler`.
+pub(crate) struct TemperatureSampler<S> {
+    pub(crate) sampler: S,
+    pub(crate) temperature: f64,
+}
+
+impl<S: std::borrow::BorrowMut<Sampler>> NextTokenSampler for TemperatureSampler<S> {
+    fn sample_next(&mut self, logits: Tensor<2>) -> Tensor<2, Int> {
+        let logits = if self.temperature > 0.0 {
+            temperature_scaled_softmax(logits, self.temperature)
+        } else {
+            logits
+        };
+        self.sampler.borrow_mut().sample(logits)
+    }
 }
 
 /// Generated text sample output.
@@ -83,121 +112,79 @@ impl<T: Tokenizer + 'static> Llama<T> {
         self.reset();
 
         let capacity = BatchCapacity {
-            free_slots: prompts.len(),
-            free_kv_tokens: usize::MAX,
+            max_slots: prompts.len(),
+            max_kv_tokens: usize::MAX,
         };
 
-        // Per-sequence state: engine-owned cache + streaming/stop context + position cursor.
-        struct Seq {
-            state: GenerationContext,
-            cache: <crate::inference::LlamaDecoder as BatchedDecoder>::Cache,
-            /// Full token buffer (prompt + generated). The next forward consumes the unprocessed
-            /// tail of this buffer.
-            tokens: Vec<u32>,
-            /// Number of tokens already forwarded through the decoder (absolute position of the
-            /// next input). Starts at 0; after prefill it equals the prompt length.
-            processed: usize,
-            steps_left: usize,
-            finished: bool,
-        }
-
-        let device = self.decoder.device.clone();
-
-        let mut active: Vec<Seq> = prompts
+        // Build the active set from the prompts. Each sequence carries its engine-owned per-seq
+        // cache and token buffer (the generic decode state) plus its `GenerationContext` (the
+        // library-side streaming/detok payload) in `extra`. `max_gen = sample_len` caps generation.
+        let mut active: Vec<ActiveSeq<_, GenerationContext>> = prompts
             .into_iter()
             .zip(emitters)
             .map(|(prompt, emitter)| {
-                let input_tokens = self.tokenize(prompt);
-                let prompt_len = input_tokens.dims()[0];
-                let token_ids: Vec<u32> = input_tokens
-                    .clone()
+                let token_ids: Vec<u32> = self
+                    .tokenize(prompt)
                     .into_data()
                     .convert::<u32>()
                     .into_vec::<u32>()
                     .expect("prompt tokens should convert to u32");
-                let mut state = GenerationContext::new(
-                    prompt_len + sample_len,
-                    emitter,
-                    self.tokenizer.clone(),
-                    &device,
-                );
-                state.append(input_tokens);
-                Seq {
-                    state,
+                let state = GenerationContext::new(emitter, self.tokenizer.clone());
+                ActiveSeq {
                     cache: self.decoder.allocate_cache(capacity),
                     tokens: token_ids,
                     processed: 0,
-                    steps_left: sample_len,
+                    generated: 0,
+                    max_gen: sample_len,
                     finished: false,
+                    extra: state,
                 }
             })
             .collect();
 
+        let stop_ids = self.tokenizer.stop_ids();
+        let mut sampler = TemperatureSampler {
+            sampler,
+            temperature,
+        };
+
         let now = Instant::now();
-        let mut remaining = active.len();
-        while remaining > 0 {
-            for seq in active.iter_mut() {
-                if seq.finished {
-                    continue;
+        // Run the shared generic decode core to completion: one round advances every still-active
+        // sequence by a token (round-robin, so their streams interleave). `step_round` does the
+        // forward → sample → SYNCHRONOUS stop-check; the driver-side work left here is streaming
+        // each new (non-stop) token through its `GenerationContext`. A stop id retires its
+        // sequence in the same round it is produced, so no token is generated past it.
+        while active.iter().any(|seq| !seq.finished) {
+            let outcomes = step_round(&mut self.decoder, &mut active, &mut sampler, &stop_ids);
+            for (seq, outcome) in active.iter_mut().zip(outcomes) {
+                match outcome {
+                    StepOutcome::Stepped { token, is_stop, .. } => {
+                        if !is_stop {
+                            seq.extra.update(token);
+                        }
+                    }
+                    // A failed forward (e.g. context length exceeded) aborts the whole batch,
+                    // exactly as the pre-seam loop's `forward(..)?` did.
+                    StepOutcome::Failed(err) => return Err(err),
+                    StepOutcome::Skipped => {}
                 }
-                if seq.steps_left == 0 || seq.state.should_stop() {
-                    seq.finished = true;
-                    remaining -= 1;
-                    continue;
-                }
-
-                // Unprocessed tail: whole prompt on the first step (prefill), one token afterwards.
-                let input_ids: Vec<i32> =
-                    seq.tokens[seq.processed..].iter().map(|&t| t as i32).collect();
-                let seq_len = input_ids.len();
-                let position = seq.processed;
-                let x = Tensor::<2, Int>::from_data(
-                    TensorData::new(input_ids, [1, seq_len]),
-                    &device,
-                );
-
-                let batch = ForwardBatch {
-                    input_tokens: x,
-                    positions: vec![position],
-                    cache_slots: vec![0],
-                };
-                // Drive the batched seam explicitly (UFCS) so this exercises
-                // `BatchedDecoder::forward` against the engine-owned per-seq cache, not the
-                // inherent `LlamaDecoder::forward`.
-                let output = BatchedDecoder::forward(&mut self.decoder, batch, &mut seq.cache)?;
-
-                let [batch_size, out_seq_len, vocab_size] = output.logits.dims();
-                let mut next_token_logits = output
-                    .logits
-                    .slice([0..batch_size, out_seq_len - 1..out_seq_len])
-                    .reshape([batch_size, vocab_size]);
-                if temperature > 0.0 {
-                    next_token_logits = temperature_scaled_softmax(next_token_logits, temperature);
-                }
-                let next_token = sampler.sample(next_token_logits).reshape([batch_size]);
-                let next_id = next_token
-                    .clone()
-                    .into_data()
-                    .convert::<u32>()
-                    .into_vec::<u32>()
-                    .expect("sampled token should convert to u32")[0];
-
-                // Everything up to here is now processed; the next step consumes only the new token.
-                seq.processed = seq.tokens.len();
-                seq.tokens.push(next_id);
-                seq.state.update(next_token);
-                seq.steps_left -= 1;
             }
         }
 
         let elapsed = now.elapsed();
         Ok(active
             .into_iter()
-            .map(|seq| GenerationOutput {
+            .map(|seq| {
                 // `finish` joins the decoder thread so all tokens are emitted before we return,
-                // making the streamed output deterministic for the caller's `handle.join()`.
-                tokens: seq.state.finish(),
-                time: elapsed,
+                // making the streamed output deterministic for the caller's `handle.join()`. The
+                // reported count is the engine's `generated` counter, which includes a terminating
+                // stop token — the historical convention, and the one the serving driver reports.
+                let tokens = seq.generated;
+                seq.extra.finish();
+                GenerationOutput {
+                    tokens,
+                    time: elapsed,
+                }
             })
             .collect())
     }

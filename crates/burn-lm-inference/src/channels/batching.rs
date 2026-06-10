@@ -28,13 +28,11 @@ use std::{
     thread::JoinHandle,
 };
 
-use burn::tensor::{Int, Tensor, TensorData};
-
 use crate::{
-    batching::{BatchedDecoder, BatchedInferenceServer, ForwardBatch},
+    batching::{step_round, ActiveSeq, BatchedInferenceServer, CacheOf, StepOutcome},
     errors::{InferenceError, InferenceResult},
-    sampler::Sampler,
-    GeneratedItem, GeneratedItemEmitter, InferenceJob, Stats, INFERENCE_DEVICE,
+    sampler::NextTokenSampler,
+    GeneratedItem, GeneratedItemEmitter, InferenceJob, Stats,
 };
 
 use super::InferenceChannel;
@@ -113,29 +111,28 @@ impl<Server: BatchedInferenceServer + 'static> Default for BatchingChannel<Serve
     }
 }
 
-/// Framework-owned state for a single in-flight sequence.
-///
-/// This is the per-sequence active state the engine drives. The cache is the model's, but it is
-/// OWNED HERE and handed back to the decoder on each step; everything else (buffers, cursors,
-/// counters, the job's emitter and completion sender) is pure framework bookkeeping.
-struct ActiveSeq<S: BatchedInferenceServer> {
-    /// The model's per-sequence cache, allocated by the engine and passed into every `forward`.
-    cache: <S::Decoder as BatchedDecoder>::Cache,
-    /// Full token buffer (prompt + generated). The next forward consumes the unprocessed tail.
-    tokens: Vec<u32>,
-    /// Number of tokens already pushed through the decoder (== absolute position of next input).
-    processed: usize,
+/// Serving-driver payload attached to a generic [`ActiveSeq`]: where a sequence's text is streamed
+/// and the one-shot completion signal fired when it retires. The generic decode core
+/// ([`step_round`]) never touches this — it advances the [`ActiveSeq`]'s cache/tokens/counters and
+/// reports back; the worker uses this payload to stream tokens and signal completion.
+struct JobMeta {
     /// Where this sequence's text is streamed.
     emitter: GeneratedItemEmitter,
+    /// Per-sequence sampler, built from the server's sampling config at admission and persisted
+    /// for the sequence's whole generation — same as the single-request path, where one (possibly
+    /// seeded) sampler's RNG advances across all of a request's tokens. Rebuilding per round would
+    /// reset a seeded RNG before every token. `Option` so [`step`] can `.take()` it while the
+    /// sequence itself is mutably borrowed for the round.
+    sampler: Option<Box<dyn NextTokenSampler + Send>>,
     /// One-shot completion signal for the submitting caller, fired when the sequence retires.
-    completion: SyncSender<InferenceResult<Stats>>,
-    /// Generated-token count (excludes the prompt).
-    generated: usize,
-    /// Hard cap on generated tokens for this sequence.
-    max_gen: usize,
-    /// Set once a stop id or the cap is hit; the next sweep retires it.
-    finished: bool,
+    /// `Option` so every send site `.take()`s it: completion fires exactly once (first send wins).
+    /// The channel is a bounded one-shot, so a second send with the first still buffered would
+    /// block the worker thread — `take()` makes that impossible by construction.
+    completion: Option<SyncSender<InferenceResult<Stats>>>,
 }
+
+/// The framework's in-flight sequence: the generic per-seq decode state plus the serving payload.
+type JobSeq<S> = ActiveSeq<CacheOf<S>, JobMeta>;
 
 impl<Server: BatchedInferenceServer + 'static> BatchingChannel<Server> {
     pub fn new() -> Self {
@@ -171,23 +168,26 @@ impl<Server: BatchedInferenceServer + 'static> BatchingChannel<Server> {
             let mut server = seed;
             let mut queue: VecDeque<(InferenceJob, SyncSender<InferenceResult<Stats>>)> =
                 VecDeque::new();
-            let mut active: Vec<ActiveSeq<Server>> = Vec::new();
-            let mut sampler = Sampler::default();
+            let mut active: Vec<JobSeq<Server>> = Vec::new();
 
             loop {
-                // Park (block for the next command) only when there is genuinely nothing to do:
-                // nothing active to advance AND nothing admittable right now. A queued job is
-                // admittable when the queue is non-empty and the server has a free slot. Parking
-                // while such a job waits would HANG it: a slot frees when a sequence retires (which
-                // can leave `active` empty) and no new command arrives to wake `recv()`. Parking
-                // when there is no free slot (or the queue is empty) still avoids busy-spinning.
-                let mut shutdown = false;
+                // Block for the next command only when there is genuinely no progress to make:
+                // nothing active to advance AND nothing admittable right now. "Admittable" means a
+                // job is queued and the server reports a free slot. Parking otherwise (e.g. while a
+                // job is queued and a slot just freed up after a retire) would dead-lock: the queued
+                // job's `Submit` was already drained into `queue`, so no further command is coming to
+                // wake the `recv()` — the worker would sleep forever with admittable work in hand.
+                // (Pre-existing latent bug: the old guard parked on `active.is_empty()` alone, which
+                // only stayed live because a job's submit usually raced in after the previous one
+                // retired; with a freed slot and a job already queued it hangs.) When `max_slots ==
+                // 0` with a job queued, `can_admit` is false, so we still park instead of busy-spin.
                 let can_admit =
-                    !queue.is_empty() && server.batch_capacity().free_slots > active.len();
+                    !queue.is_empty() && server.batch_capacity().max_slots > active.len();
+                let mut shutdown = false;
                 if active.is_empty() && !can_admit {
                     match receiver.recv() {
                         Ok(command) => {
-                            shutdown = handle_command(&mut server, &mut queue, command);
+                            shutdown = handle_command(&mut server, &mut queue, &active, command);
                         }
                         Err(_) => break, // all senders dropped
                     }
@@ -197,7 +197,7 @@ impl<Server: BatchedInferenceServer + 'static> BatchingChannel<Server> {
                 // jobs together (deterministic batching) rather than one per iteration.
                 if !shutdown {
                     while let Ok(command) = receiver.try_recv() {
-                        if handle_command(&mut server, &mut queue, command) {
+                        if handle_command(&mut server, &mut queue, &active, command) {
                             shutdown = true;
                             break;
                         }
@@ -213,7 +213,7 @@ impl<Server: BatchedInferenceServer + 'static> BatchingChannel<Server> {
 
                 // STEP (round-robin stub): advance every active sequence by one token, then retire
                 // any that finished. Retiring frees a slot so the next iteration admits more.
-                step(&mut server, &mut active, &mut sampler);
+                step(&mut server, &mut active);
             }
         });
 
@@ -257,9 +257,13 @@ impl<Server: BatchedInferenceServer + 'static> BatchingChannel<Server> {
 ///
 /// `Submit` is special: it does not run the job, it just enqueues it; the completion reply is sent
 /// later by [`step`] when the sequence retires.
+///
+/// `active` is read-only context: `Unload` and `ClearState` are rejected while work is in flight
+/// (see the policy comments on those arms).
 fn handle_command<S: BatchedInferenceServer>(
     server: &mut S,
     queue: &mut VecDeque<(InferenceJob, SyncSender<InferenceResult<Stats>>)>,
+    active: &[JobSeq<S>],
     command: Command,
 ) -> bool {
     match command {
@@ -287,13 +291,31 @@ fn handle_command<S: BatchedInferenceServer>(
             let _ = reply.send(server.is_loaded());
         }
         Command::Unload(reply) => {
-            let _ = reply.send(server.unload());
+            // POLICY: unload is REJECTED while work is in flight (active sequences or queued
+            // jobs). Commands drain between rounds, so an unload could otherwise land
+            // mid-generation; the next round's `decoder()` would then silently reload the model
+            // and resume in-flight sequences with per-seq caches built against the previous
+            // instance — accidental semantics. Callers must wait out (or drain) in-flight work.
+            let result = if active.is_empty() && queue.is_empty() {
+                server.unload()
+            } else {
+                Err(InferenceError::Busy(active.len(), queue.len()))
+            };
+            let _ = reply.send(result);
         }
         Command::Submit { job, completion } => {
             queue.push_back((job, completion));
         }
         Command::ClearState(reply) => {
-            let _ = reply.send(server.clear_state());
+            // Same hazard as `Unload`: clearing model state under in-flight sequences would yank
+            // shared state out from under their per-seq caches mid-generation, so it is likewise
+            // rejected while work is in flight.
+            let result = if active.is_empty() && queue.is_empty() {
+                server.clear_state()
+            } else {
+                Err(InferenceError::Busy(active.len(), queue.len()))
+            };
+            let _ = reply.send(result);
         }
         Command::Shutdown => return true,
     }
@@ -302,16 +324,16 @@ fn handle_command<S: BatchedInferenceServer>(
 
 /// Admit queued jobs into the active set while there is free capacity (backpressure).
 ///
-/// `batch_capacity().free_slots` is the server's reported concurrent-sequence budget. The engine
+/// `batch_capacity().max_slots` is the server's reported concurrent-sequence budget. The engine
 /// owns the active set, so "free" = that budget minus what is already active: a job is admitted
-/// only while `active.len() < free_slots`. A job that does not fit stays queued for a later sweep
+/// only while `active.len() < max_slots`. A job that does not fit stays queued for a later sweep
 /// (which runs after a retire frees a slot), making admission continuous.
 fn admit<S: BatchedInferenceServer>(
     server: &mut S,
     queue: &mut VecDeque<(InferenceJob, SyncSender<InferenceResult<Stats>>)>,
-    active: &mut Vec<ActiveSeq<S>>,
+    active: &mut Vec<JobSeq<S>>,
 ) {
-    while active.len() < server.batch_capacity().free_slots {
+    while active.len() < server.batch_capacity().max_slots {
         let Some((job, completion)) = queue.pop_front() else {
             break;
         };
@@ -339,132 +361,111 @@ fn admit<S: BatchedInferenceServer>(
             cache,
             tokens,
             processed: 0,
-            emitter: job.emitter,
-            completion,
             generated: 0,
             max_gen: server.max_gen_tokens(),
             finished: false,
+            extra: JobMeta {
+                emitter: job.emitter,
+                // Built once at admission so the sampler (and its RNG) persists across the
+                // sequence's rounds; config changes take effect for later-admitted sequences.
+                sampler: Some(server.next_token_sampler()),
+                completion: Some(completion),
+            },
         });
     }
 }
 
-/// Advance every active sequence by one token (round-robin), then retire finished ones.
-fn step<S: BatchedInferenceServer>(
-    server: &mut S,
-    active: &mut Vec<ActiveSeq<S>>,
-    sampler: &mut Sampler,
-) {
+/// Advance every active sequence by one token (round-robin) via the generic [`step_round`] core,
+/// stream the new tokens to their job emitters, then retire finished sequences.
+///
+/// This is the serving driver's thin wrapper around the shared decode core: `step_round` owns the
+/// forward → contract-check → sample → stop-check dance; the framework-specific work that stays
+/// here is detokenizing/streaming each new token to its job emitter and signalling per-job
+/// completion on retire.
+fn step<S: BatchedInferenceServer>(server: &mut S, active: &mut Vec<JobSeq<S>>) {
+    // Idle fast-path: nothing to advance, so do not touch the model. `decoder()` lazy-loads, so
+    // borrowing it on an empty round would force-load the model from any lifecycle command — and
+    // reload it in the very same loop iteration after a successful `Unload`.
+    if active.is_empty() {
+        return;
+    }
+
     let stop_ids = server.stop_ids();
 
-    for seq in active.iter_mut() {
-        if seq.finished {
-            continue;
-        }
-
-        // The unprocessed tail: on the first step this is the whole prompt (prefill); afterwards a
-        // single token (decode). Empty prompts cannot generate, so retire immediately.
-        if seq.processed >= seq.tokens.len() {
-            seq.finished = true;
-            continue;
-        }
-        let input_ids: Vec<i32> = seq.tokens[seq.processed..].iter().map(|&t| t as i32).collect();
-        let seq_len = input_ids.len();
-        let position = seq.processed;
-
-        let input_tokens = Tensor::<2, Int>::from_data(
-            TensorData::new(input_ids, [1, seq_len]),
-            &*INFERENCE_DEVICE,
-        );
-        let batch = ForwardBatch {
-            input_tokens,
-            positions: vec![position],
-            cache_slots: vec![0],
-        };
-
-        let next = forward_one(server, &mut seq.cache, batch, sampler);
-        let next_token = match next {
-            Ok(token) => token,
-            Err(err) => {
-                let _ = seq.completion.send(Err(err));
-                seq.finished = true;
-                continue;
+    // Borrow the decoder for the whole round. If the model is not loaded, retire every active
+    // sequence with that error rather than panicking the worker.
+    let outcomes = match server.decoder() {
+        Ok(decoder) => {
+            // Advance each sequence with ITS OWN sampler, taken out of `extra` for the duration of
+            // the call (`step_round` borrows the sequence and the sampler separately).
+            let mut outcomes = Vec::with_capacity(active.len());
+            for index in 0..active.len() {
+                let mut sampler = active[index]
+                    .extra
+                    .sampler
+                    .take()
+                    .expect("sampler is only taken for the duration of a step");
+                let outcome =
+                    step_round(decoder, &mut active[index..index + 1], &mut sampler, &stop_ids)
+                        .pop()
+                        .expect("one sequence in yields exactly one outcome");
+                active[index].extra.sampler = Some(sampler);
+                outcomes.push(outcome);
             }
-        };
-
-        seq.processed = seq.tokens.len();
-        seq.tokens.push(next_token);
-        seq.generated += 1;
-
-        if stop_ids.contains(&next_token) {
-            seq.finished = true;
-        } else {
-            // Stream the new token's text to the job emitter.
-            let text = server.detokenize(&[next_token]);
-            if !text.is_empty() {
-                seq.emitter.completed(GeneratedItem::Text(text));
-            }
+            outcomes
         }
+        Err(err) => {
+            for seq in active.iter_mut() {
+                if let Some(completion) = seq.extra.completion.take() {
+                    let _ = completion.send(Err(err.clone()));
+                }
+            }
+            active.clear();
+            return;
+        }
+    };
 
-        if seq.generated >= seq.max_gen {
-            seq.finished = true;
+    // STREAM: for each advanced sequence, emit the new token's text (a stop token is not streamed)
+    // or forward a per-sequence forward error to its completion sender.
+    for (seq, outcome) in active.iter_mut().zip(outcomes) {
+        match outcome {
+            StepOutcome::Stepped { token, is_stop, .. } => {
+                if !is_stop {
+                    let text = server.detokenize(&[token]);
+                    if !text.is_empty() {
+                        seq.extra.emitter.completed(GeneratedItem::Text(text));
+                    }
+                }
+            }
+            StepOutcome::Failed(err) => {
+                if let Some(completion) = seq.extra.completion.take() {
+                    let _ = completion.send(Err(err));
+                }
+            }
+            StepOutcome::Skipped => {}
         }
     }
 
-    // RETIRE: drop finished sequences and signal completion, freeing capacity for admission.
-    active.retain(|seq| {
+    // RETIRE: drop finished sequences and signal completion, freeing capacity for admission. The
+    // completion sender is `.take()`n at every send site, so a sequence retired by a forward error
+    // (its `Err` already sent above) sends nothing here. That matters: the channel is a bounded
+    // one-shot, so a second send with the `Err` still buffered would block the worker — and the
+    // public `submit()` lets callers hold the receiver and recv much later — stalling every other
+    // active sequence.
+    active.retain_mut(|seq| {
         if seq.finished {
-            let mut stats = Stats::new();
-            stats
-                .entries
-                .insert(crate::stats::StatEntry::TokensCount(seq.generated));
-            let _ = seq.completion.send(Ok(stats));
+            if let Some(completion) = seq.extra.completion.take() {
+                let mut stats = Stats::new();
+                stats
+                    .entries
+                    .insert(crate::stats::StatEntry::TokensCount(seq.generated));
+                let _ = completion.send(Ok(stats));
+            }
             false
         } else {
             true
         }
     });
-}
-
-/// One batch-1 forward + sample. Takes the engine-owned cache for this sequence and runs the
-/// model's `forward` against it, then framework-samples the next token id from the last position.
-fn forward_one<S: BatchedInferenceServer>(
-    server: &mut S,
-    cache: &mut <S::Decoder as BatchedDecoder>::Cache,
-    batch: ForwardBatch,
-    sampler: &mut Sampler,
-) -> InferenceResult<u32> {
-    let in_rows = batch.input_tokens.dims()[0];
-    let output = server.decoder()?.forward(batch, cache)?;
-
-    // Forward contract: the decoder must return exactly one logits row per input row, with at least
-    // one position. Enforce it as a per-sequence error (never a panic): on the worker thread a
-    // panic here would unwind and brick the whole channel, and a wrong row count would otherwise
-    // silently sample the wrong sequence. step()'s per-sequence error path retires just this one.
-    let [batch_size, seq_len, vocab_size] = output.logits.dims();
-    if batch_size != in_rows || seq_len == 0 {
-        return Err(InferenceError::BatchContractViolation(format!(
-            "forward returned logits {:?} for {in_rows} input row(s); expected [{in_rows}, >=1, vocab]",
-            [batch_size, seq_len, vocab_size]
-        )));
-    }
-
-    let next_token_logits = output
-        .logits
-        .slice([0..batch_size, seq_len - 1..seq_len])
-        .reshape([batch_size, vocab_size]);
-
-    let token = sampler.sample(next_token_logits);
-    let ids = token
-        .into_data()
-        .convert::<u32>()
-        .into_vec::<u32>()
-        .map_err(|_| {
-            InferenceError::BatchContractViolation("sampled token tensor did not convert to u32".to_string())
-        })?;
-    let id = *ids
-        .first()
-        .ok_or_else(|| InferenceError::BatchContractViolation("sampler produced no token".to_string()))?;
-    Ok(id)
 }
 
 fn worker_gone() -> InferenceError {
@@ -525,11 +526,13 @@ impl<Server: BatchedInferenceServer + 'static> InferenceChannel<Server> for Batc
 mod tests {
     use super::*;
     use crate::{
-        batching::{BatchCapacity, ForwardOutput},
+        batching::{BatchCapacity, BatchedDecoder, ForwardBatch, ForwardOutput},
         job::{InferenceJob, InferenceTask},
+        sampler::NextTokenSampler,
         server::{InferenceServer, ServerConfigParsing},
-        InferenceServerConfig,
+        InferenceServerConfig, TextGenerationListener, INFERENCE_DEVICE,
     };
+    use burn::tensor::{Int, Tensor, TensorData};
     use std::sync::{
         atomic::{AtomicUsize, Ordering},
         Arc, Mutex,
@@ -555,12 +558,18 @@ mod tests {
         /// Extra logits rows beyond the single input row — simulates a decoder that violates the
         /// rows-in==rows-out contract. 0 = well-behaved.
         extra_rows: usize,
+        /// Per-forward sleep — simulates a slow model so a test can observe a job in flight.
+        step_delay_ms: u64,
     }
 
     const VOCAB: usize = 64;
 
     impl BatchedDecoder for FakeDecoder {
         type Cache = usize;
+
+        fn device(&self) -> burn::tensor::Device {
+            INFERENCE_DEVICE.clone()
+        }
 
         fn allocate_cache(&self, _capacity: BatchCapacity) -> usize {
             0
@@ -571,6 +580,10 @@ mod tests {
             batch: ForwardBatch,
             cache: &mut usize,
         ) -> InferenceResult<ForwardOutput> {
+            if self.step_delay_ms > 0 {
+                std::thread::sleep(std::time::Duration::from_millis(self.step_delay_ms));
+            }
+
             let step = *cache;
             *cache += 1;
 
@@ -602,13 +615,29 @@ mod tests {
         }
     }
 
+    /// A sampler that ignores the logits and always returns the same token id — observably NOT
+    /// argmax, so a test can prove the worker uses the server-configured sampler.
+    struct FixedSampler(u32);
+
+    impl NextTokenSampler for FixedSampler {
+        fn sample_next(&mut self, _logits: Tensor<2>) -> Tensor<2, Int> {
+            Tensor::from_data(
+                TensorData::new(vec![self.0 as i32], [1, 1]),
+                &*INFERENCE_DEVICE,
+            )
+        }
+    }
+
     #[derive(Debug, Clone)]
     struct FakeServer {
         loaded: bool,
         slots: usize,
         decoder: FakeDecoder,
-        /// Counts `batch_capacity` calls — lets the `free_slots == 0` test detect a busy-spin.
+        /// Counts `batch_capacity` calls — lets the `max_slots == 0` test detect a busy-spin.
         capacity_calls: Arc<AtomicUsize>,
+        /// When set, `next_token_sampler` returns a [`FixedSampler`] for this token instead of the
+        /// default argmax — stands in for a server with non-greedy sampling config.
+        fixed_token: Option<u32>,
     }
 
     impl Default for FakeServer {
@@ -626,8 +655,10 @@ mod tests {
                     log,
                     emit: 4,
                     extra_rows: 0,
+                    step_delay_ms: 0,
                 },
                 capacity_calls: Arc::new(AtomicUsize::new(0)),
+                fixed_token: None,
             }
         }
 
@@ -641,9 +672,35 @@ mod tests {
                     log,
                     emit: 4,
                     extra_rows: 1,
+                    step_delay_ms: 0,
                 },
                 capacity_calls: Arc::new(AtomicUsize::new(0)),
+                fixed_token: None,
             }
+        }
+
+        /// A server whose decoder emits many tokens, each after a small sleep — a long-running job
+        /// a test can interrogate (e.g. unload) while it is demonstrably still in flight.
+        fn new_slow(slots: usize, log: OrderLog) -> Self {
+            Self {
+                loaded: false,
+                slots,
+                decoder: FakeDecoder {
+                    log,
+                    emit: 1000, // effectively capped by `max_gen_tokens` (16)
+                    extra_rows: 0,
+                    step_delay_ms: 20,
+                },
+                capacity_calls: Arc::new(AtomicUsize::new(0)),
+                fixed_token: None,
+            }
+        }
+
+        /// A server whose `next_token_sampler` always picks `token`, regardless of logits —
+        /// observably different from the default argmax (which would echo the identity token).
+        fn with_fixed_sampler(mut self, token: u32) -> Self {
+            self.fixed_token = Some(token);
+            self
         }
 
         /// A server reporting `slots` free slots that records every `batch_capacity` call into
@@ -656,8 +713,10 @@ mod tests {
                     log: Arc::new(Mutex::new(Vec::new())),
                     emit: 4,
                     extra_rows: 0,
+                    step_delay_ms: 0,
                 },
                 capacity_calls: calls,
+                fixed_token: None,
             }
         }
     }
@@ -692,14 +751,18 @@ mod tests {
         type Decoder = FakeDecoder;
 
         fn decoder(&mut self) -> InferenceResult<&mut FakeDecoder> {
+            // Mirror the real servers (`Llama3BaseServer::decoder`): borrowing the decoder
+            // lazy-loads the model, so an idle worker touching `decoder()` is observable as a
+            // spurious load (e.g. an immediate reload after `Unload`).
+            self.loaded = true;
             Ok(&mut self.decoder)
         }
 
         fn batch_capacity(&self) -> BatchCapacity {
             self.capacity_calls.fetch_add(1, Ordering::Relaxed);
             BatchCapacity {
-                free_slots: self.slots,
-                free_kv_tokens: 1024,
+                max_slots: self.slots,
+                max_kv_tokens: 1024,
             }
         }
 
@@ -723,6 +786,13 @@ mod tests {
 
         fn max_gen_tokens(&self) -> usize {
             16
+        }
+
+        fn next_token_sampler(&self) -> Box<dyn NextTokenSampler + Send> {
+            match self.fixed_token {
+                Some(token) => Box::new(FixedSampler(token)),
+                None => Box::new(crate::sampler::Sampler::default()),
+            }
         }
     }
 
@@ -795,18 +865,78 @@ mod tests {
         assert!(out2.is_err(), "second job should also retire with an error");
     }
 
-    /// A server reporting `free_slots == 0` with a job queued must PARK the worker, not busy-spin a
+    /// Completion must be sent EXACTLY ONCE per job. Before the fix, a failed forward sent `Err`
+    /// on the completion channel (filling the bounded one-shot) and the retire sweep then sent
+    /// `Ok` AGAIN for the same sequence — blocking the worker until the caller drained the first
+    /// message. We prove the worker stays live by NOT recv-ing the first job's completion and
+    /// asserting a second job still completes.
+    #[test]
+    fn failed_sequence_completes_exactly_once_without_blocking_the_worker() {
+        let channel = BatchingChannel::<FakeServer>::with_server(FakeServer::new_bad(
+            1,
+            Arc::new(Mutex::new(Vec::new())),
+        ));
+
+        // Job 1 fails its forward; its `Err` sits buffered in the one-shot because we don't recv.
+        // A double send would now block the worker on the buffered channel.
+        let (job1, _h1) = InferenceJob::create(InferenceTask::Prompt("a".into()), NullListener);
+        let rx1 = channel.submit(job1).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(50));
+
+        // Job 2 must still be served — proving the worker did not block on a second send.
+        let (job2, _h2) = InferenceJob::create(InferenceTask::Prompt("b".into()), NullListener);
+        let rx2 = channel.submit(job2).unwrap();
+        rx2.recv_timeout(std::time::Duration::from_secs(5))
+            .expect("worker blocked: completion was sent twice for the failed sequence");
+
+        // The first receiver yields exactly one message (the `Err`), then disconnects — no
+        // buffered second message.
+        assert!(
+            rx1.recv().expect("first completion must arrive").is_err(),
+            "failed sequence should complete with the forward error"
+        );
+        assert!(
+            rx1.recv().is_err(),
+            "completion channel should disconnect after exactly one message"
+        );
+    }
+
+    /// Unload (and clear-state) while work is in flight must be REJECTED, not silently reload the
+    /// model under in-flight per-seq caches. Once the job retires, unload succeeds.
+    #[test]
+    fn unload_is_rejected_while_a_job_is_in_flight() {
+        let channel = BatchingChannel::<FakeServer>::with_server(FakeServer::new_slow(
+            1,
+            Arc::new(Mutex::new(Vec::new())),
+        ));
+
+        // ~16 steps × 20ms ⇒ the job is comfortably still running 50ms in.
+        let (job, _h) = InferenceJob::create(InferenceTask::Prompt("a".into()), NullListener);
+        let rx = channel.submit(job).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(50));
+
+        assert!(
+            matches!(channel.unload(), Err(InferenceError::Busy(_, _))),
+            "unload must be rejected while a sequence is active"
+        );
+
+        // After the job completes the active set is empty, so unload succeeds.
+        rx.recv().unwrap().unwrap();
+        channel.unload().expect("unload should succeed once idle");
+    }
+
+    /// A server reporting `max_slots == 0` with a job queued must PARK the worker, not busy-spin a
     /// core. We detect a spin via the `batch_capacity` call count: parked ⇒ a couple of calls;
     /// spinning ⇒ thousands over the same window.
     #[test]
-    fn free_slots_zero_parks_instead_of_spinning() {
+    fn max_slots_zero_parks_instead_of_spinning() {
         let calls = Arc::new(AtomicUsize::new(0));
         let channel = BatchingChannel::<FakeServer>::with_server(FakeServer::with_capacity_probe(
             0,
             calls.clone(),
         ));
 
-        // Queued, but never admittable while free_slots == 0.
+        // Queued, but never admittable while max_slots == 0.
         let (job, _h) = InferenceJob::create(InferenceTask::Prompt("a".into()), NullListener);
         let _rx = channel.submit(job).unwrap();
 
@@ -814,7 +944,7 @@ mod tests {
         let n = calls.load(Ordering::Relaxed);
         assert!(
             n < 100,
-            "worker busy-spun on free_slots==0 (batch_capacity called {n} times in 50ms); it should park"
+            "worker busy-spun on max_slots==0 (batch_capacity called {n} times in 50ms); it should park"
         );
     }
 
@@ -874,6 +1004,28 @@ mod tests {
         );
     }
 
+    /// The worker must sample with the server-configured sampler (the `next_token_sampler`
+    /// primitive), not a hard-coded argmax. The fixed sampler always picks token 7 regardless of
+    /// logits; argmax over the fake decoder's logits would instead echo the identity token (10)
+    /// and then stop. Since 7 is never a stop id, the sequence runs to `max_gen_tokens` (16) and
+    /// streams sixteen "7"s — unmistakably the configured sampler's output.
+    #[test]
+    fn worker_uses_the_server_configured_sampler() {
+        let channel = BatchingChannel::<FakeServer>::with_server(
+            FakeServer::new(1, Arc::new(Mutex::new(Vec::new()))).with_fixed_sampler(7),
+        );
+
+        let (job, handle) =
+            InferenceJob::create(InferenceTask::Prompt("a".into()), TextGenerationListener::default());
+        channel.submit(job).unwrap().recv().unwrap().unwrap();
+
+        assert_eq!(
+            handle.join(),
+            "7".repeat(16),
+            "emitted text must come from the server's configured sampler, not argmax"
+        );
+    }
+
     #[test]
     fn lifecycle_round_trip() {
         let channel = BatchingChannel::<FakeServer>::new();
@@ -887,6 +1039,11 @@ mod tests {
         assert!(channel.is_loaded());
 
         channel.unload().unwrap();
+        assert!(!channel.is_loaded());
+
+        // Lifecycle traffic on an idle worker must not (re)load the model: `step` skips the
+        // decoder when nothing is active (the fake's `decoder()` lazy-loads like the real ones).
+        let _ = channel.is_downloaded();
         assert!(!channel.is_loaded());
     }
 }

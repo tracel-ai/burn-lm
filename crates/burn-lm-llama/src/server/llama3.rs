@@ -2,7 +2,7 @@ use rand::RngExt;
 use serde::Deserialize;
 
 use crate::{
-    generation::{Sampler, TopP},
+    generation::{Sampler, TemperatureSampler, TopP},
     inference::LlamaDecoder,
     pretrained::ModelMeta,
     tokenizer::{Tiktoken, Tokenizer},
@@ -270,13 +270,13 @@ impl BatchedInferenceServer for Llama321bInstructServer {
     }
 
     fn batch_capacity(&self) -> BatchCapacity {
-        // `free_slots = 2` lets the engine keep two sequences active and INTERLEAVE them round-robin
+        // `max_slots = 2` lets the engine keep two sequences active and INTERLEAVE them round-robin
         // (advancing each by one token per sweep), so two concurrent requests stream back
         // interleaved. Each round-robin step is still a batch-1 `forward` (one row at a time); Phase 2
         // fuses the active rows into a single GPU forward and raises this further.
         BatchCapacity {
-            free_slots: 2,
-            free_kv_tokens: self.config.max_seq_len,
+            max_slots: 2,
+            max_kv_tokens: self.config.max_seq_len,
         }
     }
 
@@ -299,6 +299,28 @@ impl BatchedInferenceServer for Llama321bInstructServer {
 
     fn max_gen_tokens(&self) -> usize {
         self.config.sample_len
+    }
+
+    fn next_token_sampler(&self) -> Box<dyn NextTokenSampler + Send> {
+        // Same semantics as the single-request path in `Llama3BaseServer::complete`: the engine
+        // calls this once per admitted request and keeps the sampler for that request's whole
+        // generation, so the seeded RNG advances across its tokens. Temperature scaling then top-p
+        // with the configured seed (0 = a fresh random seed per request), and `temperature == 0.0`
+        // stays plain argmax/greedy. Per-REQUEST sampling params are a later step; this honors the
+        // per-SERVER config.
+        let seed = match self.config.seed {
+            0 => rand::rng().random::<u64>(),
+            s => s,
+        };
+        let sampler = if self.config.temperature > 0.0 {
+            Sampler::TopP(TopP::new(self.config.top_p, seed))
+        } else {
+            Sampler::Argmax
+        };
+        Box::new(TemperatureSampler {
+            sampler,
+            temperature: self.config.temperature,
+        })
     }
 }
 

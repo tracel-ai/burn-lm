@@ -17,7 +17,8 @@ pub mod utils;
 // ---------------------------------------------------------------------------
 // Re-exports for convenience so plugins implementors can just do:
 pub use crate::batching::{
-    BatchCapacity, BatchedDecoder, BatchedInferenceServer, ForwardBatch, ForwardOutput,
+    step_round, ActiveSeq, BatchCapacity, BatchedDecoder, BatchedInferenceServer, CacheOf,
+    ForwardBatch, ForwardOutput, StepOutcome,
 };
 pub use crate::channels::batching::BatchingChannel;
 pub use crate::channels::mutex::MutexChannel;
@@ -26,7 +27,7 @@ pub use crate::client::InferenceClient;
 pub use crate::errors::*;
 pub use crate::message::{Message, MessageRole};
 pub use crate::plugin::InferencePlugin;
-pub use crate::sampler::Sampler;
+pub use crate::sampler::{NextTokenSampler, Sampler};
 pub use crate::server::{InferenceServer, InferenceServerConfig, ServerConfigParsing};
 pub use crate::stats::{StatEntry, Stats, STATS_MARKER};
 pub use backends::burn_backend_types::*;

@@ -1,7 +1,7 @@
 pub type InferenceResult<T> = Result<T, InferenceError>;
 pub type InferenceOptionalResult<T> = Result<Option<T>, InferenceError>;
 
-#[derive(thiserror::Error, Debug)]
+#[derive(thiserror::Error, Debug, Clone)]
 pub enum InferenceError {
     #[error("Error deleting model: {0} (reason: {1})")]
     DeleteError(String, String),
@@ -19,4 +19,6 @@ pub enum InferenceError {
     ContextLengthExceeded(usize, usize),
     #[error("Decoder forward violated the batch contract: {0}")]
     BatchContractViolation(String),
+    #[error("Model is busy ({0} active sequence(s), {1} queued job(s)); retry once in-flight generation completes.")]
+    Busy(usize, usize),
 }

@@ -80,6 +80,10 @@ pub struct LlamaSeqCache {
 impl BatchedDecoder for LlamaDecoder {
     type Cache = LlamaSeqCache;
 
+    fn device(&self) -> Device {
+        self.device.clone()
+    }
+
     /// Allocate a fresh, empty per-sequence cache by cloning the decoder's (weights-independent)
     /// cache + RoPE templates and resetting them. `capacity` is unused for now: the round-robin
     /// stub uses one batch-1 cache per sequence rather than a slot-indexed shared cache.

@@ -5,7 +5,8 @@ use axum::{
     Json,
 };
 use burn_lm_inference::{
-    InferenceJob, InferenceTask, StatEntry, TextGenerationListener, WriteListener,
+    CancelSignal, GenerationParams, InferenceJob, InferenceTask, StatEntry, TextGenerationListener,
+    WriteListener,
 };
 use std::io::Write;
 use tokio::sync::mpsc;
@@ -14,15 +15,45 @@ use tokio_stream::{wrappers::ReceiverStream, StreamExt};
 use crate::{
     errors::ServerResult,
     schemas::chat_schemas::{
-        ChatCompletionChunkSchema, ChatCompletionRequestSchema, ChatCompletionSchema,
-        ChoiceMessageRoleSchema, ChoiceMessageSchema, ChoiceSchema, FinishReasonSchema,
-        StreamingChunk, UsageSchema,
+        ChatCompletionChunkSchema, ChatCompletionParamsSchema, ChatCompletionRequestSchema,
+        ChatCompletionSchema, ChoiceMessageRoleSchema, ChoiceMessageSchema, ChoiceSchema,
+        FinishReasonSchema, StreamingChunk, UsageSchema,
     },
     stores::chat_store::{ModelStoreExt, ModelStoreState},
     utils::id::ChatCompletionId,
 };
 
 pub const REPLY_MARKER: &str = "##### Model Reply";
+
+/// Per-request generation parameters derived from the payload, carried on the job itself —
+/// immune to the shared-config mutation race the old per-request `parse_json_config` had once
+/// requests ran concurrently.
+fn generation_params(params: &ChatCompletionParamsSchema) -> GenerationParams {
+    GenerationParams {
+        max_tokens: params.max_tokens.map(|v| v as usize),
+        temperature: params.temperature.map(f64::from),
+        top_p: params.top_p.map(f64::from),
+        seed: params.seed,
+    }
+}
+
+/// Wire client disconnection to job cancellation: when the SSE receiver side is dropped (client
+/// went away), fire the job's cancel signal so the engine stops spending forwards on it.
+///
+/// Returns the watcher's `JoinHandle`; the caller MUST abort it once the job is finished, because
+/// the watcher holds a sender clone that would otherwise keep the SSE channel open forever.
+fn wire_disconnect_cancel(
+    tx: &mpsc::Sender<String>,
+    cancel: CancelSignal,
+) -> tokio::task::JoinHandle<()> {
+    let tx = tx.clone();
+    tokio::spawn(async move {
+        // `closed()` completes when the receiver is dropped, regardless of how many sender
+        // clones are still alive.
+        tx.closed().await;
+        cancel.cancel();
+    })
+}
 
 struct SseWriter {
     tx: mpsc::Sender<String>,
@@ -69,15 +100,16 @@ async fn handle_non_streaming_response(
     state: ModelStoreState,
     payload: ChatCompletionRequestSchema,
 ) -> ServerResult<Response> {
-    let json_params = serde_json::to_string(&payload.params)
-        .expect("ChatCompletionParams should serialize to a JSON string");
-    tracing::debug!("Json params from payload: {}", json_params);
     // Lock held only inside `acquire_plugin`; released before generation so requests don't serialize.
-    let (plugin, _) = state.acquire_plugin(&payload.model, &json_params).await?;
+    let (plugin, _) = state.acquire_plugin(&payload.model).await?;
     let messages: Vec<burn_lm_inference::Message> =
         payload.messages.into_iter().map(Into::into).collect();
     let task = InferenceTask::Context(messages);
-    let (job, handle) = InferenceJob::create(task, TextGenerationListener::default());
+    let (job, handle) = InferenceJob::create(
+        task,
+        generation_params(&payload.params),
+        TextGenerationListener::default(),
+    );
     let _stats = plugin.run_job(job).unwrap();
     let content = handle.join();
 
@@ -107,13 +139,11 @@ async fn handle_streaming_response(
     state: ModelStoreState,
     payload: ChatCompletionRequestSchema,
 ) -> ServerResult<Response> {
-    let json_params = serde_json::to_string(&payload.params)
-        .expect("ChatCompletionParams should serialize to a JSON string");
     // Resolve the model up front (lock held only inside `acquire_plugin`). Doing it before the 200
     // stream starts returns a clean 4xx for an unknown model instead of panicking a worker
     // mid-stream, and the lock is released before generation so concurrent requests interleave
     // through the batching channel.
-    let (plugin, old_model_name) = state.acquire_plugin(&payload.model, &json_params).await?;
+    let (plugin, old_model_name) = state.acquire_plugin(&payload.model).await?;
 
     let (tx, rx) = mpsc::channel(10);
     tokio::spawn({
@@ -208,27 +238,57 @@ async fn handle_streaming_response(
                 model: model.to_string(),
                 created: now,
             });
-            let (job, handle) = InferenceJob::create(task, listener);
-            let stats = tokio::task::spawn_blocking({
+            let (job, handle) =
+                InferenceJob::create(task, generation_params(&payload.params), listener);
+            // Client disconnect -> job cancellation (observed by the worker's cancel sweep).
+            let disconnect_watcher = wire_disconnect_cancel(&tx, job.cancel.clone());
+            let join_result = tokio::task::spawn_blocking({
                 let plugin = plugin.clone();
-                move || plugin.run_job(job).expect("should generate answer")
+                move || {
+                    let result = plugin.run_job(job);
+                    // Join the listener AFTER the job: guarantees every streamed chunk has been
+                    // forwarded before stats/[DONE].
+                    handle.join();
+                    result
+                }
             })
-            .await
-            .expect("should complete answer generation");
+            .await;
+            // The watcher holds a sender clone; abort it on EVERY path (including the panic
+            // arm below) so the SSE channel can close — otherwise the stream never ends.
+            disconnect_watcher.abort();
 
-            handle.join();
+            let stats = match join_result {
+                Err(join_err) => {
+                    // The blocking task panicked. Today that means the listener thread died
+                    // mid-stream (client disconnected -> the SSE write failed -> `join()`
+                    // panicked), so treat it as a disconnect: close the stream instead of
+                    // re-panicking the handler task.
+                    tracing::debug!(
+                        "generation task panicked (likely client disconnect): {join_err}"
+                    );
+                    let _ = tx.send(StreamingChunk::Done.to_event_stream()).await;
+                    return;
+                }
+                Ok(Err(err)) => {
+                    // Includes Err(Cancelled) for a job cancelled while still queued: the client
+                    // is gone, so just close the stream instead of panicking the handler.
+                    tracing::debug!("Inference did not complete: {err}");
+                    let _ = tx.send(StreamingChunk::Done.to_event_stream()).await;
+                    return;
+                }
+                Ok(Ok(stats)) => stats,
+            };
             let stats = format!("\n\n{}", stats.display_stats());
             let chunk =
                 StreamingChunk::Data(ChatCompletionChunkSchema::new(&id, model, now, &stats));
-            tx.send(chunk.to_event_stream())
-                .await
-                .expect("should send stats chunk");
+            // A send error just means the client disconnected; nothing left to do.
+            if tx.send(chunk.to_event_stream()).await.is_err() {
+                return;
+            }
 
             // Done chunk
             let done_chunk = StreamingChunk::Done;
-            tx.send(done_chunk.to_event_stream())
-                .await
-                .expect("should send done chunk");
+            let _ = tx.send(done_chunk.to_event_stream()).await;
         }
     });
 
@@ -281,12 +341,54 @@ mod tests {
         }
     }
 
+    /// The SSE disconnect wiring: dropping the stream's receiver (the client going away) must
+    /// fire the job's cancel signal, and the watcher itself must finish so it cannot hold the
+    /// channel open.
+    #[tokio::test]
+    async fn disconnect_fires_cancel_signal() {
+        let (tx, rx) = mpsc::channel::<String>(1);
+        let cancel = CancelSignal::default();
+        let watcher = wire_disconnect_cancel(&tx, cancel.clone());
+        assert!(!cancel.is_cancelled());
+
+        // Client goes away.
+        drop(rx);
+
+        // The watcher observes the closed channel and fires the signal.
+        tokio::time::timeout(Duration::from_secs(5), watcher)
+            .await
+            .expect("watcher should finish after receiver drop")
+            .expect("watcher should not panic");
+        assert!(cancel.is_cancelled());
+    }
+
+    /// The watcher holds a sender clone, so while the job is running the SSE channel must NOT
+    /// read as closed — and aborting the watcher (what the handler does after generation) must
+    /// release that clone so the stream can end. Reintroducing a watcher that is never aborted
+    /// deadlocks every streaming request on its final `[DONE]`.
+    #[tokio::test]
+    async fn aborting_the_watcher_releases_the_sse_channel() {
+        let (tx, mut rx) = mpsc::channel::<String>(1);
+        let watcher = wire_disconnect_cancel(&tx, CancelSignal::default());
+
+        // Drop the handler's own sender; only the watcher's clone remains.
+        drop(tx);
+        watcher.abort();
+
+        // With the watcher aborted, no sender survives: the stream must end (recv -> None)
+        // instead of hanging forever.
+        let next = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+            .await
+            .expect("stream must close once the watcher is aborted");
+        assert!(next.is_none());
+    }
+
     #[tokio::test]
     async fn write_listener_streams_text_as_soon_as_it_is_emitted() {
         let (tx, mut rx) = mpsc::channel(1);
         let task = InferenceTask::Prompt("prompt".to_string());
         let listener = WriteListener::new(ChannelWriter { tx });
-        let (job, handle) = InferenceJob::create(task, listener);
+        let (job, handle) = InferenceJob::create(task, GenerationParams::default(), listener);
 
         std::thread::spawn(move || {
             // This simulates the model emitting a token while generation is still running.
@@ -313,7 +415,7 @@ mod tests {
             model: "test-model".to_string(),
             created: 42,
         });
-        let (job, handle) = InferenceJob::create(task, listener);
+        let (job, handle) = InferenceJob::create(task, GenerationParams::default(), listener);
 
         std::thread::spawn(move || {
             // This simulates the model emitting a token while generation is still running.

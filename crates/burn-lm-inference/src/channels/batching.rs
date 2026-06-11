@@ -31,9 +31,10 @@ use std::{
 use crate::{
     batching::{step_round, ActiveSeq, BatchedInferenceServer, CacheOf, StepOutcome},
     errors::{InferenceError, InferenceResult},
+    job::CancelSignal,
     sampler::NextTokenSampler,
     utf8::Utf8Buffer,
-    GeneratedItem, GeneratedItemEmitter, InferenceJob, Stats,
+    GeneratedItem, GeneratedItemEmitter, InferenceJob, StatEntry, Stats,
 };
 
 use super::InferenceChannel;
@@ -136,7 +137,16 @@ struct JobMeta {
     /// The channel is a bounded one-shot, so a second send with the first still buffered would
     /// block the worker thread — `take()` makes that impossible by construction.
     completion: Option<SyncSender<InferenceResult<Stats>>>,
+    /// The job's cancellation signal, observed once per round by [`step`]'s cancel sweep.
+    cancel: CancelSignal,
+    /// Set by the cancel sweep so the retire sweep can report the right finish reason. (Reading
+    /// `cancel` again at retire would do, but a signal fired between sweep and retire would then
+    /// mislabel a normally-finished sequence.)
+    cancelled: bool,
 }
+
+/// Stat name reported when a sequence is retired by cancellation rather than finishing.
+pub const FINISH_REASON_STAT_NAME: &str = "Finish Reason";
 
 /// The framework's in-flight sequence: the generic per-seq decode state plus the serving payload.
 type JobSeq<S> = ActiveSeq<CacheOf<S>, JobMeta>;
@@ -345,6 +355,14 @@ fn admit<S: BatchedInferenceServer>(
             break;
         };
 
+        // Cancelled while queued: reply WITHOUT touching the model — no prefill, no slot. The
+        // caller never received a token, so the reply is an error (unlike an in-flight cancel,
+        // which retires with the stats of what was already streamed).
+        if job.cancel.is_cancelled() {
+            let _ = completion.send(Err(InferenceError::Cancelled));
+            continue;
+        }
+
         // Allocate the cache first: this loads the model if needed (via `decoder`), so the
         // subsequent `tokenize`/`detokenize` primitives can rely on the tokenizer being available.
         let capacity = server.batch_capacity();
@@ -364,20 +382,31 @@ fn admit<S: BatchedInferenceServer>(
             }
         };
 
+        // The request's `max_tokens` can LOWER the server's generation cap but never raise it:
+        // the server cap is a capacity/config bound the operator set, so a request asking for
+        // more is clamped rather than trusted.
+        let max_gen = match job.params.max_tokens {
+            Some(requested) => requested.min(server.max_gen_tokens()),
+            None => server.max_gen_tokens(),
+        };
+
         active.push(ActiveSeq {
             cache,
             tokens,
             processed: 0,
             generated: 0,
-            max_gen: server.max_gen_tokens(),
+            max_gen,
             finished: false,
             extra: JobMeta {
                 emitter: job.emitter,
                 detok: Utf8Buffer::new(),
-                // Built once at admission so the sampler (and its RNG) persists across the
-                // sequence's rounds; config changes take effect for later-admitted sequences.
-                sampler: Some(server.next_token_sampler()),
+                // Built once at admission, from THIS job's params merged over the server config,
+                // so the sampler (and its RNG) persists across the sequence's rounds and two
+                // concurrent jobs with different params sample independently.
+                sampler: Some(server.next_token_sampler(&job.params)),
                 completion: Some(completion),
+                cancel: job.cancel,
+                cancelled: false,
             },
         });
     }
@@ -398,6 +427,17 @@ fn step<S: BatchedInferenceServer>(server: &mut S, active: &mut Vec<JobSeq<S>>) 
         return;
     }
 
+    // CANCEL SWEEP (once per round, so a fired signal retires its sequence within one round): mark
+    // cancelled sequences finished BEFORE stepping. `step_round` then skips them — no further
+    // forward is spent on a client that is gone — and the retire sweep below handles them like any
+    // other finished sequence: detok flushed first, completion fired exactly once.
+    for seq in active.iter_mut() {
+        if !seq.finished && seq.extra.cancel.is_cancelled() {
+            seq.finished = true;
+            seq.extra.cancelled = true;
+        }
+    }
+
     let stop_ids = server.stop_ids();
 
     // Borrow the decoder for the whole round. If the model is not loaded, retire every active
@@ -413,10 +453,14 @@ fn step<S: BatchedInferenceServer>(server: &mut S, active: &mut Vec<JobSeq<S>>) 
                     .sampler
                     .take()
                     .expect("sampler is only taken for the duration of a step");
-                let outcome =
-                    step_round(decoder, &mut active[index..index + 1], &mut sampler, &stop_ids)
-                        .pop()
-                        .expect("one sequence in yields exactly one outcome");
+                let outcome = step_round(
+                    decoder,
+                    &mut active[index..index + 1],
+                    &mut sampler,
+                    &stop_ids,
+                )
+                .pop()
+                .expect("one sequence in yields exactly one outcome");
                 active[index].extra.sampler = Some(sampler);
                 outcomes.push(outcome);
             }
@@ -479,6 +523,16 @@ fn step<S: BatchedInferenceServer>(server: &mut S, active: &mut Vec<JobSeq<S>>) 
                 stats
                     .entries
                     .insert(crate::stats::StatEntry::TokensCount(seq.generated));
+                // An in-flight cancel still replies `Ok`: the caller already received real tokens,
+                // and the finish-reason stat says why the stream stopped short. (Only the
+                // cancelled path carries a finish reason today, so normally-finished sequences
+                // keep their existing, byte-identical stats output.)
+                if seq.extra.cancelled {
+                    stats.entries.insert(StatEntry::Named(
+                        FINISH_REASON_STAT_NAME.to_string(),
+                        "Cancelled".to_string(),
+                    ));
+                }
                 let _ = completion.send(Ok(stats));
             }
             false
@@ -503,7 +557,9 @@ fn worker_gone() -> InferenceError {
     InferenceError::LoadError("batching worker thread is not available".to_string())
 }
 
-impl<Server: BatchedInferenceServer + 'static> InferenceChannel<Server> for BatchingChannel<Server> {
+impl<Server: BatchedInferenceServer + 'static> InferenceChannel<Server>
+    for BatchingChannel<Server>
+{
     fn downloader(&self) -> Option<DownloaderFn> {
         self.request(Command::Downloader).unwrap_or(None)
     }
@@ -549,7 +605,8 @@ impl<Server: BatchedInferenceServer + 'static> InferenceChannel<Server> for Batc
     }
 
     fn clear_state(&self) -> InferenceResult<()> {
-        self.request(Command::ClearState).map_err(|_| worker_gone())?
+        self.request(Command::ClearState)
+            .map_err(|_| worker_gone())?
     }
 }
 
@@ -558,7 +615,7 @@ mod tests {
     use super::*;
     use crate::{
         batching::{BatchCapacity, BatchedDecoder, ForwardBatch, ForwardOutput},
-        job::{InferenceJob, InferenceTask},
+        job::{GenerationParams, InferenceJob, InferenceTask},
         sampler::NextTokenSampler,
         server::{InferenceServer, ServerConfigParsing},
         InferenceServerConfig, TextGenerationListener, INFERENCE_DEVICE,
@@ -638,10 +695,8 @@ mod tests {
             let rows = 1 + self.extra_rows;
             let mut data = vec![0.0f32; rows * VOCAB];
             data[token] = 1.0;
-            let logits = Tensor::<3>::from_data(
-                TensorData::new(data, [rows, 1, VOCAB]),
-                &*INFERENCE_DEVICE,
-            );
+            let logits =
+                Tensor::<3>::from_data(TensorData::new(data, [rows, 1, VOCAB]), &*INFERENCE_DEVICE);
             Ok(ForwardOutput { logits })
         }
     }
@@ -667,7 +722,9 @@ mod tests {
         /// Counts `batch_capacity` calls — lets the `max_slots == 0` test detect a busy-spin.
         capacity_calls: Arc<AtomicUsize>,
         /// When set, `next_token_sampler` returns a [`FixedSampler`] for this token instead of the
-        /// default argmax — stands in for a server with non-greedy sampling config.
+        /// default argmax — stands in for a server with non-greedy sampling config. A job whose
+        /// params carry a temperature overrides this with `temperature as u32` (the merge-over-
+        /// config behavior a real server implements), so tests can observe per-request samplers.
         fixed_token: Option<u32>,
     }
 
@@ -819,8 +876,13 @@ mod tests {
             16
         }
 
-        fn next_token_sampler(&self) -> Box<dyn NextTokenSampler + Send> {
-            match self.fixed_token {
+        fn next_token_sampler(
+            &self,
+            params: &GenerationParams,
+        ) -> Box<dyn NextTokenSampler + Send> {
+            // Request params merged over server config, like the real servers: a per-job
+            // temperature wins over the server-level `fixed_token`.
+            match params.temperature.map(|t| t as u32).or(self.fixed_token) {
                 Some(token) => Box::new(FixedSampler(token)),
                 None => Box::new(crate::sampler::Sampler::default()),
             }
@@ -853,19 +915,28 @@ mod tests {
     /// the simulated disconnect and is expected.)
     #[test]
     fn worker_survives_a_client_stream_panic() {
-        let channel =
-            BatchingChannel::<FakeServer>::with_server(FakeServer::new(1, Arc::new(Mutex::new(Vec::new()))));
+        let channel = BatchingChannel::<FakeServer>::with_server(FakeServer::new(
+            1,
+            Arc::new(Mutex::new(Vec::new())),
+        ));
 
         // Job A: its listener panics on the first emitted token (broken pipe).
-        let (job_a, _ha) = InferenceJob::create(InferenceTask::Prompt("a".into()), PanicOnText);
+        let (job_a, _ha) = InferenceJob::create(
+            InferenceTask::Prompt("a".into()),
+            GenerationParams::default(),
+            PanicOnText,
+        );
         let rx_a = channel.submit(job_a).unwrap();
         let _ = rx_a.recv(); // A's own outcome is irrelevant; its listener died.
 
         // Job B: a healthy client must still be served — proving the worker survived A.
-        let (job_b, _hb) = InferenceJob::create(InferenceTask::Prompt("b".into()), NullListener);
+        let (job_b, _hb) = InferenceJob::create(
+            InferenceTask::Prompt("b".into()),
+            GenerationParams::default(),
+            NullListener,
+        );
         let rx_b = channel.submit(job_b).unwrap();
-        rx_b
-            .recv()
+        rx_b.recv()
             .expect("channel must survive a client panic")
             .expect("job B should still complete");
     }
@@ -879,15 +950,27 @@ mod tests {
             Arc::new(Mutex::new(Vec::new())),
         ));
 
-        let (job1, _h1) = InferenceJob::create(InferenceTask::Prompt("a".into()), NullListener);
-        let out1 = channel.submit(job1).unwrap().recv().expect("worker must survive");
+        let (job1, _h1) = InferenceJob::create(
+            InferenceTask::Prompt("a".into()),
+            GenerationParams::default(),
+            NullListener,
+        );
+        let out1 = channel
+            .submit(job1)
+            .unwrap()
+            .recv()
+            .expect("worker must survive");
         assert!(
             matches!(out1, Err(crate::InferenceError::BatchContractViolation(_))),
             "contract violation should retire the sequence with a BatchContractViolation error"
         );
 
         // The worker is still alive: a second job is accepted and processed (likewise retired).
-        let (job2, _h2) = InferenceJob::create(InferenceTask::Prompt("b".into()), NullListener);
+        let (job2, _h2) = InferenceJob::create(
+            InferenceTask::Prompt("b".into()),
+            GenerationParams::default(),
+            NullListener,
+        );
         let out2 = channel
             .submit(job2)
             .expect("worker must still accept jobs")
@@ -910,12 +993,20 @@ mod tests {
 
         // Job 1 fails its forward; its `Err` sits buffered in the one-shot because we don't recv.
         // A double send would now block the worker on the buffered channel.
-        let (job1, _h1) = InferenceJob::create(InferenceTask::Prompt("a".into()), NullListener);
+        let (job1, _h1) = InferenceJob::create(
+            InferenceTask::Prompt("a".into()),
+            GenerationParams::default(),
+            NullListener,
+        );
         let rx1 = channel.submit(job1).unwrap();
         std::thread::sleep(std::time::Duration::from_millis(50));
 
         // Job 2 must still be served — proving the worker did not block on a second send.
-        let (job2, _h2) = InferenceJob::create(InferenceTask::Prompt("b".into()), NullListener);
+        let (job2, _h2) = InferenceJob::create(
+            InferenceTask::Prompt("b".into()),
+            GenerationParams::default(),
+            NullListener,
+        );
         let rx2 = channel.submit(job2).unwrap();
         let _ = rx2
             .recv_timeout(std::time::Duration::from_secs(5))
@@ -943,7 +1034,11 @@ mod tests {
         ));
 
         // ~16 steps × 20ms ⇒ the job is comfortably still running 50ms in.
-        let (job, _h) = InferenceJob::create(InferenceTask::Prompt("a".into()), NullListener);
+        let (job, _h) = InferenceJob::create(
+            InferenceTask::Prompt("a".into()),
+            GenerationParams::default(),
+            NullListener,
+        );
         let rx = channel.submit(job).unwrap();
         std::thread::sleep(std::time::Duration::from_millis(50));
 
@@ -969,7 +1064,11 @@ mod tests {
         ));
 
         // Queued, but never admittable while max_slots == 0.
-        let (job, _h) = InferenceJob::create(InferenceTask::Prompt("a".into()), NullListener);
+        let (job, _h) = InferenceJob::create(
+            InferenceTask::Prompt("a".into()),
+            GenerationParams::default(),
+            NullListener,
+        );
         let _rx = channel.submit(job).unwrap();
 
         std::thread::sleep(std::time::Duration::from_millis(50));
@@ -982,10 +1081,19 @@ mod tests {
 
     fn submit_two(slots: usize) -> Vec<usize> {
         let log: OrderLog = Arc::new(Mutex::new(Vec::new()));
-        let channel = BatchingChannel::<FakeServer>::with_server(FakeServer::new(slots, log.clone()));
+        let channel =
+            BatchingChannel::<FakeServer>::with_server(FakeServer::new(slots, log.clone()));
 
-        let (job_a, _ha) = InferenceJob::create(InferenceTask::Prompt("a".into()), NullListener);
-        let (job_b, _hb) = InferenceJob::create(InferenceTask::Prompt("b".into()), NullListener);
+        let (job_a, _ha) = InferenceJob::create(
+            InferenceTask::Prompt("a".into()),
+            GenerationParams::default(),
+            NullListener,
+        );
+        let (job_b, _hb) = InferenceJob::create(
+            InferenceTask::Prompt("b".into()),
+            GenerationParams::default(),
+            NullListener,
+        );
 
         // Enqueue BOTH before either completes (non-blocking submit), then wait for both.
         let rx_a = channel.submit(job_a).unwrap();
@@ -1047,8 +1155,11 @@ mod tests {
             FakeServer::new(1, Arc::new(Mutex::new(Vec::new()))).with_fixed_sampler(7),
         );
 
-        let (job, handle) =
-            InferenceJob::create(InferenceTask::Prompt("a".into()), TextGenerationListener::default());
+        let (job, handle) = InferenceJob::create(
+            InferenceTask::Prompt("a".into()),
+            GenerationParams::default(),
+            TextGenerationListener::default(),
+        );
         channel.submit(job).unwrap().recv().unwrap().unwrap();
 
         assert_eq!(
@@ -1061,9 +1172,12 @@ mod tests {
     /// A decoder that emits a fixed token script (one token per step), then the stop id. Used by
     /// the byte-level detok tests, where tokens ARE byte values and the script deliberately
     /// splits a multi-byte UTF-8 character across steps.
-    #[derive(Debug, Clone)]
+    #[derive(Debug, Clone, Default)]
     struct ScriptedDecoder {
         script: Vec<u32>,
+        /// When set to `(n, signal)`, fires `signal` while producing the n-th generated token —
+        /// a deterministic "client disconnected mid-generation" event, with no sleeps to race.
+        cancel_after: Option<(usize, CancelSignal)>,
     }
 
     /// Token ids 0..=255 are the raw bytes; 256 is the stop id.
@@ -1088,6 +1202,12 @@ mod tests {
         ) -> InferenceResult<ForwardOutput> {
             let step = *cache;
             *cache += 1;
+
+            if let Some((after, cancel)) = &self.cancel_after {
+                if step + 1 == *after {
+                    cancel.cancel();
+                }
+            }
 
             let token = self.script.get(step).copied().unwrap_or(BYTE_STOP) as usize;
 
@@ -1117,7 +1237,7 @@ mod tests {
         fn default() -> Self {
             Self {
                 loaded: false,
-                decoder: ScriptedDecoder { script: Vec::new() },
+                decoder: ScriptedDecoder::default(),
                 max_gen: 16,
             }
         }
@@ -1127,9 +1247,19 @@ mod tests {
         fn new(script: Vec<u32>, max_gen: usize) -> Self {
             Self {
                 loaded: false,
-                decoder: ScriptedDecoder { script },
+                decoder: ScriptedDecoder {
+                    script,
+                    cancel_after: None,
+                },
                 max_gen,
             }
+        }
+
+        /// Fire `cancel` while producing the `after`-th generated token (see
+        /// [`ScriptedDecoder::cancel_after`]).
+        fn with_cancel_after(mut self, after: usize, cancel: CancelSignal) -> Self {
+            self.decoder.cancel_after = Some((after, cancel));
+            self
         }
     }
 
@@ -1214,17 +1344,26 @@ mod tests {
         script.push(b'!' as u32);
         let channel = BatchingChannel::<ByteServer>::with_server(ByteServer::new(script, 16));
 
-        let (job, handle) =
-            InferenceJob::create(InferenceTask::Prompt("a".into()), TextGenerationListener::default());
+        let (job, handle) = InferenceJob::create(
+            InferenceTask::Prompt("a".into()),
+            GenerationParams::default(),
+            TextGenerationListener::default(),
+        );
         channel.submit(job).unwrap().recv().unwrap().unwrap();
 
         let text = handle.join();
         assert_eq!(text, "🦀!", "split emoji must reassemble exactly once");
-        assert!(!text.contains('\u{FFFD}'), "no mid-stream replacement chars");
+        assert!(
+            !text.contains('\u{FFFD}'),
+            "no mid-stream replacement chars"
+        );
 
         // The worker survived (no panic on the partial-character tokens): a second job completes.
-        let (job2, h2) =
-            InferenceJob::create(InferenceTask::Prompt("b".into()), TextGenerationListener::default());
+        let (job2, h2) = InferenceJob::create(
+            InferenceTask::Prompt("b".into()),
+            GenerationParams::default(),
+            TextGenerationListener::default(),
+        );
         channel
             .submit(job2)
             .expect("worker must still accept jobs")
@@ -1243,8 +1382,11 @@ mod tests {
         let script: Vec<u32> = "🦀".bytes().map(u32::from).collect();
         let channel = BatchingChannel::<ByteServer>::with_server(ByteServer::new(script, 2));
 
-        let (job, handle) =
-            InferenceJob::create(InferenceTask::Prompt("a".into()), TextGenerationListener::default());
+        let (job, handle) = InferenceJob::create(
+            InferenceTask::Prompt("a".into()),
+            GenerationParams::default(),
+            TextGenerationListener::default(),
+        );
         channel.submit(job).unwrap().recv().unwrap().unwrap();
 
         assert_eq!(
@@ -1252,6 +1394,160 @@ mod tests {
             "\u{FFFD}",
             "held-back bytes must flush on retire (lossy replacement at end of stream)"
         );
+    }
+
+    /// A job cancelled while still QUEUED must never be admitted: no prefill (observable as zero
+    /// forwards for its identity in the order log), no slot, and an `Err(Cancelled)` reply — the
+    /// caller never received a token, so an empty `Ok` would be misleading.
+    #[test]
+    fn cancelled_while_queued_is_never_admitted_and_replies_cancelled() {
+        let log: OrderLog = Arc::new(Mutex::new(Vec::new()));
+        // One slot + a slow decoder: job A occupies the slot long enough for B to sit queued.
+        let channel =
+            BatchingChannel::<FakeServer>::with_server(FakeServer::new_slow(1, log.clone()));
+
+        let (job_a, _ha) = InferenceJob::create(
+            InferenceTask::Prompt("a".into()),
+            GenerationParams::default(),
+            NullListener,
+        );
+        let rx_a = channel.submit(job_a).unwrap();
+
+        // B is cancelled BEFORE it is submitted, so the admission check must catch it.
+        let (job_b, hb) = InferenceJob::create(
+            InferenceTask::Prompt("b".into()),
+            GenerationParams::default(),
+            NullListener,
+        );
+        hb.cancel();
+        let rx_b = channel.submit(job_b).unwrap();
+
+        assert!(
+            matches!(rx_b.recv().unwrap(), Err(InferenceError::Cancelled)),
+            "a job cancelled while queued must reply Err(Cancelled)"
+        );
+        rx_a.recv().unwrap().unwrap();
+
+        // B (identity 1 in the log) never reached the decoder: it was dropped before prefill.
+        assert!(
+            !log.lock().unwrap().contains(&1),
+            "cancelled-while-queued job must never be prefilled"
+        );
+    }
+
+    /// A cancel fired MID-FLIGHT must retire the sequence within one round: held-back detok bytes
+    /// are flushed before completion, the reply is `Ok` (the client already got real tokens) with
+    /// the tokens generated so far and a finish-reason stat.
+    #[test]
+    fn cancel_mid_flight_retires_within_one_round_and_flushes_detok() {
+        // 🦀 is 4 bytes, one per token; the cancel fires while the 2nd byte is produced, so the
+        // detok cursor holds a partial character at retire time.
+        let mut script: Vec<u32> = "🦀".bytes().map(u32::from).collect();
+        script.extend(std::iter::repeat(b'x' as u32).take(12));
+
+        let (job, handle) = InferenceJob::create(
+            InferenceTask::Prompt("a".into()),
+            GenerationParams::default(),
+            TextGenerationListener::default(),
+        );
+        let channel = BatchingChannel::<ByteServer>::with_server(
+            ByteServer::new(script, 16).with_cancel_after(2, handle.cancel_signal()),
+        );
+
+        let stats = channel.submit(job).unwrap().recv().unwrap().unwrap();
+
+        // Retired within ONE round of the cancel: the 2nd token's round still streams normally,
+        // the next round's cancel sweep retires before any 3rd forward.
+        assert!(
+            stats.entries.contains(&StatEntry::TokensCount(2)),
+            "expected exactly the 2 tokens generated before the cancel: {:?}",
+            stats.entries
+        );
+        assert!(
+            stats.entries.contains(&StatEntry::Named(
+                FINISH_REASON_STAT_NAME.to_string(),
+                "Cancelled".to_string()
+            )),
+            "an in-flight cancel must report its finish reason: {:?}",
+            stats.entries
+        );
+        // The held-back partial character was flushed (lossily, as at any true end of stream)
+        // BEFORE completion fired — not silently dropped.
+        assert_eq!(handle.join(), "\u{FFFD}");
+    }
+
+    /// Two CONCURRENT jobs with different per-request params must sample with independently
+    /// configured samplers — the request params merged over config at admission, not a shared
+    /// mutated server config (which would make one request clobber the other's temperature).
+    #[test]
+    fn concurrent_jobs_sample_with_their_own_request_params() {
+        let channel = BatchingChannel::<FakeServer>::with_server(FakeServer::new(
+            2,
+            Arc::new(Mutex::new(Vec::new())),
+        ));
+
+        // The fake's `next_token_sampler` turns a per-job temperature into a fixed token, so each
+        // job's whole output reveals which params built its sampler.
+        let hot = GenerationParams {
+            temperature: Some(7.0),
+            ..Default::default()
+        };
+        let cold = GenerationParams {
+            temperature: Some(9.0),
+            ..Default::default()
+        };
+        let (job_a, ha) = InferenceJob::create(
+            InferenceTask::Prompt("a".into()),
+            hot,
+            TextGenerationListener::default(),
+        );
+        let (job_b, hb) = InferenceJob::create(
+            InferenceTask::Prompt("b".into()),
+            cold,
+            TextGenerationListener::default(),
+        );
+
+        // Both in flight together (capacity 2), interleaving round-robin.
+        let rx_a = channel.submit(job_a).unwrap();
+        let rx_b = channel.submit(job_b).unwrap();
+        rx_a.recv().unwrap().unwrap();
+        rx_b.recv().unwrap().unwrap();
+
+        assert_eq!(ha.join(), "7".repeat(16), "job A must use its own params");
+        assert_eq!(hb.join(), "9".repeat(16), "job B must use its own params");
+    }
+
+    /// A request's `max_tokens` can LOWER the server's generation cap but never RAISE it: the
+    /// operator-set server cap stays authoritative.
+    #[test]
+    fn request_max_tokens_lowers_but_cannot_raise_the_server_cap() {
+        let channel = BatchingChannel::<FakeServer>::with_server(
+            FakeServer::new(1, Arc::new(Mutex::new(Vec::new()))).with_fixed_sampler(7),
+        );
+
+        // Below the server cap (16): the request wins.
+        let (job, handle) = InferenceJob::create(
+            InferenceTask::Prompt("a".into()),
+            GenerationParams {
+                max_tokens: Some(4),
+                ..Default::default()
+            },
+            TextGenerationListener::default(),
+        );
+        channel.submit(job).unwrap().recv().unwrap().unwrap();
+        assert_eq!(handle.join(), "7".repeat(4));
+
+        // Above the server cap: clamped to the cap.
+        let (job, handle) = InferenceJob::create(
+            InferenceTask::Prompt("a".into()),
+            GenerationParams {
+                max_tokens: Some(100),
+                ..Default::default()
+            },
+            TextGenerationListener::default(),
+        );
+        channel.submit(job).unwrap().recv().unwrap().unwrap();
+        assert_eq!(handle.join(), "7".repeat(16));
     }
 
     #[test]

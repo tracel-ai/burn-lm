@@ -1,8 +1,7 @@
-use rand::RngExt;
 use serde::Deserialize;
 
 use crate::{
-    generation::{Sampler, TemperatureSampler, TopP},
+    generation::TemperatureSampler,
     inference::LlamaDecoder,
     pretrained::ModelMeta,
     tokenizer::{Tiktoken, Tokenizer},
@@ -10,7 +9,7 @@ use crate::{
 };
 use burn_lm_inference::{InferenceJob, *};
 
-use super::loaded_model::LoadedModel;
+use super::{loaded_model::LoadedModel, params::SamplingSettings};
 
 #[inference_server_config]
 pub struct Llama3ServerConfig {
@@ -29,6 +28,18 @@ pub struct Llama3ServerConfig {
     /// The seed to use when generating random samples. If it is 0 then a random seed is used for each inference.
     #[config(default = 0)]
     pub seed: u64,
+}
+
+impl Llama3ServerConfig {
+    /// This config's sampling fields as the per-job merge defaults (see [`SamplingSettings`]).
+    fn sampling_defaults(&self) -> SamplingSettings {
+        SamplingSettings {
+            top_p: self.top_p,
+            temperature: self.temperature,
+            sample_len: self.sample_len,
+            seed: self.seed,
+        }
+    }
 }
 
 #[derive(InferenceServer, Debug)]
@@ -305,25 +316,18 @@ impl BatchedInferenceServer for Llama321bInstructServer {
         self.config.sample_len
     }
 
-    fn next_token_sampler(&self) -> Box<dyn NextTokenSampler + Send> {
+    fn next_token_sampler(&self, params: &GenerationParams) -> Box<dyn NextTokenSampler + Send> {
         // Same semantics as the single-request path in `Llama3BaseServer::complete`: the engine
         // calls this once per admitted request and keeps the sampler for that request's whole
-        // generation, so the seeded RNG advances across its tokens. Temperature scaling then top-p
-        // with the configured seed (0 = a fresh random seed per request), and `temperature == 0.0`
-        // stays plain argmax/greedy. Per-REQUEST sampling params are a later step; this honors the
-        // per-SERVER config.
-        let seed = match self.config.seed {
-            0 => rand::rng().random::<u64>(),
-            s => s,
-        };
-        let sampler = if self.config.temperature > 0.0 {
-            Sampler::TopP(TopP::new(self.config.top_p, seed))
-        } else {
-            Sampler::Argmax
-        };
+        // generation, so the seeded RNG advances across its tokens. The REQUEST's params are
+        // merged over the server config (see [`SamplingSettings`]) — never by mutating shared
+        // config, so concurrent requests with different settings cannot clobber each other.
+        // Temperature scaling then top-p with the resolved seed (0 = a fresh random seed per
+        // request), and `temperature == 0.0` stays plain argmax/greedy.
+        let settings = SamplingSettings::resolve(self.config.sampling_defaults(), params);
         Box::new(TemperatureSampler {
-            sampler,
-            temperature: self.config.temperature,
+            sampler: settings.sampler(),
+            temperature: settings.temperature,
         })
     }
 }
@@ -492,32 +496,29 @@ impl Llama3BaseServer {
             InferenceTask::Context(messages) => self.prompt(messages)?,
             InferenceTask::Prompt(prompt) => prompt,
         };
-        self.complete(prompt, config, job.emitter)
+        self.complete(prompt, config, &job.params, job.emitter)
     }
 
     fn complete(
         &mut self,
         prompt: Prompt,
         config: &Llama3ServerConfig,
+        params: &GenerationParams,
         emitter: GeneratedItemEmitter,
     ) -> InferenceResult<Stats> {
         let load_stats = self.load(config)?;
-        let seed = match config.seed {
-            0 => rand::rng().random::<u64>(),
-            s => s,
-        };
-        let mut sampler = if config.temperature > 0.0 {
-            Sampler::TopP(TopP::new(config.top_p, seed))
-        } else {
-            Sampler::Argmax
-        };
+        // Request params merged over config — the same `SamplingSettings` resolution as the
+        // batching path, so a request means the same thing on either channel. Default params
+        // resolve to exactly the config, keeping config-driven callers (CLI) unchanged.
+        let settings = SamplingSettings::resolve(config.sampling_defaults(), params);
+        let mut sampler = settings.sampler();
         // Drive the single request through the batched path (batch size 1 for now).
         let generated = {
             let model = self.model.get_mut()?;
             let mut outputs = model.generate_batch(
                 vec![&prompt],
-                config.sample_len,
-                config.temperature,
+                settings.sample_len,
+                settings.temperature,
                 &mut sampler,
                 vec![emitter],
             )?;

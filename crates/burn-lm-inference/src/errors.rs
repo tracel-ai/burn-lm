@@ -21,4 +21,6 @@ pub enum InferenceError {
     BatchContractViolation(String),
     #[error("Model is busy ({0} active sequence(s), {1} queued job(s)); retry once in-flight generation completes.")]
     Busy(usize, usize),
+    #[error("The job was cancelled before it produced a result.")]
+    Cancelled,
 }

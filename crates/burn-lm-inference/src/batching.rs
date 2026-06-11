@@ -13,7 +13,7 @@ use burn::tensor::{Device, Int, Tensor, TensorData};
 
 use crate::{
     errors::{InferenceError, InferenceResult},
-    job::InferenceTask,
+    job::{GenerationParams, InferenceTask},
     sampler::{NextTokenSampler, Sampler},
     server::InferenceServer,
 };
@@ -148,15 +148,19 @@ pub trait BatchedInferenceServer: InferenceServer {
     /// first stop id or once it has generated this many tokens, whichever comes first.
     fn max_gen_tokens(&self) -> usize;
 
-    /// Build a fresh next-token sampler from the server's CURRENT sampling config.
+    /// Build a fresh next-token sampler for one admitted sequence: the REQUEST's
+    /// [`GenerationParams`] merged over the server's CURRENT sampling config.
     ///
     /// A config primitive (like [`max_gen_tokens`](Self::max_gen_tokens)): the engine asks for a
     /// new sampler per ADMITTED sequence and keeps it for that sequence's whole generation, so a
-    /// seeded RNG advances across the sequence's tokens (matching the single-request path) while
-    /// config changes (e.g. via `ParseJsonConfig`) take effect for later-admitted sequences. The
-    /// default is the framework's deterministic argmax [`Sampler`]; servers with sampling config
-    /// (temperature, top-p, seed, …) override this to honor it.
-    fn next_token_sampler(&self) -> Box<dyn NextTokenSampler + Send> {
+    /// seeded RNG advances across the sequence's tokens (matching the single-request path).
+    /// Building it from the job's params instead of mutated shared config is what keeps two
+    /// concurrent requests with different temperatures from clobbering each other. The default is
+    /// the framework's deterministic argmax [`Sampler`], which ignores params — a model with no
+    /// sampling config needs nothing extra; servers with sampling config (temperature, top-p,
+    /// seed, …) override this to merge request over config.
+    fn next_token_sampler(&self, params: &GenerationParams) -> Box<dyn NextTokenSampler + Send> {
+        let _ = params;
         Box::new(Sampler::default())
     }
 
@@ -262,7 +266,10 @@ pub fn step_round<D: BatchedDecoder, X, S: NextTokenSampler>(
             continue;
         }
 
-        let input_ids: Vec<i32> = seq.tokens[seq.processed..].iter().map(|&t| t as i32).collect();
+        let input_ids: Vec<i32> = seq.tokens[seq.processed..]
+            .iter()
+            .map(|&t| t as i32)
+            .collect();
         let seq_len = input_ids.len();
         let position = seq.processed;
 
@@ -342,8 +349,8 @@ fn forward_one<D: BatchedDecoder, S: NextTokenSampler>(
                 "sampled token tensor did not convert to u32".to_string(),
             )
         })?;
-    let id = *ids
-        .first()
-        .ok_or_else(|| InferenceError::BatchContractViolation("sampler produced no token".to_string()))?;
+    let id = *ids.first().ok_or_else(|| {
+        InferenceError::BatchContractViolation("sampler produced no token".to_string())
+    })?;
     Ok(id)
 }

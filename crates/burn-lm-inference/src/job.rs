@@ -11,12 +11,55 @@ use std::{
 
 use crate::{Message, Prompt};
 
+/// Per-job generation parameters, merged over the server's config defaults.
+///
+/// `None` means "use the server's configured default". Carrying these on the job (instead of
+/// mutating shared server config before `run_job`) is what makes concurrent requests with
+/// different sampling settings safe: two jobs in flight through the batching channel each sample
+/// with their own merged settings.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct GenerationParams {
+    /// Caps the number of generated tokens. Merged over the server's configured cap and can only
+    /// LOWER it, never raise it (the server cap stays authoritative).
+    pub max_tokens: Option<usize>,
+    /// Overrides the configured sampling temperature.
+    pub temperature: Option<f64>,
+    /// Overrides the configured top-p probability threshold.
+    pub top_p: Option<f64>,
+    /// Per-request seed for reproducible sampling. `Some(0)` (like an unset seed over a `0`
+    /// config default) means "draw a fresh random seed for this job".
+    pub seed: Option<u64>,
+}
+
+/// Fire-once cancellation signal for an [inference job](InferenceJob).
+///
+/// Cloned into the [JobHandle] (and any caller that needs to signal disconnection, e.g. an HTTP
+/// handler watching its SSE stream); observed by the engine executing the job.
+#[derive(Clone, Debug, Default)]
+pub struct CancelSignal(Arc<AtomicBool>);
+
+impl CancelSignal {
+    /// Signal cancellation. Idempotent; cannot be unset.
+    pub fn cancel(&self) {
+        self.0.store(true, Ordering::Relaxed);
+    }
+
+    /// Whether cancellation has been requested.
+    pub fn is_cancelled(&self) -> bool {
+        self.0.load(Ordering::Relaxed)
+    }
+}
+
 /// Defines a job to be run during inference.
 pub struct InferenceJob {
     /// The task to be performed by the job.
     pub task: InferenceTask,
     /// The emitter for the current job.
     pub emitter: GeneratedItemEmitter,
+    /// Per-job generation parameters, merged over server config defaults.
+    pub params: GenerationParams,
+    /// Cancellation signal, shared with the [JobHandle].
+    pub cancel: CancelSignal,
 }
 
 /// An emitter is responsible to send [generated items](GeneratedItem) to the [inference job](InferenceJob)
@@ -56,11 +99,21 @@ impl InferenceJob {
     /// [completed method](Self::completed).
     pub fn create<L: InferenceJobListener>(
         task: InferenceTask,
+        params: GenerationParams,
         listener: L,
     ) -> (Self, JobHandle<L>) {
         let (emitter, handle) = GeneratedItemEmitter::init(listener);
+        let cancel = handle.cancel_signal();
 
-        (Self { task, emitter }, handle)
+        (
+            Self {
+                task,
+                emitter,
+                params,
+                cancel,
+            },
+            handle,
+        )
     }
 }
 
@@ -70,6 +123,7 @@ impl GeneratedItemEmitter {
 
         let handle = JobHandle {
             sender: sender.clone(),
+            cancel: CancelSignal::default(),
             _c: PhantomData,
         };
         let done = Arc::new(AtomicBool::new(false));
@@ -210,10 +264,22 @@ impl InferenceJobListener for StdOutListener {
 /// [join method](JobHandle::join).
 pub struct JobHandle<C: InferenceJobListener> {
     sender: SyncSender<Msg>,
+    cancel: CancelSignal,
     _c: PhantomData<C>,
 }
 
 impl<C: InferenceJobListener> JobHandle<C> {
+    /// Request cancellation of the job. Fire-once; the engine executing the job observes the
+    /// token and stops generating.
+    pub fn cancel(&self) {
+        self.cancel.cancel();
+    }
+
+    /// A clone of the job's cancellation signal (e.g. to wire to a client disconnect signal).
+    pub fn cancel_signal(&self) -> CancelSignal {
+        self.cancel.clone()
+    }
+
     /// Wait for the job to complete and returns the
     /// [InferenceJobListener::CompletedItem] from the job listener.
     ///
@@ -235,4 +301,28 @@ impl<C: InferenceJobListener> JobHandle<C> {
 enum Msg {
     Text(String),
     Finished(SyncSender<Box<dyn Any + Send>>),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The handle's token and the job's token are the SAME token (cancelling one is visible on
+    /// the other), and cancellation is idempotent — fire-once, never unset.
+    #[test]
+    fn cancel_signal_is_shared_between_job_and_handle() {
+        let (job, handle) = InferenceJob::create(
+            InferenceTask::Prompt("p".to_string()),
+            GenerationParams::default(),
+            TextGenerationListener::default(),
+        );
+        assert!(!job.cancel.is_cancelled());
+        handle.cancel();
+        assert!(job.cancel.is_cancelled());
+        handle.cancel();
+        assert!(job.cancel.is_cancelled());
+        // Drain the listener thread.
+        drop(job);
+        handle.join();
+    }
 }

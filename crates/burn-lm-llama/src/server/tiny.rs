@@ -1,14 +1,10 @@
-use rand::RngExt;
-use serde::Deserialize;
 use crate::{
-    generation::{Sampler, TopP},
-    pretrained::ModelMeta,
-    tokenizer::SentencePieceTokenizer,
-    LlamaConfig, TinyLlamaVersion,
+    pretrained::ModelMeta, tokenizer::SentencePieceTokenizer, LlamaConfig, TinyLlamaVersion,
 };
 use burn_lm_inference::{InferenceJob, *};
+use serde::Deserialize;
 
-use super::loaded_model::LoadedModel;
+use super::{loaded_model::LoadedModel, params::SamplingSettings};
 
 #[inference_server_config]
 pub struct TinyLlamaServerConfig {
@@ -45,24 +41,28 @@ impl TinyLlamaServer {
     fn run_prompt(
         &mut self,
         prompt: Prompt,
+        params: &GenerationParams,
         emitter: GeneratedItemEmitter,
     ) -> InferenceResult<Stats> {
         let load_stats = self.load()?;
-        let seed = match self.config.seed {
-            0 => rand::rng().random::<u64>(),
-            s => s,
-        };
-        let mut sampler = if self.config.temperature > 0.0 {
-            Sampler::TopP(TopP::new(self.config.top_p, seed))
-        } else {
-            Sampler::Argmax
-        };
+        // Request params merged over config (same resolution as the Llama3 servers); default
+        // params resolve to exactly the config.
+        let settings = SamplingSettings::resolve(
+            SamplingSettings {
+                top_p: self.config.top_p,
+                temperature: self.config.temperature,
+                sample_len: self.config.sample_len,
+                seed: self.config.seed,
+            },
+            params,
+        );
+        let mut sampler = settings.sampler();
         let generated = {
             let model = self.model.get_mut()?;
             model.generate(
                 &prompt,
-                self.config.sample_len,
-                self.config.temperature,
+                settings.sample_len,
+                settings.temperature,
                 &mut sampler,
                 emitter,
             )?
@@ -160,7 +160,7 @@ impl InferenceServer for TinyLlamaServer {
             InferenceTask::Context(messages) => self.prompt(messages)?,
             InferenceTask::Prompt(prompt) => prompt,
         };
-        self.run_prompt(prompt, job.emitter)
+        self.run_prompt(prompt, &job.params, job.emitter)
     }
 
     fn clear_state(&mut self) -> InferenceResult<()> {

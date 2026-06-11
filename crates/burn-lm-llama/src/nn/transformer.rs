@@ -227,14 +227,17 @@ impl TransformerBlockConfig {
 /// Decoder-only transformer block.
 #[derive(Module, Debug)]
 pub struct TransformerBlock {
+    // NOTE: fields are `pub(crate)` so the batched-equivalence characterization
+    // harness (`generation/batched_equivalence.rs`, phase-2 S4 gate) can
+    // hand-roll a per-lane forward pass with the production weights.
     /// Self-attention.
-    attention: MultiHeadAttention,
+    pub(crate) attention: MultiHeadAttention,
     /// Feed-forward transformation.
-    feed_forward: FeedForward,
+    pub(crate) feed_forward: FeedForward,
     /// Attention pre-normalization.
-    attention_norm: RmsNorm,
+    pub(crate) attention_norm: RmsNorm,
     /// Feed-forward pre-normalization.
-    ffn_norm: RmsNorm,
+    pub(crate) ffn_norm: RmsNorm,
 }
 
 impl TransformerBlock {

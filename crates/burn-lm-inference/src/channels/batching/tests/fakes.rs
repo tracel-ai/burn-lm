@@ -4,7 +4,7 @@ use crate::{
     job::{CancelSignal, GenerationParams, InferenceJob, InferenceTask},
     sampler::NextTokenSampler,
     server::{InferenceServer, ServerConfigParsing},
-    InferenceServerConfig, Stats, TextGenerationListener, INFERENCE_DEVICE,
+    InferenceServerConfig, Stats, INFERENCE_DEVICE,
 };
 use burn::tensor::{Int, Tensor, TensorData};
 use std::sync::{

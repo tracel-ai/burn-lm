@@ -21,18 +21,21 @@ pub struct MultiHeadAttentionConfig {
 
 #[derive(Module, Debug)]
 pub struct MultiHeadAttention {
+    // NOTE: fields are `pub(crate)` so the batched-equivalence characterization
+    // harness (`generation/batched_equivalence.rs`, phase-2 S4 gate) can drive
+    // the attention math with per-lane KV slabs/RoPE positions.
     /// Query projection.
-    wq: Linear,
+    pub(crate) wq: Linear,
     /// Key projection.
-    wk: Linear,
+    pub(crate) wk: Linear,
     /// Value projection.
-    wv: Linear,
+    pub(crate) wv: Linear,
     /// Output projection.
-    wo: Linear,
+    pub(crate) wo: Linear,
 
-    n_heads: usize,
-    n_kv_heads: usize,
-    head_dim: usize,
+    pub(crate) n_heads: usize,
+    pub(crate) n_kv_heads: usize,
+    pub(crate) head_dim: usize,
 }
 
 impl MultiHeadAttention {
@@ -161,7 +164,7 @@ impl MultiHeadAttention {
     }
 
     /// Repeats a key or value tensor for grouped query attention.
-    fn repeat_kv(&self, x: Tensor<4>) -> Tensor<4> {
+    pub(crate) fn repeat_kv(&self, x: Tensor<4>) -> Tensor<4> {
         let n_rep = self.n_heads / self.n_kv_heads;
         if n_rep == 1 {
             x

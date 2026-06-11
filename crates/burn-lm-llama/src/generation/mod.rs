@@ -1,3 +1,5 @@
+#[cfg(test)]
+mod batched_equivalence;
 mod context;
 mod generate;
 mod sampling;

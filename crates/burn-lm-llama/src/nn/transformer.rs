@@ -115,12 +115,38 @@ impl Transformer {
     }
 }
 
+/// One lane-aware forward, planned by [`TransformerCache::prepare_lanes`]:
+/// which buffer lanes participate, each lane's start position (RoPE + KV
+/// write offset), and the per-lane causal+padding mask over the shared
+/// KV buffer.
+#[derive(Debug)]
+pub struct LanePlan {
+    /// Active buffer lanes, one per batch row of the forward input.
+    pub lanes: Vec<usize>,
+    /// Each lane's sequence length BEFORE this forward (its write offset and
+    /// the absolute RoPE position of its first new token).
+    pub starts: Vec<usize>,
+    /// `[n, 1, q, l_max]` bool mask, `true` = masked: row `r` of lane `j`
+    /// attends to columns `0..=starts[j] + r`; everything past that (the
+    /// lane's own future and the buffer tail up to the longest active lane)
+    /// is masked. The attention op turns masked positions into negative
+    /// infinity before the softmax. Unlike the broadcast tril of the
+    /// single-sequence path, decode (`q == 1`) is masked too — ragged lanes
+    /// make it mandatory.
+    pub mask: Tensor<4, Bool>,
+}
+
 #[derive(Clone, Debug)]
 pub struct TransformerCache {
     layers: Vec<KeyValueCache>,
     device: Device,
     max_seq_len: usize,
+    /// Single-sequence bookkeeping (`prepare`/`reset`).
     curr_seq_len: usize,
+    /// Per-lane bookkeeping (`prepare_lanes`/`reset_lane`). A cache instance
+    /// uses one mode or the other, never both; the decoder switch-over onto
+    /// the lane-aware path lands in the next change.
+    lens: Vec<usize>,
 }
 
 impl TransformerCache {
@@ -142,7 +168,74 @@ impl TransformerCache {
             device: device.clone(),
             max_seq_len: config.max_seq_len,
             curr_seq_len: 0,
+            lens: vec![0; max_batch_size],
         }
+    }
+
+    /// Number of buffer lanes (the model's `max_batch_size`).
+    // The decoder switch-over onto the lane-aware path lands in the next change.
+    #[allow(dead_code)]
+    pub fn lane_count(&self) -> usize {
+        self.lens.len()
+    }
+
+    /// Sequence length of one lane.
+    // The decoder switch-over onto the lane-aware path lands in the next change.
+    #[allow(dead_code)]
+    pub fn lane_len(&self, lane: usize) -> usize {
+        self.lens[lane]
+    }
+
+    /// Plan one lane-aware forward of `seq_len` new tokens for `lanes`:
+    /// validate per-lane capacity, snapshot each lane's start position, build
+    /// the per-lane mask, and advance the lane lengths.
+    ///
+    /// There is NO Shift eviction in lane mode: a lane that would exceed
+    /// `max_seq_len` is an error — the runtime finishes lanes that hit their
+    /// token budget before they get here.
+    // The decoder switch-over onto the lane-aware path lands in the next change.
+    #[allow(dead_code)]
+    pub fn prepare_lanes(
+        &mut self,
+        lanes: &[usize],
+        seq_len: usize,
+    ) -> Result<LanePlan, GenerationError> {
+        for &lane in lanes {
+            if self.lens[lane] + seq_len > self.max_seq_len {
+                return Err(GenerationError::MaxSequenceLengthExceeded {
+                    actual: self.lens[lane] + seq_len,
+                    max: self.max_seq_len,
+                });
+            }
+        }
+
+        let starts: Vec<usize> = lanes.iter().map(|&lane| self.lens[lane]).collect();
+        let n = lanes.len();
+        let l_max = starts.iter().map(|s| s + seq_len).max().expect("n >= 1");
+
+        // Host-built per-lane causal + padding mask, `true` = masked.
+        let mut mask_data = Vec::with_capacity(n * seq_len * l_max);
+        for s in starts.iter() {
+            for r in 0..seq_len {
+                for c in 0..l_max {
+                    mask_data.push(c > s + r);
+                }
+            }
+        }
+        let mask = Tensor::<4, Bool>::from_data(
+            burn::tensor::TensorData::new(mask_data, [n, 1, seq_len, l_max]),
+            &self.device,
+        );
+
+        for &lane in lanes {
+            self.lens[lane] += seq_len;
+        }
+
+        Ok(LanePlan {
+            lanes: lanes.to_vec(),
+            starts,
+            mask,
+        })
     }
 
     pub fn prepare(&mut self, seq_len: usize) -> Result<Option<Tensor<4, Bool>>, GenerationError> {
@@ -181,7 +274,19 @@ impl TransformerCache {
 
     pub fn reset(&mut self) {
         self.curr_seq_len = 0;
+        self.lens.iter_mut().for_each(|len| *len = 0);
         self.layers.iter_mut().for_each(|cache| cache.reset());
+    }
+
+    /// Free one lane: zero its length in this bookkeeping AND in every
+    /// layer's KV cache. The buffer row is overwritten on the next use.
+    // The decoder switch-over onto the lane-aware path lands in the next change.
+    #[allow(dead_code)]
+    pub fn reset_lane(&mut self, lane: usize) {
+        self.lens[lane] = 0;
+        self.layers
+            .iter_mut()
+            .for_each(|cache| cache.reset_lane(lane));
     }
 }
 
@@ -457,5 +562,115 @@ mod tests {
             cache.prepare(16),
             Err(GenerationError::MaxSequenceLengthExceeded { actual: 16, max: 8 })
         ));
+    }
+
+    fn lane_test_config(max_seq_len: usize) -> TransformerConfig {
+        TransformerConfig::new(8, 2, 4, 4, 2, 1).with_max_seq_len(max_seq_len)
+    }
+
+    fn mask_rows(mask: &Tensor<4, Bool>) -> Vec<bool> {
+        mask.clone().into_data().iter::<bool>().collect()
+    }
+
+    /// Decode step for two lanes at divergent positions: each lane's mask row
+    /// allows exactly its own history plus the new token, and masks the
+    /// buffer tail up to the longest active lane.
+    #[test]
+    fn test_prepare_lanes_decode_mask_covers_exactly_the_dead_columns() {
+        let config = lane_test_config(8);
+        let mut cache = TransformerCache::new(&config, 2, &Default::default());
+
+        // Lane 0 holds 3 positions, lane 1 holds 1.
+        cache.prepare_lanes(&[0], 3).unwrap();
+        cache.prepare_lanes(&[1], 1).unwrap();
+        assert_eq!(cache.lane_len(0), 3);
+        assert_eq!(cache.lane_len(1), 1);
+
+        // Fused decode: one new token per lane; l_max = 4.
+        let plan = cache.prepare_lanes(&[0, 1], 1).unwrap();
+        assert_eq!(plan.lanes, vec![0, 1]);
+        assert_eq!(plan.starts, vec![3, 1]);
+        assert_eq!(plan.mask.dims(), [2, 1, 1, 4]);
+        // Lane 0 attends to columns 0..=3 (nothing masked); lane 1 attends to
+        // columns 0..=1 and columns 2..4 (stale tail) are masked.
+        assert_eq!(
+            mask_rows(&plan.mask),
+            vec![false, false, false, false, false, false, true, true]
+        );
+        assert_eq!(cache.lane_len(0), 4);
+        assert_eq!(cache.lane_len(1), 2);
+    }
+
+    /// Single-lane prefill: the per-lane mask reduces to the ordinary causal
+    /// triangle over the lane's own (empty) history.
+    #[test]
+    fn test_prepare_lanes_prefill_mask_is_causal() {
+        let config = lane_test_config(8);
+        let mut cache = TransformerCache::new(&config, 2, &Default::default());
+
+        let plan = cache.prepare_lanes(&[1], 3).unwrap();
+        assert_eq!(plan.starts, vec![0]);
+        assert_eq!(plan.mask.dims(), [1, 1, 3, 3]);
+        assert_eq!(
+            mask_rows(&plan.mask),
+            vec![false, true, true, false, false, true, false, false, false]
+        );
+    }
+
+    /// A lane that would exceed its capacity is an error; lane mode has no
+    /// Shift eviction.
+    #[test]
+    fn test_prepare_lanes_exceeded_max_seq_len() {
+        let config = lane_test_config(4);
+        let mut cache = TransformerCache::new(&config, 2, &Default::default());
+
+        cache.prepare_lanes(&[0], 3).unwrap();
+        // Lane 1 is fine on its own...
+        cache.prepare_lanes(&[1], 1).unwrap();
+        // ...but lane 0 cannot take 2 more positions.
+        assert!(matches!(
+            cache.prepare_lanes(&[0, 1], 2),
+            Err(GenerationError::MaxSequenceLengthExceeded { actual: 5, max: 4 })
+        ));
+        // A failed plan advances nothing.
+        assert_eq!(cache.lane_len(0), 3);
+        assert_eq!(cache.lane_len(1), 1);
+    }
+
+    /// `reset_lane` zeroes one lane's bookkeeping and every layer's KV length
+    /// for that lane, leaving the other lane untouched.
+    #[test]
+    fn test_reset_lane_isolates_one_lane() {
+        let device: Device = Default::default();
+        let config = lane_test_config(8);
+        let mut cache = TransformerCache::new(&config, 2, &device);
+        let head_dim = config.d_model / config.n_heads;
+
+        // Write real KV rows so the per-layer lane lengths advance too.
+        let write = |cache: &mut TransformerCache, lanes: &[usize], seq_len: usize| {
+            let x = Tensor::ones([lanes.len(), config.n_kv_heads, seq_len, head_dim], &device);
+            cache.prepare_lanes(lanes, seq_len).unwrap();
+            for layer in cache.layers.iter_mut() {
+                layer.forward_lanes(lanes, x.clone(), x.clone());
+            }
+        };
+
+        write(&mut cache, &[0], 3);
+        write(&mut cache, &[1], 1);
+        write(&mut cache, &[0, 1], 1);
+        assert_eq!(cache.lane_len(0), 4);
+        assert_eq!(cache.lane_len(1), 2);
+        for layer in cache.layers.iter() {
+            assert_eq!(layer.lane_len(0), 4);
+            assert_eq!(layer.lane_len(1), 2);
+        }
+
+        cache.reset_lane(0);
+        assert_eq!(cache.lane_len(0), 0);
+        assert_eq!(cache.lane_len(1), 2);
+        for layer in cache.layers.iter() {
+            assert_eq!(layer.lane_len(0), 0);
+            assert_eq!(layer.lane_len(1), 2);
+        }
     }
 }

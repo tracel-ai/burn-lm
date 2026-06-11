@@ -23,4 +23,8 @@ pub enum InferenceError {
     Busy(usize, usize),
     #[error("The job was cancelled before it produced a result.")]
     Cancelled,
+    #[error("The server is overloaded: the job queue is full. Retry later.")]
+    Overloaded,
+    #[error("The inference worker died while the job was in flight. Retry the request.")]
+    WorkerDied,
 }

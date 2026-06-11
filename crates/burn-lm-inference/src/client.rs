@@ -119,6 +119,10 @@ where
         self.channel.run_job(job)
     }
 
+    fn is_overloaded(&self) -> bool {
+        self.channel.is_overloaded()
+    }
+
     fn model_name(&self) -> &'static str {
         self.model_name
     }

@@ -110,7 +110,11 @@ async fn handle_non_streaming_response(
         generation_params(&payload.params),
         TextGenerationListener::default(),
     );
-    let _stats = plugin.run_job(job).unwrap();
+    // Map inference failures to HTTP errors instead of unwrapping: a shed job (`Overloaded`)
+    // must become a 429, not a panicking handler — panicking here would defeat backpressure.
+    let _stats = plugin
+        .run_job(job)
+        .map_err(crate::errors::ServerError::from)?;
     let content = handle.join();
 
     tracing::debug!("Answer: {}", content);
@@ -144,6 +148,16 @@ async fn handle_streaming_response(
     // mid-stream, and the lock is released before generation so concurrent requests interleave
     // through the batching channel.
     let (plugin, old_model_name) = state.acquire_plugin(&payload.model).await?;
+
+    // PRE-FLIGHT BACKPRESSURE CHECK, before any SSE byte is committed: once the 200 + headers
+    // below are sent, a job shed with `Overloaded` inside the stream task can no longer become a
+    // real 429 (the status line is gone — it would arrive as in-stream error text at best). The
+    // check is ADVISORY: the queue can fill between this probe and the job's submission, in which
+    // case the shed still happens at submit and is reported as in-stream error text (see the
+    // `Ok(Err(..))` arm below) — but the common overload case answers with an honest 429.
+    if plugin.is_overloaded() {
+        return Err(crate::errors::ServerError::Overloaded);
+    }
 
     let (tx, rx) = mpsc::channel(10);
     tokio::spawn({
@@ -257,26 +271,48 @@ async fn handle_streaming_response(
             // arm below) so the SSE channel can close — otherwise the stream never ends.
             disconnect_watcher.abort();
 
-            let stats = match join_result {
+            // `spawn_blocking` yields two layers of Result; peel them one at a time.
+            // Layer 1: did the blocking task complete at all? `Err` means it panicked — today
+            // that means the listener thread died mid-stream (client disconnected -> the SSE
+            // write failed -> `join()` panicked), so treat it as a disconnect: close the stream
+            // instead of re-panicking the handler task.
+            let task_result = match join_result {
                 Err(join_err) => {
-                    // The blocking task panicked. Today that means the listener thread died
-                    // mid-stream (client disconnected -> the SSE write failed -> `join()`
-                    // panicked), so treat it as a disconnect: close the stream instead of
-                    // re-panicking the handler task.
                     tracing::debug!(
                         "generation task panicked (likely client disconnect): {join_err}"
                     );
                     let _ = tx.send(StreamingChunk::Done.to_event_stream()).await;
                     return;
                 }
-                Ok(Err(err)) => {
+                Ok(result) => result,
+            };
+            // Layer 2: the task ran — did inference itself succeed?
+            let stats = match task_result {
+                Err(err) => {
                     // Includes Err(Cancelled) for a job cancelled while still queued: the client
                     // is gone, so just close the stream instead of panicking the handler.
-                    tracing::debug!("Inference did not complete: {err}");
+                    //
+                    // A job shed with `Overloaded` HERE slipped past the pre-flight check above
+                    // (the queue filled in between) and the 429 window is gone — log it loudly
+                    // and tell the client in-stream rather than fake a normal-looking truncation.
+                    if matches!(err, burn_lm_inference::InferenceError::Overloaded) {
+                        tracing::warn!(
+                            "streaming job shed after the pre-flight overload check: {err}"
+                        );
+                        let chunk = StreamingChunk::Data(ChatCompletionChunkSchema::new(
+                            &id,
+                            model,
+                            now,
+                            &format!("\n```Burn LM\nerror: {err}\n```\n"),
+                        ));
+                        let _ = tx.send(chunk.to_event_stream()).await;
+                    } else {
+                        tracing::debug!("Inference did not complete: {err}");
+                    }
                     let _ = tx.send(StreamingChunk::Done.to_event_stream()).await;
                     return;
                 }
-                Ok(Ok(stats)) => stats,
+                Ok(stats) => stats,
             };
             let stats = format!("\n\n{}", stats.display_stats());
             let chunk =

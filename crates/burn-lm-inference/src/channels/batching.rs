@@ -16,16 +16,35 @@
 //! [`forward`](BatchedDecoder::forward) call against its own engine-owned cache. This proves the
 //! scheduling/admission/streaming plumbing end to end. Phase 2 will replace only the forward body
 //! with a fused multi-row GPU call.
+//!
+//! BACKPRESSURE: the job queue is bounded ([`DEFAULT_MAX_QUEUE_DEPTH`], settable via
+//! [`with_queue_depth`](BatchingChannel::with_queue_depth)). [`submit`](BatchingChannel::submit)
+//! sheds synchronously with [`InferenceError::Overloaded`] when the bound is reached, so sustained
+//! overload turns into immediate 4xx-class rejections instead of an ever-growing queue of parked
+//! caller threads.
+//!
+//! FAILURE LADDER: per-sequence faults (forward errors, contract violations) retire just that
+//! sequence; a panic anywhere in a worker iteration is caught, every in-flight and queued job is
+//! answered with [`InferenceError::WorkerDied`] (after flushing its detok cursor), and the worker
+//! thread exits — the next command lazily respawns a FRESH worker around a fresh
+//! `Server::default()`. Callers can never park forever on a dead worker. Caller-visible
+//! consequence: the fresh server starts UNLOADED, so a previously observed `load()` success does
+//! not survive a panic — jobs still work because admission lazy-loads through
+//! [`decoder`](BatchedInferenceServer::decoder)/`allocate_cache`, the first post-panic job just
+//! pays the load again.
 
 use std::{
     collections::VecDeque,
     fmt,
     marker::PhantomData,
+    panic::{catch_unwind, AssertUnwindSafe},
     sync::{
+        atomic::{AtomicUsize, Ordering},
         mpsc::{Receiver, Sender, SyncSender},
         Arc, Mutex,
     },
     thread::JoinHandle,
+    time::{Duration, Instant},
 };
 
 use crate::{
@@ -55,12 +74,48 @@ enum Command {
     Load(SyncSender<InferenceResult<Option<Stats>>>),
     IsLoaded(SyncSender<bool>),
     Unload(SyncSender<InferenceResult<Option<Stats>>>),
-    Submit {
-        job: InferenceJob,
-        completion: SyncSender<InferenceResult<Stats>>,
-    },
+    Submit(QueuedJob),
     ClearState(SyncSender<InferenceResult<()>>),
     Shutdown,
+}
+
+/// Default bound on the number of submitted-but-not-yet-admitted jobs (see
+/// [`BatchingChannel::with_queue_depth`]). Beyond it, [`submit`](BatchingChannel::submit) sheds
+/// synchronously with [`InferenceError::Overloaded`].
+pub const DEFAULT_MAX_QUEUE_DEPTH: usize = 32;
+
+/// Stat name for the time a job spent queued before admission (enqueue → admission). Admission is
+/// the endpoint (rather than completion) because the stat exists to expose QUEUEING delay — the
+/// thing the queue bound trades off — while generation time is already covered by the token-count
+/// and duration stats.
+pub const QUEUE_WAIT_STAT_NAME: &str = "Queue Wait";
+
+/// RAII permit for one job's slot in the queue's budget — issued by the queue's hand-rolled
+/// semaphore (the shared `AtomicUsize` depth counter), in the same shape as tokio's
+/// `OwnedSemaphorePermit`.
+///
+/// The counter is incremented by `submit` BEFORE the job is sent to the worker; this permit rides
+/// with the job and decrements on drop, which happens exactly when the job "leaves the queue" on
+/// ANY path: admitted into the active set, rejected at admission (cancel/tokenize/cache errors),
+/// drained by a worker panic — or dropped wholesale with a dying worker's command channel. Tying
+/// the decrement to `Drop` means no path (present or future) can leak the counter upward.
+struct QueuePermit(Arc<AtomicUsize>);
+
+impl Drop for QueuePermit {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
+/// One submitted-but-not-yet-admitted job: the job itself, its one-shot completion sender, the
+/// enqueue timestamp (for the queue-wait stat) and its queue permit.
+struct QueuedJob {
+    job: InferenceJob,
+    completion: SyncSender<InferenceResult<Stats>>,
+    /// Queue-wait clock, started at submit and read at admission (see [`QUEUE_WAIT_STAT_NAME`]).
+    enqueued_at: Instant,
+    /// Dropped when the job leaves the queue; see [`QueuePermit`].
+    permit: QueuePermit,
 }
 
 /// A running worker: its command sender and thread handle.
@@ -74,6 +129,15 @@ struct WorkerInner {
 /// thread until the first command means only models that are actually exercised spawn one.
 struct Worker {
     inner: Mutex<Option<WorkerInner>>,
+    /// Count of submitted-but-not-yet-admitted jobs, shared between submitters (increment) and
+    /// the per-job [`QueuePermit`]s (decrement on drop). The bound this enforces is APPROXIMATE
+    /// by design: the check-and-increment in `submit` is atomic, but a job admitted a microsecond
+    /// after a shed decision means the queue briefly had room — being off by a few under
+    /// contention is acceptable; the point is that overload sheds instead of growing without
+    /// bound. Plain counter, no other data synchronized through it, hence `Relaxed` everywhere.
+    pending: Arc<AtomicUsize>,
+    /// Backpressure bound on `pending` (see [`DEFAULT_MAX_QUEUE_DEPTH`]).
+    max_queue_depth: usize,
 }
 
 impl Drop for Worker {
@@ -139,6 +203,9 @@ struct JobMeta {
     completion: Option<SyncSender<InferenceResult<Stats>>>,
     /// The job's cancellation signal, observed once per round by [`step`]'s cancel sweep.
     cancel: CancelSignal,
+    /// How long the job sat queued before admission, reported as the queue-wait stat on
+    /// completion (see [`QUEUE_WAIT_STAT_NAME`]).
+    queue_wait: Duration,
     /// Set by the cancel sweep so the retire sweep can report the right finish reason. (Reading
     /// `cancel` again at retire would do, but a signal fired between sweep and retire would then
     /// mislabel a normally-finished sequence.)
@@ -153,9 +220,18 @@ type JobSeq<S> = ActiveSeq<CacheOf<S>, JobMeta>;
 
 impl<Server: BatchedInferenceServer + 'static> BatchingChannel<Server> {
     pub fn new() -> Self {
+        Self::with_queue_depth(DEFAULT_MAX_QUEUE_DEPTH)
+    }
+
+    /// Build a channel with a specific backpressure bound (see [`DEFAULT_MAX_QUEUE_DEPTH`]).
+    /// Production uses the default via [`new`](Self::new); tests use small depths to exercise
+    /// shedding deterministically.
+    pub fn with_queue_depth(max_queue_depth: usize) -> Self {
         Self {
             worker: Arc::new(Worker {
                 inner: Mutex::new(None),
+                pending: Arc::new(AtomicUsize::new(0)),
+                max_queue_depth,
             }),
             _server: PhantomData,
         }
@@ -166,84 +242,110 @@ impl<Server: BatchedInferenceServer + 'static> BatchingChannel<Server> {
     /// `Server::default()` path via [`new`](Self::new)).
     #[cfg(test)]
     fn with_server(server: Server) -> Self {
-        let channel = Self::new();
-        *channel.worker.inner.lock().unwrap() = Some(Self::spawn_worker_with(server));
+        Self::with_server_and_depth(server, DEFAULT_MAX_QUEUE_DEPTH)
+    }
+
+    /// Test-only: a specific server instance AND a specific queue bound.
+    #[cfg(test)]
+    fn with_server_and_depth(server: Server, max_queue_depth: usize) -> Self {
+        let channel = Self::with_queue_depth(max_queue_depth);
+        *channel.worker.inner.lock().unwrap() =
+            Some(Self::spawn_worker_with(server).expect("test worker should spawn"));
         channel
     }
 
+    /// Number of jobs currently submitted but not yet admitted (observability; approximate under
+    /// contention, see [`Worker::pending`]).
+    pub fn queue_depth(&self) -> usize {
+        self.worker.pending.load(Ordering::Relaxed)
+    }
+
     /// Spawn the worker thread that owns the server and runs the continuous loop.
-    fn spawn_worker() -> WorkerInner {
+    fn spawn_worker() -> InferenceResult<WorkerInner> {
         Self::spawn_worker_with(Server::default())
     }
 
     /// Spawn the worker around a specific server instance. Production uses `Server::default()`;
     /// tests seed a configured server so capacity and behavior are controllable.
-    fn spawn_worker_with(seed: Server) -> WorkerInner {
+    ///
+    /// Spawn failure is returned as an error so the caller fails synchronously — setting up
+    /// channel state as if a worker existed and then panicking would leave every later caller
+    /// parked forever on a worker that was never born.
+    fn spawn_worker_with(seed: Server) -> InferenceResult<WorkerInner> {
         let (sender, receiver) = std::sync::mpsc::channel::<Command>();
 
-        let handle = std::thread::spawn(move || {
-            let mut server = seed;
-            let mut queue: VecDeque<(InferenceJob, SyncSender<InferenceResult<Stats>>)> =
-                VecDeque::new();
-            let mut active: Vec<JobSeq<Server>> = Vec::new();
+        let handle = std::thread::Builder::new()
+            .name("burn-lm-batching-worker".to_string())
+            .spawn(move || {
+                let mut server = seed;
+                let mut queue: VecDeque<QueuedJob> = VecDeque::new();
+                let mut active: Vec<JobSeq<Server>> = Vec::new();
 
-            loop {
-                // Block for the next command only when there is genuinely no progress to make:
-                // nothing active to advance AND nothing admittable right now. "Admittable" means a
-                // job is queued and the server reports a free slot. Parking otherwise (e.g. while a
-                // job is queued and a slot just freed up after a retire) would dead-lock: the queued
-                // job's `Submit` was already drained into `queue`, so no further command is coming to
-                // wake the `recv()` — the worker would sleep forever with admittable work in hand.
-                // (Pre-existing latent bug: the old guard parked on `active.is_empty()` alone, which
-                // only stayed live because a job's submit usually raced in after the previous one
-                // retired; with a freed slot and a job already queued it hangs.) When `max_slots ==
-                // 0` with a job queued, `can_admit` is false, so we still park instead of busy-spin.
-                let can_admit =
-                    !queue.is_empty() && server.batch_capacity().max_slots > active.len();
-                let mut shutdown = false;
-                if active.is_empty() && !can_admit {
-                    match receiver.recv() {
-                        Ok(command) => {
-                            shutdown = handle_command(&mut server, &mut queue, &active, command);
-                        }
-                        Err(_) => break, // all senders dropped
-                    }
-                }
-                // Drain any further pending commands without blocking, so a burst of submissions is
-                // fully enqueued before the next admit/step sweep. Admission then sees all ready
-                // jobs together (deterministic batching) rather than one per iteration.
-                if !shutdown {
-                    while let Ok(command) = receiver.try_recv() {
-                        if handle_command(&mut server, &mut queue, &active, command) {
-                            shutdown = true;
+                loop {
+                    // PANIC BOUNDARY (failure ladder): one `catch_unwind` per loop ITERATION — not
+                    // per server call (an iteration is the unit of state consistency: a panic
+                    // anywhere mid-iteration leaves queue/active partially advanced, and we discard
+                    // rather than repair), and not around the whole loop (the boundary must return
+                    // control HERE so the intact `queue`/`active` locals can be failed over to
+                    // their callers).
+                    //
+                    // `AssertUnwindSafe` is justified because nothing that crossed the boundary is
+                    // reused after a panic: the server (the only state model code can have left
+                    // half-mutated) is dropped when the thread exits, and `queue`/`active` are only
+                    // read to send `WorkerDied` replies and then cleared. A fresh worker gets a
+                    // fresh `Server::default()`.
+                    let flow = catch_unwind(AssertUnwindSafe(|| {
+                        worker_iteration(&mut server, &mut queue, &mut active, &receiver)
+                    }));
+                    match flow {
+                        Ok(Flow::Continue) => {}
+                        Ok(Flow::Shutdown) => break,
+                        Err(payload) => {
+                            // Panic: log the payload (the default panic hook's stderr line has no
+                            // correlation to the `WorkerDied` replies callers are about to see),
+                            // answer everyone (active AND queued) with `WorkerDied`, then let the
+                            // thread die. The next command lazily respawns a fresh worker (see
+                            // `sender`).
+                            let message = payload
+                                .downcast_ref::<&str>()
+                                .map(|s| s.to_string())
+                                .or_else(|| payload.downcast_ref::<String>().cloned())
+                                .unwrap_or_else(|| "<non-string panic payload>".to_string());
+                            tracing::error!(
+                                "batching worker panicked ({message}); failing {} active and {} \
+                                 queued job(s) with WorkerDied",
+                                active.len(),
+                                queue.len()
+                            );
+                            fail_everything::<Server>(&mut queue, &mut active);
                             break;
                         }
                     }
                 }
-                if shutdown {
-                    break;
-                }
+            })
+            .map_err(|_| InferenceError::WorkerDied)?;
 
-                // ADMISSION (backpressure): admit queued jobs while there is free capacity. A job
-                // that does not fit stays at the front of the queue for a later iteration.
-                admit(&mut server, &mut queue, &mut active);
-
-                // STEP (round-robin stub): advance every active sequence by one token, then retire
-                // any that finished. Retiring frees a slot so the next iteration admits more.
-                step(&mut server, &mut active);
-            }
-        });
-
-        WorkerInner { sender, handle }
+        Ok(WorkerInner { sender, handle })
     }
 
-    /// Return a sender to the worker, spawning it on first use.
-    fn sender(&self) -> Sender<Command> {
+    /// Return a sender to the worker, spawning it on first use — and RESPAWNING it if the previous
+    /// worker died (panicked iteration). A dead worker is detected by its finished thread handle;
+    /// it is reaped (join is instant on a finished thread) and replaced with a fresh worker around
+    /// a fresh `Server::default()`, so one panic never bricks the channel.
+    fn sender(&self) -> InferenceResult<Sender<Command>> {
         let mut guard = self.worker.inner.lock().unwrap();
-        if guard.is_none() {
-            *guard = Some(Self::spawn_worker());
+        if guard
+            .as_ref()
+            .is_some_and(|inner| inner.handle.is_finished())
+        {
+            if let Some(inner) = guard.take() {
+                let _ = inner.handle.join();
+            }
         }
-        guard.as_ref().unwrap().sender.clone()
+        if guard.is_none() {
+            *guard = Some(Self::spawn_worker()?);
+        }
+        Ok(guard.as_ref().expect("just spawned").sender.clone())
     }
 
     /// Whether the worker has been spawned, i.e. the channel has been used at least once.
@@ -255,18 +357,119 @@ impl<Server: BatchedInferenceServer + 'static> BatchingChannel<Server> {
     /// worker to an error.
     fn request<T>(&self, make: impl FnOnce(SyncSender<T>) -> Command) -> Result<T, ()> {
         let (reply, rx) = std::sync::mpsc::sync_channel::<T>(1);
-        self.sender().send(make(reply)).map_err(|_| ())?;
+        self.sender()
+            .map_err(|_| ())?
+            .send(make(reply))
+            .map_err(|_| ())?;
         rx.recv().map_err(|_| ())
     }
 
     /// Enqueue a job without waiting for it to complete. Returns the completion receiver so the
     /// caller can wait later (or drop it to fire-and-forget). This is the non-blocking entry point.
-    pub fn submit(&self, job: InferenceJob) -> Result<Receiver<InferenceResult<Stats>>, ()> {
+    ///
+    /// BACKPRESSURE: sheds synchronously with [`InferenceError::Overloaded`] when the queue is at
+    /// its bound — before spawning or waking anything — so an overloaded channel costs a rejected
+    /// caller one atomic increment, not a parked thread.
+    pub fn submit(&self, job: InferenceJob) -> InferenceResult<Receiver<InferenceResult<Stats>>> {
+        // Increment-then-check: the previous value decides admission, so concurrent submitters
+        // race for the remaining slots atomically. The bound stays approximate in a different
+        // way: a job admitted by the worker right after this check briefly frees a slot the shed
+        // decision didn't see (documented on `Worker::pending`).
+        let pending = &self.worker.pending;
+        if pending.fetch_add(1, Ordering::Relaxed) >= self.worker.max_queue_depth {
+            pending.fetch_sub(1, Ordering::Relaxed);
+            return Err(InferenceError::Overloaded);
+        }
+        // From here the slot is owned by the permit: every exit (send failure, worker drain,
+        // admission) releases it on drop.
+        let permit = QueuePermit(pending.clone());
         let (completion, rx) = std::sync::mpsc::sync_channel::<InferenceResult<Stats>>(1);
-        self.sender()
-            .send(Command::Submit { job, completion })
-            .map_err(|_| ())?;
+        self.sender()?
+            .send(Command::Submit(QueuedJob {
+                job,
+                completion,
+                enqueued_at: Instant::now(),
+                permit,
+            }))
+            .map_err(|_| InferenceError::WorkerDied)?;
         Ok(rx)
+    }
+}
+
+/// Loop-control outcome of one worker iteration.
+enum Flow {
+    Continue,
+    Shutdown,
+}
+
+/// One iteration of the worker's continuous loop: park/drain commands, admit, step. Runs inside
+/// the per-iteration panic boundary (see `spawn_worker_with`).
+fn worker_iteration<S: BatchedInferenceServer>(
+    server: &mut S,
+    queue: &mut VecDeque<QueuedJob>,
+    active: &mut Vec<JobSeq<S>>,
+    receiver: &Receiver<Command>,
+) -> Flow {
+    // Block for the next command only when there is genuinely no progress to make:
+    // nothing active to advance AND nothing admittable right now. "Admittable" means a
+    // job is queued and the server reports a free slot. Parking otherwise (e.g. while a
+    // job is queued and a slot just freed up after a retire) would dead-lock: the queued
+    // job's `Submit` was already drained into `queue`, so no further command is coming to
+    // wake the `recv()` — the worker would sleep forever with admittable work in hand.
+    // (Pre-existing latent bug: the old guard parked on `active.is_empty()` alone, which
+    // only stayed live because a job's submit usually raced in after the previous one
+    // retired; with a freed slot and a job already queued it hangs.) When `max_slots ==
+    // 0` with a job queued, `can_admit` is false, so we still park instead of busy-spin.
+    let can_admit = !queue.is_empty() && server.batch_capacity().max_slots > active.len();
+    if active.is_empty() && !can_admit {
+        match receiver.recv() {
+            Ok(command) => {
+                if handle_command(server, queue, active, command) {
+                    return Flow::Shutdown;
+                }
+            }
+            Err(_) => return Flow::Shutdown, // all senders dropped
+        }
+    }
+    // Drain any further pending commands without blocking, so a burst of submissions is
+    // fully enqueued before the next admit/step sweep. Admission then sees all ready
+    // jobs together (deterministic batching) rather than one per iteration.
+    while let Ok(command) = receiver.try_recv() {
+        if handle_command(server, queue, active, command) {
+            return Flow::Shutdown;
+        }
+    }
+
+    // ADMISSION (backpressure): admit queued jobs while there is free capacity. A job
+    // that does not fit stays at the front of the queue for a later iteration.
+    admit(server, queue, active);
+
+    // STEP (round-robin stub): advance every active sequence by one token, then retire
+    // any that finished. Retiring frees a slot so the next iteration admits more.
+    step(server, active);
+
+    Flow::Continue
+}
+
+/// The panic fallout path: every active sequence gets its detok cursor flushed (trailing
+/// held-back bytes reach the emitter) and a `WorkerDied` reply via the usual send-once `.take()`
+/// discipline; every queued job is answered `WorkerDied` too, its queue permit released on drop.
+/// Commands still buffered in the mpsc when the thread exits are dropped with the receiver, which
+/// disconnects their reply senders — those callers also observe `WorkerDied`, and their permits
+/// drop with the commands, so the depth counter cannot leak.
+fn fail_everything<S: BatchedInferenceServer>(
+    queue: &mut VecDeque<QueuedJob>,
+    active: &mut Vec<JobSeq<S>>,
+) {
+    for seq in active.iter_mut() {
+        flush_detok(&mut seq.extra);
+        if let Some(completion) = seq.extra.completion.take() {
+            let _ = completion.send(Err(InferenceError::WorkerDied));
+        }
+    }
+    active.clear();
+    for queued in queue.drain(..) {
+        let _ = queued.completion.send(Err(InferenceError::WorkerDied));
     }
 }
 
@@ -279,7 +482,7 @@ impl<Server: BatchedInferenceServer + 'static> BatchingChannel<Server> {
 /// (see the policy comments on those arms).
 fn handle_command<S: BatchedInferenceServer>(
     server: &mut S,
-    queue: &mut VecDeque<(InferenceJob, SyncSender<InferenceResult<Stats>>)>,
+    queue: &mut VecDeque<QueuedJob>,
     active: &[JobSeq<S>],
     command: Command,
 ) -> bool {
@@ -320,8 +523,8 @@ fn handle_command<S: BatchedInferenceServer>(
             };
             let _ = reply.send(result);
         }
-        Command::Submit { job, completion } => {
-            queue.push_back((job, completion));
+        Command::Submit(queued) => {
+            queue.push_back(queued);
         }
         Command::ClearState(reply) => {
             // Same hazard as `Unload`: clearing model state under in-flight sequences would yank
@@ -347,13 +550,23 @@ fn handle_command<S: BatchedInferenceServer>(
 /// (which runs after a retire frees a slot), making admission continuous.
 fn admit<S: BatchedInferenceServer>(
     server: &mut S,
-    queue: &mut VecDeque<(InferenceJob, SyncSender<InferenceResult<Stats>>)>,
+    queue: &mut VecDeque<QueuedJob>,
     active: &mut Vec<JobSeq<S>>,
 ) {
     while active.len() < server.batch_capacity().max_slots {
-        let Some((job, completion)) = queue.pop_front() else {
+        let Some(QueuedJob {
+            job,
+            completion,
+            enqueued_at,
+            permit,
+        }) = queue.pop_front()
+        else {
             break;
         };
+        // Whatever happens next — admitted or rejected — the job has left the queue: release its
+        // depth slot so submitters see the freed capacity.
+        drop(permit);
+        let queue_wait = enqueued_at.elapsed();
 
         // Cancelled while queued: reply WITHOUT touching the model — no prefill, no slot. The
         // caller never received a token, so the reply is an error (unlike an in-flight cancel,
@@ -406,6 +619,7 @@ fn admit<S: BatchedInferenceServer>(
                 sampler: Some(server.next_token_sampler(&job.params)),
                 completion: Some(completion),
                 cancel: job.cancel,
+                queue_wait,
                 cancelled: false,
             },
         });
@@ -523,6 +737,14 @@ fn step<S: BatchedInferenceServer>(server: &mut S, active: &mut Vec<JobSeq<S>>) 
                 stats
                     .entries
                     .insert(crate::stats::StatEntry::TokensCount(seq.generated));
+                // Queue-wait observability: how long this job sat queued before admission.
+                // Rendered as fixed seconds to match every other duration stat (see
+                // `Stats::display_stats`); a `Named` entry rather than a new `StatEntry` variant
+                // because nothing needs the raw `Duration` back out.
+                stats.entries.insert(StatEntry::Named(
+                    QUEUE_WAIT_STAT_NAME.to_string(),
+                    format!("{:.2}s", seq.extra.queue_wait.as_secs_f64()),
+                ));
                 // An in-flight cancel still replies `Ok`: the caller already received real tokens,
                 // and the finish-reason stat says why the stream stopped short. (Only the
                 // cancelled path carries a finish reason today, so normally-finished sequences
@@ -553,8 +775,11 @@ fn flush_detok(meta: &mut JobMeta) {
     }
 }
 
+/// The error every caller of a dead (or unspawnable) worker observes: the command channel or the
+/// completion channel disconnected. A dedicated variant — not a repurposed `LoadError` — so HTTP
+/// and CLI callers can tell "the worker died, retry" apart from a genuine model-loading failure.
 fn worker_gone() -> InferenceError {
-    InferenceError::LoadError("batching worker thread is not available".to_string())
+    InferenceError::WorkerDied
 }
 
 impl<Server: BatchedInferenceServer + 'static> InferenceChannel<Server>
@@ -598,15 +823,22 @@ impl<Server: BatchedInferenceServer + 'static> InferenceChannel<Server>
     }
 
     /// Blocking job entry point preserved for the `InferenceChannel`/`InferencePlugin` contract:
-    /// submit (enqueue) then wait on the per-sequence completion signal.
+    /// submit (enqueue) then wait on the per-sequence completion signal. `Overloaded` (the queue
+    /// bound) propagates synchronously from `submit`, before this blocks.
     fn run_job(&self, job: InferenceJob) -> InferenceResult<Stats> {
-        let rx = self.submit(job).map_err(|_| worker_gone())?;
+        let rx = self.submit(job)?;
         rx.recv().map_err(|_| worker_gone())?
     }
 
     fn clear_state(&self) -> InferenceResult<()> {
         self.request(Command::ClearState)
             .map_err(|_| worker_gone())?
+    }
+
+    /// Advisory: whether a submit right now would shed with `Overloaded`. Used by HTTP streaming
+    /// as a pre-flight check before committing SSE headers (a 429 can only be sent before the 200).
+    fn is_overloaded(&self) -> bool {
+        self.queue_depth() >= self.worker.max_queue_depth
     }
 }
 
@@ -648,6 +880,9 @@ mod tests {
         extra_rows: usize,
         /// Per-forward sleep — simulates a slow model so a test can observe a job in flight.
         step_delay_ms: u64,
+        /// When set, `forward` PANICS at this per-sequence step — simulates a model bug that
+        /// unwinds the worker iteration (the failure-ladder rung above per-sequence errors).
+        panic_at_step: Option<usize>,
     }
 
     const VOCAB: usize = 64;
@@ -674,6 +909,10 @@ mod tests {
 
             let step = *cache;
             *cache += 1;
+
+            if self.panic_at_step == Some(step) {
+                panic!("scripted decoder panic at step {step}");
+            }
 
             // Identity = last input token (the prompt token on prefill, the echoed token after).
             let ids = batch
@@ -744,6 +983,7 @@ mod tests {
                     emit: 4,
                     extra_rows: 0,
                     step_delay_ms: 0,
+                    panic_at_step: None,
                 },
                 capacity_calls: Arc::new(AtomicUsize::new(0)),
                 fixed_token: None,
@@ -761,6 +1001,7 @@ mod tests {
                     emit: 4,
                     extra_rows: 1,
                     step_delay_ms: 0,
+                    panic_at_step: None,
                 },
                 capacity_calls: Arc::new(AtomicUsize::new(0)),
                 fixed_token: None,
@@ -778,10 +1019,22 @@ mod tests {
                     emit: 1000, // effectively capped by `max_gen_tokens` (16)
                     extra_rows: 0,
                     step_delay_ms: 20,
+                    panic_at_step: None,
                 },
                 capacity_calls: Arc::new(AtomicUsize::new(0)),
                 fixed_token: None,
             }
+        }
+
+        /// A server whose decoder PANICS at the given per-sequence step, after a small per-step
+        /// delay (the delay makes "a second job is queued behind the panicking one" a sure thing
+        /// rather than a race) — the failure-ladder rung ABOVE per-sequence errors: the panic
+        /// unwinds the whole worker iteration.
+        fn new_panicky(slots: usize, log: OrderLog, panic_at_step: usize) -> Self {
+            let mut server = Self::new(slots, log);
+            server.decoder.step_delay_ms = 20;
+            server.decoder.panic_at_step = Some(panic_at_step);
+            server
         }
 
         /// A server whose `next_token_sampler` always picks `token`, regardless of logits —
@@ -802,6 +1055,7 @@ mod tests {
                     emit: 4,
                     extra_rows: 0,
                     step_delay_ms: 0,
+                    panic_at_step: None,
                 },
                 capacity_calls: calls,
                 fixed_token: None,
@@ -1569,5 +1823,202 @@ mod tests {
         // decoder when nothing is active (the fake's `decoder()` lazy-loads like the real ones).
         let _ = channel.is_downloaded();
         assert!(!channel.is_loaded());
+    }
+
+    /// BACKPRESSURE: at the queue bound, `submit` must shed synchronously with `Overloaded` — and
+    /// a rejected submit must not leak its depth-counter slot. `max_slots == 0` keeps the queued
+    /// job pinned (nothing is ever admitted), so the bound is exercised without timing races.
+    #[test]
+    fn submit_sheds_with_overloaded_at_the_queue_bound() {
+        let channel = BatchingChannel::<FakeServer>::with_server_and_depth(
+            FakeServer::with_capacity_probe(0, Arc::new(AtomicUsize::new(0))),
+            1,
+        );
+        assert_eq!(channel.queue_depth(), 0, "queue starts empty");
+        assert!(!channel.is_overloaded());
+
+        let (job_a, _ha) = InferenceJob::create(
+            InferenceTask::Prompt("a".into()),
+            GenerationParams::default(),
+            NullListener,
+        );
+        let _rx_a = channel
+            .submit(job_a)
+            .expect("first job fits the depth-1 queue");
+        assert_eq!(channel.queue_depth(), 1);
+        assert!(
+            channel.is_overloaded(),
+            "advisory probe must report a full queue"
+        );
+
+        let (job_b, _hb) = InferenceJob::create(
+            InferenceTask::Prompt("b".into()),
+            GenerationParams::default(),
+            NullListener,
+        );
+        assert!(
+            matches!(channel.submit(job_b), Err(InferenceError::Overloaded)),
+            "a submit beyond the bound must shed synchronously"
+        );
+        assert_eq!(
+            channel.queue_depth(),
+            1,
+            "a shed submit must release its counter slot"
+        );
+    }
+
+    /// FAILURE LADDER, top rung: a panic inside the worker loop must reply `WorkerDied` — exactly
+    /// once — to the active job AND every queued job (text streamed before the panic still reaches
+    /// the listener via the detok flush), release their depth slots, and the NEXT submission must
+    /// lazily respawn a fresh worker. One panic never bricks the channel. (The scripted panic's
+    /// stderr backtrace is expected.)
+    #[test]
+    fn worker_panic_fails_active_and_queued_with_workerdied_then_respawns() {
+        let channel = BatchingChannel::<FakeServer>::with_server(FakeServer::new_panicky(
+            1,
+            Arc::new(Mutex::new(Vec::new())),
+            2, // panic on the 3rd step: 2 tokens stream first, ~20ms apart
+        ));
+
+        // A is admitted (one slot); B is surely queued behind it before the ~60ms panic.
+        let (job_a, ha) = InferenceJob::create(
+            InferenceTask::Prompt("a".into()),
+            GenerationParams::default(),
+            TextGenerationListener::default(),
+        );
+        let (job_b, _hb) = InferenceJob::create(
+            InferenceTask::Prompt("b".into()),
+            GenerationParams::default(),
+            NullListener,
+        );
+        let rx_a = channel.submit(job_a).unwrap();
+        let rx_b = channel.submit(job_b).unwrap();
+
+        assert!(
+            matches!(rx_a.recv().unwrap(), Err(InferenceError::WorkerDied)),
+            "the in-flight job must observe WorkerDied"
+        );
+        assert!(
+            matches!(rx_b.recv().unwrap(), Err(InferenceError::WorkerDied)),
+            "queued jobs must observe WorkerDied too"
+        );
+        // Exactly one reply each: the channels disconnect after the WorkerDied.
+        assert!(rx_a.recv().is_err());
+        assert!(rx_b.recv().is_err());
+        // The two tokens generated before the panic were streamed (and the detok cursor flushed)
+        // before A's completion fired.
+        assert_eq!(ha.join(), "1010");
+        // Both queue permits were released in the panic fallout.
+        assert_eq!(channel.queue_depth(), 0);
+
+        // LAZY RESPAWN: the next submit detects the finished worker thread and spawns a fresh one
+        // around a fresh `Server::default()` (unloaded; admission lazy-loads it).
+        let (job_c, _hc) = InferenceJob::create(
+            InferenceTask::Prompt("a".into()),
+            GenerationParams::default(),
+            NullListener,
+        );
+        channel
+            .submit(job_c)
+            .expect("a dead worker must be respawned on the next submit")
+            .recv()
+            .expect("the respawned worker must serve")
+            .expect("the post-panic job should complete normally");
+    }
+
+    /// The queue-wait stat: every completed job reports how long it sat queued before admission,
+    /// in the same fixed-seconds rendering as the other duration stats.
+    #[test]
+    fn completion_stats_include_the_queue_wait() {
+        let channel = BatchingChannel::<FakeServer>::with_server(FakeServer::new(
+            1,
+            Arc::new(Mutex::new(Vec::new())),
+        ));
+
+        let (job, _h) = InferenceJob::create(
+            InferenceTask::Prompt("a".into()),
+            GenerationParams::default(),
+            NullListener,
+        );
+        let stats = channel.submit(job).unwrap().recv().unwrap().unwrap();
+
+        assert!(
+            stats.entries.iter().any(|entry| matches!(
+                entry,
+                StatEntry::Named(name, value)
+                    if name == QUEUE_WAIT_STAT_NAME && value.ends_with('s')
+            )),
+            "completion stats must carry a fixed-seconds queue-wait entry: {:?}",
+            stats.entries
+        );
+    }
+
+    /// STRESS, exactly-one-reply invariant: a concurrent burst against a depth-2 queue produces
+    /// mixed outcomes — completed, shed with a synchronous `Overloaded`, cancelled while queued —
+    /// and EVERY submission resolves exactly once (no hang, no second reply). The mix is seeded
+    /// deterministically; the actual interleaving comes from real thread scheduling.
+    #[test]
+    fn every_submission_resolves_exactly_once_under_overload() {
+        let server = FakeServer {
+            loaded: false,
+            slots: 1,
+            decoder: FakeDecoder {
+                log: Arc::new(Mutex::new(Vec::new())),
+                emit: 2,
+                extra_rows: 0,
+                step_delay_ms: 2, // slow enough that submissions genuinely pile up
+                panic_at_step: None,
+            },
+            capacity_calls: Arc::new(AtomicUsize::new(0)),
+            fixed_token: None,
+        };
+        let channel = BatchingChannel::<FakeServer>::with_server_and_depth(server, 2);
+
+        let handles: Vec<_> = (0..16)
+            .map(|i| {
+                let channel = channel.clone();
+                std::thread::spawn(move || {
+                    let (job, handle) = InferenceJob::create(
+                        InferenceTask::Prompt(if i % 2 == 0 { "a" } else { "b" }.into()),
+                        GenerationParams::default(),
+                        NullListener,
+                    );
+                    if i % 3 == 0 {
+                        handle.cancel(); // a third of the jobs cancel before/while queued
+                    }
+                    match channel.submit(job) {
+                        // Shed: resolved synchronously, nothing to wait on.
+                        Err(InferenceError::Overloaded) => {}
+                        Err(other) => panic!("unexpected submit error: {other:?}"),
+                        Ok(rx) => {
+                            match rx.recv().expect("every accepted job must get a reply") {
+                                Ok(_) | Err(InferenceError::Cancelled) => {}
+                                Err(other) => panic!("unexpected completion: {other:?}"),
+                            }
+                            assert!(rx.recv().is_err(), "a job must reply exactly once");
+                        }
+                    }
+                })
+            })
+            .collect();
+        for handle in handles {
+            handle.join().expect("no submitter may hang or panic");
+        }
+
+        // Every permit was released on its job's way out, however it resolved.
+        assert_eq!(channel.queue_depth(), 0);
+
+        // And the channel is still healthy: a final job completes normally.
+        let (job, _h) = InferenceJob::create(
+            InferenceTask::Prompt("a".into()),
+            GenerationParams::default(),
+            NullListener,
+        );
+        channel
+            .submit(job)
+            .expect("queue must be empty again")
+            .recv()
+            .unwrap()
+            .unwrap();
     }
 }

@@ -115,6 +115,15 @@ impl Tokenizer for Tiktoken {
             .expect("Should decode tokens")
     }
 
+    /// Byte-level decode: `CoreBPE::_decode_native` (public despite the name) never fails for
+    /// in-vocab ids, so the per-token "split UTF-8 character" panic class of
+    /// [`decode`](Self::decode) cannot occur here. The returned bytes are reassembled into text
+    /// by the framework's `Utf8Buffer`.
+    fn decode_bytes(&self, tokens: &[u32]) -> Vec<u8> {
+        self.bpe
+            ._decode_native(&tokens.iter().map(|&t| t as usize).collect::<Vec<_>>())
+    }
+
     fn bos_id(&self) -> u32 {
         self.bos_token_id as u32
     }
@@ -129,5 +138,61 @@ impl Tokenizer for Tiktoken {
             self.eom_token_id as u32,
             self.eot_token_id as u32,
         ]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    /// Build a minimal byte-level BPE vocab (all 256 single bytes, no merges) so the tokenizer
+    /// splits any multi-byte character across tokens.
+    fn byte_level_tiktoken() -> Tiktoken {
+        let path = std::env::temp_dir().join(format!(
+            "burn-lm-test-bpe-{}-{}.tiktoken",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("t").len(),
+        ));
+        let mut file = File::create(&path).unwrap();
+        for byte in 0..=255u8 {
+            writeln!(file, "{} {}", STANDARD.encode([byte]), byte).unwrap();
+        }
+        drop(file);
+        let tok = Tiktoken::new(path.to_str().unwrap()).unwrap();
+        let _ = std::fs::remove_file(&path);
+        tok
+    }
+
+    /// The serving-panic killer: a multi-byte character split across tokens panics `decode` per
+    /// token, but `decode_bytes` is total and the byte chunks reassemble into the exact original
+    /// text.
+    #[test]
+    fn decode_bytes_is_total_on_split_multibyte_characters() {
+        let tok = byte_level_tiktoken();
+        let text = "a€🦀";
+        let tokens = tok.encode(text, false, false);
+        assert!(
+            tokens.len() >= text.len(),
+            "byte-level vocab must split multi-byte chars: {tokens:?}"
+        );
+
+        let mut bytes = Vec::new();
+        for t in &tokens {
+            // Per-token byte decode never fails, even mid-character.
+            bytes.extend(tok.decode_bytes(&[*t]));
+        }
+        assert_eq!(bytes, text.as_bytes());
+    }
+
+    /// Documents why `decode_bytes` exists: per-token `decode` panics on a continuation byte
+    /// (the in-generation panic that bricked the batching worker).
+    #[test]
+    fn per_token_decode_panics_on_split_utf8() {
+        let tok = byte_level_tiktoken();
+        let tokens = tok.encode("€", false, false);
+        let result =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| tok.decode(&tokens[..1])));
+        assert!(result.is_err(), "decode of a partial char should panic");
     }
 }

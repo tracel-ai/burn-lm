@@ -12,6 +12,7 @@ pub mod plugin;
 pub mod sampler;
 pub mod server;
 pub mod stats;
+pub mod utf8;
 pub mod utils;
 
 // ---------------------------------------------------------------------------
@@ -30,6 +31,7 @@ pub use crate::plugin::InferencePlugin;
 pub use crate::sampler::{NextTokenSampler, Sampler};
 pub use crate::server::{InferenceServer, InferenceServerConfig, ServerConfigParsing};
 pub use crate::stats::{StatEntry, Stats, STATS_MARKER};
+pub use crate::utf8::Utf8Buffer;
 pub use backends::burn_backend_types::*;
 pub use backends::DTYPE_NAME;
 pub use burn_lm_macros::inference_server_config;

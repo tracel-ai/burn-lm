@@ -10,6 +10,16 @@ pub trait Tokenizer: Send + Sync + Clone {
     /// Decode a list of token identifiers into a string.
     fn decode(&self, tokens: &[u32]) -> String;
 
+    /// Raw bytes for `tokens`. NOT guaranteed to be valid UTF-8 on its own: byte-level BPE
+    /// tokenizers routinely split a multi-byte character across tokens, so per-token byte chunks
+    /// must be reassembled by the caller (the framework's `Utf8Buffer`). The default suits
+    /// tokenizers whose per-token [`decode`](Self::decode) is already total; tokenizers whose
+    /// `decode` can fail on a partial character (e.g. Tiktoken) must override this with a
+    /// byte-level decode.
+    fn decode_bytes(&self, tokens: &[u32]) -> Vec<u8> {
+        self.decode(tokens).into_bytes()
+    }
+
     /// Beginning of sentence token.
     fn bos(&self) -> String {
         self.decode(&[self.bos_id()])

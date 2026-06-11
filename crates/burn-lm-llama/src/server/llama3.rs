@@ -293,6 +293,10 @@ impl BatchedInferenceServer for Llama321bInstructServer {
         self.server.decode(tokens)
     }
 
+    fn detokenize_bytes(&self, tokens: &[u32]) -> Vec<u8> {
+        self.server.decode_bytes(tokens)
+    }
+
     fn stop_ids(&self) -> Vec<u32> {
         self.server.stop_ids()
     }
@@ -570,6 +574,16 @@ impl Llama3BaseServer {
         self.model
             .get()
             .map(|model| model.tokenizer.decode(tokens))
+            .unwrap_or_default()
+    }
+
+    /// Decode token ids to raw bytes using the loaded model's tokenizer. Unlike
+    /// [`decode`](Self::decode), this is total per token: Tiktoken's byte-level decode cannot
+    /// fail on a multi-byte character split across tokens.
+    fn decode_bytes(&self, tokens: &[u32]) -> Vec<u8> {
+        self.model
+            .get()
+            .map(|model| model.tokenizer.decode_bytes(tokens))
             .unwrap_or_default()
     }
 

@@ -125,6 +125,19 @@ pub trait BatchedInferenceServer: InferenceServer {
     /// Detokenize generated token ids back to text. Called by the framework loop per emitted token.
     fn detokenize(&self, tokens: &[u32]) -> String;
 
+    /// Detokenize generated token ids to RAW BYTES, not guaranteed to be valid UTF-8 on their
+    /// own. This is the primitive the framework loop actually streams through: byte-level BPE
+    /// tokenizers routinely split a multi-byte character across tokens, so per-token text decode
+    /// can fail (or emit U+FFFD) mid-character — the loop instead feeds these bytes through a
+    /// per-sequence [`Utf8Buffer`](crate::utf8::Utf8Buffer) and emits only complete text.
+    ///
+    /// The default round-trips through [`detokenize`](Self::detokenize), so a model whose
+    /// per-token decode is already total needs nothing extra; models with a byte-level tokenizer
+    /// (e.g. Tiktoken) override this with their tokenizer's infallible byte decode.
+    fn detokenize_bytes(&self, tokens: &[u32]) -> Vec<u8> {
+        self.detokenize(tokens).into_bytes()
+    }
+
     /// Token ids that, when generated, end a sequence (EOS/EOT/EOM, …).
     fn stop_ids(&self) -> Vec<u32>;
 

@@ -32,6 +32,7 @@ use crate::{
     batching::{step_round, ActiveSeq, BatchedInferenceServer, CacheOf, StepOutcome},
     errors::{InferenceError, InferenceResult},
     sampler::NextTokenSampler,
+    utf8::Utf8Buffer,
     GeneratedItem, GeneratedItemEmitter, InferenceJob, Stats,
 };
 
@@ -118,6 +119,12 @@ impl<Server: BatchedInferenceServer + 'static> Default for BatchingChannel<Serve
 struct JobMeta {
     /// Where this sequence's text is streamed.
     emitter: GeneratedItemEmitter,
+    /// Per-sequence detok cursor: byte-level BPE can split a multi-byte UTF-8 character across
+    /// tokens, so the loop streams each token's RAW BYTES
+    /// ([`detokenize_bytes`](BatchedInferenceServer::detokenize_bytes)) through this buffer and
+    /// emits only complete text — never a panic, never mid-stream U+FFFD. Every retire path
+    /// flushes it ([`flush_detok`]) so trailing held-back bytes are not silently dropped.
+    detok: Utf8Buffer,
     /// Per-sequence sampler, built from the server's sampling config at admission and persisted
     /// for the sequence's whole generation — same as the single-request path, where one (possibly
     /// seeded) sampler's RNG advances across all of a request's tokens. Rebuilding per round would
@@ -366,6 +373,7 @@ fn admit<S: BatchedInferenceServer>(
             finished: false,
             extra: JobMeta {
                 emitter: job.emitter,
+                detok: Utf8Buffer::new(),
                 // Built once at admission so the sampler (and its RNG) persists across the
                 // sequence's rounds; config changes take effect for later-admitted sequences.
                 sampler: Some(server.next_token_sampler()),
@@ -416,6 +424,7 @@ fn step<S: BatchedInferenceServer>(server: &mut S, active: &mut Vec<JobSeq<S>>) 
         }
         Err(err) => {
             for seq in active.iter_mut() {
+                flush_detok(&mut seq.extra);
                 if let Some(completion) = seq.extra.completion.take() {
                     let _ = completion.send(Err(err.clone()));
                 }
@@ -425,19 +434,25 @@ fn step<S: BatchedInferenceServer>(server: &mut S, active: &mut Vec<JobSeq<S>>) 
         }
     };
 
-    // STREAM: for each advanced sequence, emit the new token's text (a stop token is not streamed)
-    // or forward a per-sequence forward error to its completion sender.
+    // STREAM: for each advanced sequence, push the new token's raw bytes through its detok
+    // cursor and emit whatever text is now complete (a stop token is not streamed; bytes that end
+    // mid-character are held back for the next round). A per-sequence forward error goes to its
+    // completion sender instead.
     for (seq, outcome) in active.iter_mut().zip(outcomes) {
         match outcome {
             StepOutcome::Stepped { token, is_stop, .. } => {
                 if !is_stop {
-                    let text = server.detokenize(&[token]);
-                    if !text.is_empty() {
+                    let bytes = server.detokenize_bytes(&[token]);
+                    if let Some(text) = seq.extra.detok.push(&bytes) {
                         seq.extra.emitter.completed(GeneratedItem::Text(text));
                     }
                 }
             }
             StepOutcome::Failed(err) => {
+                // Flush held-back bytes BEFORE the completion fires (mirrors the
+                // `decoder()`-error path above), so the RETIRE invariant — trailing text always
+                // reaches the emitter before completion — holds on this path too.
+                flush_detok(&mut seq.extra);
                 if let Some(completion) = seq.extra.completion.take() {
                     let _ = completion.send(Err(err));
                 }
@@ -446,14 +461,19 @@ fn step<S: BatchedInferenceServer>(server: &mut S, active: &mut Vec<JobSeq<S>>) 
         }
     }
 
-    // RETIRE: drop finished sequences and signal completion, freeing capacity for admission. The
-    // completion sender is `.take()`n at every send site, so a sequence retired by a forward error
-    // (its `Err` already sent above) sends nothing here. That matters: the channel is a bounded
-    // one-shot, so a second send with the `Err` still buffered would block the worker — and the
-    // public `submit()` lets callers hold the receiver and recv much later — stalling every other
-    // active sequence.
+    // RETIRE: drop finished sequences and signal completion, freeing capacity for admission.
+    // Flushing the detok cursor FIRST covers every retire path through this sweep — stop token,
+    // `max_gen` cap, empty prompt and forward failure (`step_round` marks failed sequences
+    // finished) — so held-back trailing bytes always reach the emitter before completion fires.
+
+    // The completion sender is `.take()`n at every send site, so a sequence retired by a forward
+    // error (its `Err` already sent above) sends nothing here. That matters: the channel is a
+    // bounded one-shot, so a second send with the `Err` still buffered would block the worker —
+    // and the public `submit()` lets callers hold the receiver and recv much later — stalling
+    // every other active sequence.
     active.retain_mut(|seq| {
         if seq.finished {
+            flush_detok(&mut seq.extra);
             if let Some(completion) = seq.extra.completion.take() {
                 let mut stats = Stats::new();
                 stats
@@ -466,6 +486,17 @@ fn step<S: BatchedInferenceServer>(server: &mut S, active: &mut Vec<JobSeq<S>>) 
             true
         }
     });
+}
+
+/// Drain a retiring sequence's detok cursor into its emitter. At true end of stream a held-back
+/// partial character can never complete, so lossy U+FFFD replacement is permitted here (and only
+/// here) rather than silently dropping the bytes. Called on EVERY retire path: the [`step`]
+/// retire sweep (stop token, `max_gen` cap, empty prompt, forward failure) and the
+/// `decoder()`-error mass-retire.
+fn flush_detok(meta: &mut JobMeta) {
+    if let Some(text) = meta.detok.finish() {
+        meta.emitter.completed(GeneratedItem::Text(text));
+    }
 }
 
 fn worker_gone() -> InferenceError {
@@ -886,7 +917,8 @@ mod tests {
         // Job 2 must still be served — proving the worker did not block on a second send.
         let (job2, _h2) = InferenceJob::create(InferenceTask::Prompt("b".into()), NullListener);
         let rx2 = channel.submit(job2).unwrap();
-        rx2.recv_timeout(std::time::Duration::from_secs(5))
+        let _ = rx2
+            .recv_timeout(std::time::Duration::from_secs(5))
             .expect("worker blocked: completion was sent twice for the failed sequence");
 
         // The first receiver yields exactly one message (the `Err`), then disconnects — no
@@ -1023,6 +1055,202 @@ mod tests {
             handle.join(),
             "7".repeat(16),
             "emitted text must come from the server's configured sampler, not argmax"
+        );
+    }
+
+    /// A decoder that emits a fixed token script (one token per step), then the stop id. Used by
+    /// the byte-level detok tests, where tokens ARE byte values and the script deliberately
+    /// splits a multi-byte UTF-8 character across steps.
+    #[derive(Debug, Clone)]
+    struct ScriptedDecoder {
+        script: Vec<u32>,
+    }
+
+    /// Token ids 0..=255 are the raw bytes; 256 is the stop id.
+    const BYTE_STOP: u32 = 256;
+    const BYTE_VOCAB: usize = 257;
+
+    impl BatchedDecoder for ScriptedDecoder {
+        type Cache = usize;
+
+        fn device(&self) -> burn::tensor::Device {
+            INFERENCE_DEVICE.clone()
+        }
+
+        fn allocate_cache(&self, _capacity: BatchCapacity) -> usize {
+            0
+        }
+
+        fn forward(
+            &mut self,
+            _batch: ForwardBatch,
+            cache: &mut usize,
+        ) -> InferenceResult<ForwardOutput> {
+            let step = *cache;
+            *cache += 1;
+
+            let token = self.script.get(step).copied().unwrap_or(BYTE_STOP) as usize;
+
+            let mut data = vec![0.0f32; BYTE_VOCAB];
+            data[token] = 1.0;
+            let logits = Tensor::<3>::from_data(
+                TensorData::new(data, [1, 1, BYTE_VOCAB]),
+                &*INFERENCE_DEVICE,
+            );
+            Ok(ForwardOutput { logits })
+        }
+    }
+
+    /// A server with a BYTE-LEVEL vocab: token ids are raw byte values, so a multi-byte UTF-8
+    /// character genuinely splits across tokens (like Llama-3's Tiktoken). Its `detokenize` is
+    /// deliberately STRICT — it panics on a partial character, exactly like
+    /// `Tiktoken::decode`'s `.expect` — so these tests prove the worker streams through the
+    /// byte-level `detokenize_bytes` path instead.
+    #[derive(Debug, Clone)]
+    struct ByteServer {
+        loaded: bool,
+        decoder: ScriptedDecoder,
+        max_gen: usize,
+    }
+
+    impl Default for ByteServer {
+        fn default() -> Self {
+            Self {
+                loaded: false,
+                decoder: ScriptedDecoder { script: Vec::new() },
+                max_gen: 16,
+            }
+        }
+    }
+
+    impl ByteServer {
+        fn new(script: Vec<u32>, max_gen: usize) -> Self {
+            Self {
+                loaded: false,
+                decoder: ScriptedDecoder { script },
+                max_gen,
+            }
+        }
+    }
+
+    impl ServerConfigParsing for ByteServer {
+        type Config = FakeConfig;
+        fn parse_cli_config(&mut self, _args: &clap::ArgMatches) {}
+        fn parse_json_config(&mut self, _json: &str) {}
+    }
+
+    impl InferenceServer for ByteServer {
+        fn load(&mut self) -> InferenceResult<Option<Stats>> {
+            self.loaded = true;
+            Ok(None)
+        }
+        fn is_loaded(&mut self) -> bool {
+            self.loaded
+        }
+        fn unload(&mut self) -> InferenceResult<Option<Stats>> {
+            self.loaded = false;
+            Ok(None)
+        }
+        fn run_job(&mut self, _job: InferenceJob) -> InferenceResult<Stats> {
+            Ok(Stats::new())
+        }
+        fn clear_state(&mut self) -> InferenceResult<()> {
+            Ok(())
+        }
+    }
+
+    impl BatchedInferenceServer for ByteServer {
+        type Decoder = ScriptedDecoder;
+
+        fn decoder(&mut self) -> InferenceResult<&mut ScriptedDecoder> {
+            self.loaded = true;
+            Ok(&mut self.decoder)
+        }
+
+        fn batch_capacity(&self) -> BatchCapacity {
+            BatchCapacity {
+                max_slots: 1,
+                max_kv_tokens: 1024,
+            }
+        }
+
+        fn tokenize(&self, task: &InferenceTask) -> InferenceResult<Vec<u32>> {
+            // The prompt's bytes are its tokens (the decoder ignores them anyway).
+            let InferenceTask::Prompt(prompt) = task else {
+                return Ok(vec![b'?' as u32]);
+            };
+            Ok(prompt.bytes().map(u32::from).collect())
+        }
+
+        /// STRICT per-token text decode, like `Tiktoken::decode`: panics on a partial character.
+        /// The worker must never call this per generated token — that is the bug S1 fixes.
+        fn detokenize(&self, tokens: &[u32]) -> String {
+            let bytes: Vec<u8> = tokens.iter().map(|&t| t as u8).collect();
+            String::from_utf8(bytes).expect("partial UTF-8: per-token text decode is unsound")
+        }
+
+        fn detokenize_bytes(&self, tokens: &[u32]) -> Vec<u8> {
+            tokens.iter().map(|&t| t as u8).collect()
+        }
+
+        fn stop_ids(&self) -> Vec<u32> {
+            vec![BYTE_STOP]
+        }
+
+        fn max_gen_tokens(&self) -> usize {
+            self.max_gen
+        }
+    }
+
+    /// REGRESSION (the live panic-class bug): a multi-byte character split across tokens must
+    /// stream as the complete character — exactly once, no U+FFFD, no panic — and the worker must
+    /// survive to serve a second job. Before S1 the worker decoded each token to TEXT in
+    /// isolation; the first half of the emoji failed that decode (`ByteServer::detokenize`
+    /// panics, like `Tiktoken::decode`'s `.expect`) and the panic killed the channel permanently.
+    #[test]
+    fn split_multibyte_character_streams_intact_and_worker_survives() {
+        // 🦀 is 4 bytes, one per token, followed by an ASCII '!'.
+        let mut script: Vec<u32> = "🦀".bytes().map(u32::from).collect();
+        script.push(b'!' as u32);
+        let channel = BatchingChannel::<ByteServer>::with_server(ByteServer::new(script, 16));
+
+        let (job, handle) =
+            InferenceJob::create(InferenceTask::Prompt("a".into()), TextGenerationListener::default());
+        channel.submit(job).unwrap().recv().unwrap().unwrap();
+
+        let text = handle.join();
+        assert_eq!(text, "🦀!", "split emoji must reassemble exactly once");
+        assert!(!text.contains('\u{FFFD}'), "no mid-stream replacement chars");
+
+        // The worker survived (no panic on the partial-character tokens): a second job completes.
+        let (job2, h2) =
+            InferenceJob::create(InferenceTask::Prompt("b".into()), TextGenerationListener::default());
+        channel
+            .submit(job2)
+            .expect("worker must still accept jobs")
+            .recv()
+            .expect("worker must survive a split multi-byte character")
+            .unwrap();
+        assert_eq!(h2.join(), "🦀!");
+    }
+
+    /// A sequence retired with held-back bytes (here: the `max_gen` cap lands mid-character) must
+    /// FLUSH its detok cursor — the trailing bytes reach the listener (lossily, U+FFFD is
+    /// permitted at true end of stream) instead of being silently dropped, and completion fires.
+    #[test]
+    fn retire_flushes_trailing_partial_character() {
+        // Only the first 2 of 🦀's 4 bytes fit under max_gen == 2.
+        let script: Vec<u32> = "🦀".bytes().map(u32::from).collect();
+        let channel = BatchingChannel::<ByteServer>::with_server(ByteServer::new(script, 2));
+
+        let (job, handle) =
+            InferenceJob::create(InferenceTask::Prompt("a".into()), TextGenerationListener::default());
+        channel.submit(job).unwrap().recv().unwrap().unwrap();
+
+        assert_eq!(
+            handle.join(),
+            "\u{FFFD}",
+            "held-back bytes must flush on retire (lossy replacement at end of stream)"
         );
     }
 

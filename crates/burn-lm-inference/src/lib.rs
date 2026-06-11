@@ -18,8 +18,8 @@ pub mod utils;
 // ---------------------------------------------------------------------------
 // Re-exports for convenience so plugins implementors can just do:
 pub use crate::batching::{
-    step_round, ActiveSeq, BatchCapacity, BatchedDecoder, BatchedInferenceServer, CacheOf,
-    ForwardBatch, ForwardOutput, StepOutcome,
+    step_round, ActiveSeq, BatchCapacity, BatchedDecoder, BatchedInferenceServer, DecodeRow,
+    PrefillBudget, StepOutcome,
 };
 pub use crate::channels::batching::BatchingChannel;
 pub use crate::channels::mutex::MutexChannel;

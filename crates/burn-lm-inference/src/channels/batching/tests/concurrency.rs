@@ -1,7 +1,9 @@
 use super::super::*;
 use super::fakes::*;
 use crate::{
+    batching::{step_round, ActiveSeq, PrefillBudget, StepOutcome},
     job::{GenerationParams, InferenceJob, InferenceTask},
+    sampler::Sampler,
     TextGenerationListener,
 };
 use std::sync::{Arc, Mutex};
@@ -42,6 +44,120 @@ fn capacity_one_serializes() {
     assert!(
         last0 < first1 || last1 < first0,
         "sequences interleaved but capacity==1 should serialize them: {log:?}"
+    );
+}
+
+/// SLOT REUSE, no residue: with capacity 1 every job runs in slot 0, so the second job reuses
+/// the first one's slot. The fake decoder's per-slot step counter is its stand-in cache: if the
+/// worker skipped `release` on retire (or the decoder kept slot state across `release`), the
+/// second job would resume the first's counter past `emit` and stop immediately, producing
+/// different output. Both jobs must produce identical, full output.
+#[test]
+fn a_retired_sequences_slot_is_reused_with_no_residue() {
+    let channel = BatchingChannel::<FakeServer>::with_server(FakeServer::new(
+        1,
+        Arc::new(Mutex::new(Vec::new())),
+    ));
+
+    let run = || {
+        let (job, handle) = InferenceJob::create(
+            InferenceTask::Prompt("a".into()),
+            GenerationParams::default(),
+            TextGenerationListener::default(),
+        );
+        channel.submit(job).unwrap().recv().unwrap().unwrap();
+        handle.join()
+    };
+
+    let first = run();
+    let second = run();
+    assert_eq!(first, "10101010", "the first job runs a full generation");
+    assert_eq!(
+        second, first,
+        "a reused slot must start fresh — residue from the previous sequence changed the output"
+    );
+}
+
+/// PREFILL BUDGET: while another sequence is mid-decode, at most ONE prompt prefills per round;
+/// the deferred prompt's tail is untouched and it prefills the next round. This drives
+/// `step_round` exactly like the serving worker does — one call per sequence, all sharing the
+/// round's single [`PrefillBudget`] — so a per-call budget regression (where a single-sequence
+/// slice never sees the others decoding) fails here.
+#[test]
+fn at_most_one_prompt_prefills_per_round_while_another_sequence_decodes() {
+    fn seq(slot: usize, tokens: Vec<u32>) -> ActiveSeq<()> {
+        ActiveSeq {
+            slot,
+            tokens,
+            processed: 0,
+            generated: 0,
+            max_gen: 8,
+            finished: false,
+            extra: (),
+        }
+    }
+
+    // `emit` is high so nothing stops mid-test.
+    let mut decoder = FakeDecoder::new(Arc::new(Mutex::new(Vec::new())), 100);
+    let mut sampler = Sampler::default();
+    let stop_ids = [0u32];
+
+    // Slot 0 is GENUINELY mid-decode: its prompt was already prefilled (`processed > 0`) and it
+    // owes one new token. (A fresh one-token prompt would NOT count — `PrefillBudget` requires
+    // `processed > 0`, so a brand-new batch never defers its own prompts.) Slots 1 and 2 hold
+    // fresh multi-token prompts.
+    let mut mid_decode = seq(0, vec![10, 10]);
+    mid_decode.processed = 1;
+    mid_decode.generated = 1;
+    let mut active = vec![mid_decode, seq(1, vec![11, 11]), seq(2, vec![12, 12])];
+
+    // Round 1: one budget for the round, one `step_round` call per sequence (the worker's shape).
+    let mut budget = PrefillBudget::for_round(&active);
+    let outcomes: Vec<StepOutcome> = (0..active.len())
+        .map(|i| {
+            step_round(
+                &mut decoder,
+                &mut active[i..i + 1],
+                &mut sampler,
+                &stop_ids,
+                &mut budget,
+            )
+            .pop()
+            .expect("one sequence in yields exactly one outcome")
+        })
+        .collect();
+
+    assert!(
+        matches!(outcomes[0], StepOutcome::Stepped { .. }),
+        "the decoding sequence advances"
+    );
+    assert!(
+        matches!(outcomes[1], StepOutcome::Stepped { .. }),
+        "exactly one prompt prefills this round"
+    );
+    assert!(
+        matches!(outcomes[2], StepOutcome::Skipped),
+        "the second prompt must defer while another sequence is decoding"
+    );
+    assert_eq!(
+        active[2].processed, 0,
+        "a deferred prompt's tail is untouched"
+    );
+
+    // Round 2: a fresh budget admits the deferred prompt.
+    let mut budget = PrefillBudget::for_round(&active);
+    let outcome = step_round(
+        &mut decoder,
+        &mut active[2..3],
+        &mut sampler,
+        &stop_ids,
+        &mut budget,
+    )
+    .pop()
+    .expect("one sequence in yields exactly one outcome");
+    assert!(
+        matches!(outcome, StepOutcome::Stepped { .. }),
+        "the deferred prompt prefills on the next round"
     );
 }
 

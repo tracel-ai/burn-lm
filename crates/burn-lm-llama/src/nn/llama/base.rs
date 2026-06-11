@@ -290,6 +290,7 @@ impl LlamaConfig {
             cache,
             pos_encoding,
             device: device.clone(),
+            slots: Default::default(),
         };
 
         Ok(inference::Llama { tokenizer, decoder })

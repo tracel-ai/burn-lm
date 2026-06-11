@@ -4,7 +4,7 @@ use crate::{
     errors::InferenceError,
     job::{GenerationParams, InferenceJob, InferenceTask},
 };
-use std::sync::{atomic::AtomicUsize, Arc, Mutex};
+use std::sync::{Arc, Mutex};
 
 /// STRESS, exactly-one-reply invariant: a concurrent burst against a depth-2 queue produces
 /// mixed outcomes — completed, shed with a synchronous `Overloaded`, cancelled while queued —
@@ -12,19 +12,9 @@ use std::sync::{atomic::AtomicUsize, Arc, Mutex};
 /// deterministically; the actual interleaving comes from real thread scheduling.
 #[test]
 fn every_submission_resolves_exactly_once_under_overload() {
-    let server = FakeServer {
-        loaded: false,
-        slots: 1,
-        decoder: FakeDecoder {
-            log: Arc::new(Mutex::new(Vec::new())),
-            emit: 2,
-            extra_rows: 0,
-            step_delay_ms: 2, // slow enough that submissions genuinely pile up
-            panic_at_step: None,
-        },
-        capacity_calls: Arc::new(AtomicUsize::new(0)),
-        fixed_token: None,
-    };
+    let mut server = FakeServer::new(1, Arc::new(Mutex::new(Vec::new())));
+    server.decoder.emit = 2;
+    server.decoder.step_delay_ms = 2; // slow enough that submissions genuinely pile up
     let channel = BatchingChannel::<FakeServer>::with_server_and_depth(server, 2);
 
     let handles: Vec<_> = (0..16)

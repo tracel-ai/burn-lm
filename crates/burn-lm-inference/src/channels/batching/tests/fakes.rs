@@ -1,12 +1,14 @@
 use super::super::*;
 use crate::{
-    batching::{BatchCapacity, BatchedDecoder, ForwardBatch, ForwardOutput},
+    batching::{BatchCapacity, BatchedDecoder, DecodeRow},
+    errors::InferenceError,
     job::{CancelSignal, GenerationParams, InferenceJob, InferenceTask},
     sampler::NextTokenSampler,
     server::{InferenceServer, ServerConfigParsing},
     InferenceServerConfig, Stats, INFERENCE_DEVICE,
 };
 use burn::tensor::{Int, Tensor, TensorData};
+use std::collections::HashMap;
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
     Arc, Mutex,
@@ -21,76 +23,108 @@ impl InferenceServerConfig for FakeConfig {}
 /// engine's generation interleaving — independent of how the async emitter threads later drain.
 pub(super) type OrderLog = Arc<Mutex<Vec<usize>>>;
 
-/// A trivial decoder. Its cache is a per-sequence step counter (owned by the engine). It echoes
-/// the sequence's identity token (the prompt's first token, which it then re-receives every
-/// decode step) for a few steps, recording the emission order, then emits the stop id (0).
+/// A trivial decoder. It keeps a per-slot step counter (its only "cache"). It echoes the
+/// sequence's identity token (the prompt's first token, which it then re-receives every decode
+/// step) for a few steps, recording the emission order, then emits the stop id (0).
 #[derive(Debug, Clone)]
 pub(super) struct FakeDecoder {
     pub(super) log: OrderLog,
     /// How many tokens each sequence emits before stopping.
     pub(super) emit: usize,
-    /// Extra logits rows beyond the single input row — simulates a decoder that violates the
+    /// Extra logits rows beyond the input rows — simulates a decoder that violates the
     /// rows-in==rows-out contract. 0 = well-behaved.
     pub(super) extra_rows: usize,
-    /// Per-forward sleep — simulates a slow model so a test can observe a job in flight.
+    /// Per-step sleep — simulates a slow model so a test can observe a job in flight.
     pub(super) step_delay_ms: u64,
-    /// When set, `forward` PANICS at this per-sequence step — simulates a model bug that
+    /// When set, the decoder PANICS at this per-sequence step — simulates a model bug that
     /// unwinds the worker iteration (the failure-ladder rung above per-sequence errors).
     pub(super) panic_at_step: Option<usize>,
+    /// How many upcoming `prefill` calls fail (e.g. a prompt past the context window). Per the
+    /// [`BatchedDecoder::prefill`] contract the failing call leaves the slot untouched.
+    pub(super) fail_prefills: usize,
+    /// Per-slot step counters: the decoder-owned stand-in for a real per-slot KV cache.
+    pub(super) steps: HashMap<usize, usize>,
 }
 
 pub(super) const VOCAB: usize = 64;
 
-impl BatchedDecoder for FakeDecoder {
-    type Cache = usize;
-
-    fn device(&self) -> burn::tensor::Device {
-        INFERENCE_DEVICE.clone()
+impl FakeDecoder {
+    pub(super) fn new(log: OrderLog, emit: usize) -> Self {
+        Self {
+            log,
+            emit,
+            extra_rows: 0,
+            step_delay_ms: 0,
+            panic_at_step: None,
+            fail_prefills: 0,
+            steps: HashMap::new(),
+        }
     }
 
-    fn allocate_cache(&self, _capacity: BatchCapacity) -> usize {
-        0
-    }
-
-    fn forward(
-        &mut self,
-        batch: ForwardBatch,
-        cache: &mut usize,
-    ) -> InferenceResult<ForwardOutput> {
+    /// One step for `slot` with `last_token` as the identity: bump the slot's counter, maybe
+    /// sleep/panic, log the emission, and pick the next token (the stop id once `emit` is spent).
+    fn step_slot(&mut self, slot: usize, last_token: u32) -> usize {
         if self.step_delay_ms > 0 {
             std::thread::sleep(std::time::Duration::from_millis(self.step_delay_ms));
         }
 
-        let step = *cache;
-        *cache += 1;
+        let counter = self.steps.entry(slot).or_insert(0);
+        let step = *counter;
+        *counter += 1;
 
         if self.panic_at_step == Some(step) {
             panic!("scripted decoder panic at step {step}");
         }
 
-        // Identity = last input token (the prompt token on prefill, the echoed token after).
-        let ids = batch
-            .input_tokens
-            .into_data()
-            .convert::<u32>()
-            .into_vec::<u32>()
-            .unwrap();
-        let identity = *ids.last().unwrap() as usize;
-
-        let token = if step < self.emit {
+        let identity = last_token as usize;
+        if step < self.emit {
             // Record which sequence emitted, synchronously, in true generation order.
             self.log.lock().unwrap().push(identity % 2);
             identity % VOCAB
         } else {
             0 // stop id
-        };
+        }
+    }
 
-        let rows = 1 + self.extra_rows;
+    /// One-hot logits, one row per produced token plus `extra_rows` zero rows (the contract
+    /// violation a misbehaving decoder would produce).
+    fn logits(&self, tokens: &[usize]) -> Tensor<2> {
+        let rows = tokens.len() + self.extra_rows;
         let mut data = vec![0.0f32; rows * VOCAB];
-        data[token] = 1.0;
-        let logits =
-            Tensor::<3>::from_data(TensorData::new(data, [rows, 1, VOCAB]), &*INFERENCE_DEVICE);
-        Ok(ForwardOutput { logits })
+        for (row, &token) in tokens.iter().enumerate() {
+            data[row * VOCAB + token] = 1.0;
+        }
+        Tensor::<2>::from_data(TensorData::new(data, [rows, VOCAB]), &*INFERENCE_DEVICE)
+    }
+}
+
+impl BatchedDecoder for FakeDecoder {
+    fn prefill(
+        &mut self,
+        slot: usize,
+        tokens: &[u32],
+        _position: usize,
+    ) -> InferenceResult<Tensor<2>> {
+        if self.fail_prefills > 0 {
+            self.fail_prefills -= 1;
+            // Contract: a failing prefill leaves the slot as if it had never been used — so the
+            // slot's step counter is NOT bumped.
+            return Err(InferenceError::ContextLengthExceeded(tokens.len(), 0));
+        }
+        let token = self.step_slot(slot, *tokens.last().unwrap());
+        Ok(self.logits(&[token]))
+    }
+
+    fn decode(&mut self, rows: &[DecodeRow]) -> InferenceResult<Tensor<2>> {
+        let tokens: Vec<usize> = rows
+            .iter()
+            .map(|row| self.step_slot(row.slot, row.token))
+            .collect();
+        Ok(self.logits(&tokens))
+    }
+
+    fn release(&mut self, slot: usize) {
+        self.steps.remove(&slot);
     }
 }
 
@@ -119,6 +153,10 @@ pub(super) struct FakeServer {
     /// params carry a temperature overrides this with `temperature as u32` (the merge-over-
     /// config behavior a real server implements), so tests can observe per-request samplers.
     pub(super) fixed_token: Option<u32>,
+    /// How many tokens `tokenize` produces per prompt (the identity token, repeated). The default
+    /// 1 makes a sequence's first step decode work; tests that must exercise the PREFILL path
+    /// (multi-token prompt work) raise it via [`with_prompt_tokens`](Self::with_prompt_tokens).
+    pub(super) prompt_tokens: usize,
 }
 
 impl Default for FakeServer {
@@ -132,52 +170,28 @@ impl FakeServer {
         Self {
             loaded: false,
             slots,
-            decoder: FakeDecoder {
-                log,
-                emit: 4,
-                extra_rows: 0,
-                step_delay_ms: 0,
-                panic_at_step: None,
-            },
+            decoder: FakeDecoder::new(log, 4),
             capacity_calls: Arc::new(AtomicUsize::new(0)),
             fixed_token: None,
+            prompt_tokens: 1,
         }
     }
 
     /// A server whose decoder returns 2 logits rows for a 1-row input — violates the forward
     /// rows-in==rows-out contract.
     pub(super) fn new_bad(slots: usize, log: OrderLog) -> Self {
-        Self {
-            loaded: false,
-            slots,
-            decoder: FakeDecoder {
-                log,
-                emit: 4,
-                extra_rows: 1,
-                step_delay_ms: 0,
-                panic_at_step: None,
-            },
-            capacity_calls: Arc::new(AtomicUsize::new(0)),
-            fixed_token: None,
-        }
+        let mut server = Self::new(slots, log);
+        server.decoder.extra_rows = 1;
+        server
     }
 
     /// A server whose decoder emits many tokens, each after a small sleep — a long-running job
     /// a test can interrogate (e.g. unload) while it is demonstrably still in flight.
     pub(super) fn new_slow(slots: usize, log: OrderLog) -> Self {
-        Self {
-            loaded: false,
-            slots,
-            decoder: FakeDecoder {
-                log,
-                emit: 1000, // effectively capped by `max_gen_tokens` (16)
-                extra_rows: 0,
-                step_delay_ms: 20,
-                panic_at_step: None,
-            },
-            capacity_calls: Arc::new(AtomicUsize::new(0)),
-            fixed_token: None,
-        }
+        let mut server = Self::new(slots, log);
+        server.decoder.emit = 1000; // effectively capped by `max_gen_tokens` (16)
+        server.decoder.step_delay_ms = 20;
+        server
     }
 
     /// A server whose decoder PANICS at the given per-sequence step, after a small per-step
@@ -201,19 +215,23 @@ impl FakeServer {
     /// A server reporting `slots` free slots that records every `batch_capacity` call into
     /// `calls`, so a test can tell whether the worker busy-spins when nothing is admittable.
     pub(super) fn with_capacity_probe(slots: usize, calls: Arc<AtomicUsize>) -> Self {
-        Self {
-            loaded: false,
-            slots,
-            decoder: FakeDecoder {
-                log: Arc::new(Mutex::new(Vec::new())),
-                emit: 4,
-                extra_rows: 0,
-                step_delay_ms: 0,
-                panic_at_step: None,
-            },
-            capacity_calls: calls,
-            fixed_token: None,
-        }
+        let mut server = Self::new(slots, Arc::new(Mutex::new(Vec::new())));
+        server.capacity_calls = calls;
+        server
+    }
+
+    /// A server whose prompts tokenize to `n` tokens, so a sequence's first step is genuine
+    /// PREFILL work (the default single-token prompt goes straight to `decode`).
+    pub(super) fn with_prompt_tokens(mut self, n: usize) -> Self {
+        self.prompt_tokens = n;
+        self
+    }
+
+    /// A server whose decoder fails its next `n` `prefill` calls (leaving the slot untouched,
+    /// per the `prefill` contract) and behaves normally afterwards.
+    pub(super) fn with_failing_prefills(mut self, n: usize) -> Self {
+        self.decoder.fail_prefills = n;
+        self
     }
 }
 
@@ -269,7 +287,7 @@ impl BatchedInferenceServer for FakeServer {
             InferenceTask::Prompt(p) if p == "b" => 11u32,
             _ => 12u32,
         };
-        Ok(vec![id])
+        Ok(vec![id; self.prompt_tokens.max(1)])
     }
 
     fn detokenize(&self, tokens: &[u32]) -> String {
@@ -323,30 +341,21 @@ pub(super) struct ScriptedDecoder {
     /// When set to `(n, signal)`, fires `signal` while producing the n-th generated token —
     /// a deterministic "client disconnected mid-generation" event, with no sleeps to race.
     pub(super) cancel_after: Option<(usize, CancelSignal)>,
+    /// Per-slot step counters: the decoder-owned stand-in for a real per-slot KV cache.
+    pub(super) steps: HashMap<usize, usize>,
 }
 
 /// Token ids 0..=255 are the raw bytes; 256 is the stop id.
 pub(super) const BYTE_STOP: u32 = 256;
 pub(super) const BYTE_VOCAB: usize = 257;
 
-impl BatchedDecoder for ScriptedDecoder {
-    type Cache = usize;
-
-    fn device(&self) -> burn::tensor::Device {
-        INFERENCE_DEVICE.clone()
-    }
-
-    fn allocate_cache(&self, _capacity: BatchCapacity) -> usize {
-        0
-    }
-
-    fn forward(
-        &mut self,
-        _batch: ForwardBatch,
-        cache: &mut usize,
-    ) -> InferenceResult<ForwardOutput> {
-        let step = *cache;
-        *cache += 1;
+impl ScriptedDecoder {
+    /// One scripted step for `slot`: emit the script's next token (the stop id past the end),
+    /// as one-hot `[1, vocab]` logits.
+    fn step_slot(&mut self, slot: usize) -> InferenceResult<Tensor<2>> {
+        let counter = self.steps.entry(slot).or_insert(0);
+        let step = *counter;
+        *counter += 1;
 
         if let Some((after, cancel)) = &self.cancel_after {
             if step + 1 == *after {
@@ -358,11 +367,33 @@ impl BatchedDecoder for ScriptedDecoder {
 
         let mut data = vec![0.0f32; BYTE_VOCAB];
         data[token] = 1.0;
-        let logits = Tensor::<3>::from_data(
-            TensorData::new(data, [1, 1, BYTE_VOCAB]),
+        Ok(Tensor::<2>::from_data(
+            TensorData::new(data, [1, BYTE_VOCAB]),
             &*INFERENCE_DEVICE,
-        );
-        Ok(ForwardOutput { logits })
+        ))
+    }
+}
+
+impl BatchedDecoder for ScriptedDecoder {
+    fn prefill(
+        &mut self,
+        slot: usize,
+        _tokens: &[u32],
+        _position: usize,
+    ) -> InferenceResult<Tensor<2>> {
+        self.step_slot(slot)
+    }
+
+    fn decode(&mut self, rows: &[DecodeRow]) -> InferenceResult<Tensor<2>> {
+        let outputs = rows
+            .iter()
+            .map(|row| self.step_slot(row.slot))
+            .collect::<InferenceResult<Vec<_>>>()?;
+        Ok(Tensor::cat(outputs, 0))
+    }
+
+    fn release(&mut self, slot: usize) {
+        self.steps.remove(&slot);
     }
 }
 
@@ -395,6 +426,7 @@ impl ByteServer {
             decoder: ScriptedDecoder {
                 script,
                 cancel_after: None,
+                steps: HashMap::new(),
             },
             max_gen,
         }

@@ -77,6 +77,93 @@ fn worker_survives_a_decoder_contract_violation() {
     assert!(out2.is_err(), "second job should also retire with an error");
 }
 
+/// The rows-in==rows-out check guards the PREFILL call site too, not just decode. A multi-token
+/// prompt makes the sequence's first step genuine prefill work, so the misbehaving decoder's
+/// extra logits row is caught there: the sequence retires with `BatchContractViolation` and the
+/// worker keeps serving.
+#[test]
+fn worker_survives_a_prefill_contract_violation() {
+    let channel = BatchingChannel::<FakeServer>::with_server(
+        FakeServer::new_bad(1, Arc::new(Mutex::new(Vec::new()))).with_prompt_tokens(3),
+    );
+
+    let (job1, _h1) = InferenceJob::create(
+        InferenceTask::Prompt("a".into()),
+        GenerationParams::default(),
+        NullListener,
+    );
+    let out1 = channel
+        .submit(job1)
+        .unwrap()
+        .recv()
+        .expect("worker must survive");
+    assert!(
+        matches!(out1, Err(InferenceError::BatchContractViolation(_))),
+        "a prefill returning the wrong row count should retire the sequence with a \
+         BatchContractViolation error"
+    );
+
+    // The worker is still alive: a second job is accepted and processed (likewise retired).
+    let (job2, _h2) = InferenceJob::create(
+        InferenceTask::Prompt("b".into()),
+        GenerationParams::default(),
+        NullListener,
+    );
+    let out2 = channel
+        .submit(job2)
+        .expect("worker must still accept jobs")
+        .recv()
+        .expect("worker must survive");
+    assert!(out2.is_err(), "second job should also retire with an error");
+}
+
+/// A failing `prefill` must retire ONLY its own sequence — with the prefill error, no streamed
+/// text — and leave the slot clean: the next job admitted into the same slot (capacity 1) runs a
+/// full, fresh generation. This pins the `prefill` contract ("an erring prefill leaves the slot
+/// as if it had never been used") together with the worker's release-on-every-retire-path.
+#[test]
+fn a_failed_prefill_retires_its_sequence_and_leaves_the_slot_clean() {
+    let channel = BatchingChannel::<FakeServer>::with_server(
+        FakeServer::new(1, Arc::new(Mutex::new(Vec::new())))
+            .with_prompt_tokens(2) // multi-token prompt ⇒ the first step is a real prefill
+            .with_failing_prefills(1),
+    );
+
+    let (job1, h1) = InferenceJob::create(
+        InferenceTask::Prompt("a".into()),
+        GenerationParams::default(),
+        TextGenerationListener::default(),
+    );
+    let out1 = channel
+        .submit(job1)
+        .unwrap()
+        .recv()
+        .expect("worker must survive a failed prefill");
+    assert!(
+        matches!(out1, Err(InferenceError::ContextLengthExceeded(..))),
+        "the sequence should retire with the prefill's own error"
+    );
+    assert_eq!(h1.join(), "", "a failed prefill must not stream any text");
+
+    // Capacity 1 ⇒ the second job reuses slot 0; it must see a pristine slot and complete fully.
+    let (job2, h2) = InferenceJob::create(
+        InferenceTask::Prompt("a".into()),
+        GenerationParams::default(),
+        TextGenerationListener::default(),
+    );
+    channel
+        .submit(job2)
+        .unwrap()
+        .recv()
+        .expect("worker must keep serving")
+        .expect("the slot must be reusable after a failed prefill");
+    assert_eq!(
+        h2.join(),
+        "10101010",
+        "the reused slot must start fresh after the failed prefill"
+    );
+}
+
 /// Completion must be sent EXACTLY ONCE per job. Before the fix, a failed forward sent `Err`
 /// on the completion channel (filling the bounded one-shot) and the retire sweep then sent
 /// `Ok` AGAIN for the same sequence — blocking the worker until the caller drained the first

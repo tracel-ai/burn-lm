@@ -6,10 +6,13 @@
 //! Two drivers consume this seam today, both through the shared decode core [`step_round`]: the
 //! serving `BatchingChannel` worker, whose continuous loop admits queued jobs and streams tokens
 //! per round, and the library's `Llama::generate_batch`, which drives a fixed set of prompts to
-//! completion. Per-sequence state lives in [`ActiveSeq`]; the model only exposes `forward`,
-//! tokenizer primitives and capacity.
+//! completion. Per-sequence state lives in [`ActiveSeq`]; the model only exposes
+//! [`prefill`](BatchedDecoder::prefill)/[`decode`](BatchedDecoder::decode)/
+//! [`release`](BatchedDecoder::release), tokenizer primitives and capacity. Token ids cross the
+//! seam as host data (`&[u32]`, [`DecodeRow`]); the decoder builds its own tensors and owns its
+//! caches internally, keyed by the slot numbers the engine hands it.
 
-use burn::tensor::{Device, Int, Tensor, TensorData};
+use burn::tensor::Tensor;
 
 use crate::{
     errors::{InferenceError, InferenceResult},
@@ -30,73 +33,66 @@ pub struct BatchCapacity {
     /// `active.len() < max_slots`, so the actual free slots are `max_slots - active.len()`.
     pub max_slots: usize,
     /// Maximum number of KV-cache tokens across all slots. Declared but NOT yet enforced by
-    /// admission — enforcement pairs with real KV management in Phase 2.
+    /// admission — enforcement arrives together with real KV management.
     pub max_kv_tokens: usize,
 }
 
-/// A ragged batch of token rows to forward through a decoder.
-///
-/// `input_tokens` is `[batch, seq]`. Each row carries its own starting position (`positions`) and
-/// physical cache slot (`cache_slots`) so prefill (long `seq`) and decode (`seq == 1`) work for
-/// sequences admitted at different times.
-///
-/// PHASE-1 SHAPE: the rectangular `[batch, seq]` tensor cannot express a truly ragged round that
-/// fuses a prefill row (long) with decode rows (len 1) without padding — today that never arises
-/// because every batch is a single row. Phase 2 must revisit this layout once the ragged encoding
-/// is decided (padded-rectangular vs a flattened `[total_tokens]` tensor plus per-row lengths,
-/// vLLM-style). Carrying raw token ids here instead of a pre-built tensor would also let
-/// [`BatchedDecoder::device`] be deleted, since the decoder would build its own input tensor.
-#[derive(Debug, Clone)]
-pub struct ForwardBatch {
-    /// Token ids for each active row, shaped `[batch, seq]`.
-    pub input_tokens: Tensor<2, Int>,
-    /// Absolute position of the first token of each row (one per batch row).
-    pub positions: Vec<usize>,
-    /// Physical KV-cache slot assigned to each row (one per batch row).
-    pub cache_slots: Vec<usize>,
-}
-
-/// Output of a single decoder forward pass.
-///
-/// Contract enforced by the engine: `logits` must have exactly one row per input row
-/// (`logits.dims()[0] == batch.input_tokens.dims()[0]`) and at least one position. A decoder that
-/// violates this retires the offending sequence with a [`BatchContractViolation`] error rather than
-/// silently sampling the wrong sequence or panicking the worker.
-///
-/// [`BatchContractViolation`]: crate::InferenceError::BatchContractViolation
-#[derive(Debug, Clone)]
-pub struct ForwardOutput {
-    /// Logits for every position, shaped `[batch, seq, vocab]`.
-    pub logits: Tensor<3>,
+/// One decoding sequence's next input: the token to feed a slot and the absolute position it
+/// sits at. Plain host data — the decoder builds whatever tensors it needs from this.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DecodeRow {
+    /// The slot whose sequence this token advances.
+    pub slot: usize,
+    /// The token id to feed (the one sampled last round).
+    pub token: u32,
+    /// Absolute position of this token in its sequence (== tokens already in the slot).
+    pub position: usize,
 }
 
 /// A reusable, batch-capable decoder primitive.
 ///
-/// Model authors implement this once; both the single-request and (future) continuous-batching
-/// engines call [`forward`](BatchedDecoder::forward) with different shapes.
+/// Model authors implement this once; both the single-request and continuous-batching engines
+/// drive it the same way. The decoder owns its per-sequence caches internally, behind the slot
+/// numbers the engine passes in: the engine assigns each admitted sequence a free slot in
+/// `0..max_slots` (see [`BatchedInferenceServer::batch_capacity`]), prefills the prompt into it,
+/// decodes one token at a time, and releases the slot when the sequence retires. Token ids cross
+/// this seam as host data; the decoder builds its own input tensors on its own device.
 pub trait BatchedDecoder {
-    /// Decoder-managed KV/state cache.
-    type Cache;
-
-    /// The device the model lives on. The generic decode core ([`step_round`]) builds each round's
-    /// input-token tensor on this device so it matches the model's weights — building on the global
-    /// inference device instead would put inputs on the wrong device for a model loaded elsewhere
-    /// (e.g. a unit test on the default device).
-    fn device(&self) -> Device;
-
-    /// Allocate a cache sized for the given capacity.
-    fn allocate_cache(&self, capacity: BatchCapacity) -> Self::Cache;
-
-    /// Forward a ragged batch, returning logits and mutating the cache in place.
-    fn forward(
+    /// Run a whole prompt into one slot, returning the last position's logits, shaped
+    /// `[1, vocab]`.
+    ///
+    /// `position` is the absolute position of `tokens[0]` in the slot's sequence (0 for a fresh
+    /// prompt). A prefill that returns `Err` should leave the slot as if it had never been used.
+    ///
+    /// The engine does not rely on that rollback alone: after a safety review it also calls
+    /// [`release`](Self::release) on a slot right before giving it to a new sequence, so a
+    /// forgotten rollback cannot leak one prompt's state into another. What isolation ultimately
+    /// rests on is `release` actually dropping the slot's state.
+    fn prefill(
         &mut self,
-        batch: ForwardBatch,
-        cache: &mut Self::Cache,
-    ) -> InferenceResult<ForwardOutput>;
-}
+        slot: usize,
+        tokens: &[u32],
+        position: usize,
+    ) -> InferenceResult<Tensor<2>>;
 
-/// The cache type of a server's decoder.
-pub type CacheOf<S> = <<S as BatchedInferenceServer>::Decoder as BatchedDecoder>::Cache;
+    /// Advance every row by one token, returning logits shaped `[rows.len(), vocab]`, where row
+    /// `i` belongs to `rows[i]`.
+    ///
+    /// `decode` returns exactly one logits row per input row — the framework checks this at every
+    /// call site and retires a violating sequence with a `BatchContractViolation` error, never a
+    /// panic. `decode` is never called with an empty `rows` slice.
+    fn decode(&mut self, rows: &[DecodeRow]) -> InferenceResult<Tensor<2>>;
+
+    /// Free the slot, dropping whatever cached state it held; the slot must keep zero residue,
+    /// so the next sequence assigned to it starts fresh. `release` on an already-free slot is a
+    /// no-op.
+    ///
+    /// Cross-sequence isolation ultimately rests on this method: the engine calls it on every
+    /// retire path AND again right before reusing a slot (calling it twice is fine — it is a
+    /// no-op on a free slot), so as long as `release` drops the slot's state, no other mistake
+    /// can leak one sequence's state into another.
+    fn release(&mut self, slot: usize);
+}
 
 /// A server that can expose a [`BatchedDecoder`] for batched serving.
 ///
@@ -113,7 +109,14 @@ pub trait BatchedInferenceServer: InferenceServer {
     fn decoder(&mut self) -> InferenceResult<&mut Self::Decoder>;
 
     /// The decoder's static capacity maxima (see [`BatchCapacity`]). Not a live "free right now"
-    /// figure: the engine owns the active set and derives free capacity as `max - in-use`.
+    /// figure: the engine owns the active set and derives free capacity as `max - in-use`. The
+    /// slot numbers the engine passes to [`prefill`](BatchedDecoder::prefill)/
+    /// [`decode`](BatchedDecoder::decode)/[`release`](BatchedDecoder::release) are `0..max_slots`.
+    ///
+    /// DECISION: capacity stays here on the server rather than becoming a `max_slots` method on
+    /// [`BatchedDecoder`] — it sits next to the other operator-facing limits (`max_kv_tokens`,
+    /// [`max_gen_tokens`](Self::max_gen_tokens)), it keeps the decoder trait pure data plane, and
+    /// admission can ask for it without borrowing (and so lazily loading) the model.
     fn batch_capacity(&self) -> BatchCapacity;
 
     /// Tokenize a submitted task into the token ids the decoder consumes.
@@ -163,27 +166,20 @@ pub trait BatchedInferenceServer: InferenceServer {
         let _ = params;
         Box::new(Sampler::default())
     }
-
-    /// Allocate a fresh per-sequence cache for a newly admitted sequence.
-    ///
-    /// Default implementation routes through [`decoder`](Self::decoder) +
-    /// [`BatchedDecoder::allocate_cache`]. The cache is then OWNED BY THE FRAMEWORK engine, which
-    /// passes it back into [`BatchedDecoder::forward`] on every step for that sequence.
-    fn allocate_cache(&mut self, capacity: BatchCapacity) -> InferenceResult<CacheOf<Self>> {
-        Ok(self.decoder()?.allocate_cache(capacity))
-    }
 }
 
 /// Per-sequence state advanced by [`step_round`].
 ///
-/// This is the *generic* core of an in-flight sequence: its engine-owned [`cache`](Self::cache),
-/// token buffer, position cursor, generated-token counter and `finished` flag. Driver-specific
+/// This is the *generic* core of an in-flight sequence: its decoder [`slot`](Self::slot), token
+/// buffer, position cursor, generated-token counter and `finished` flag. Driver-specific
 /// bookkeeping (a serving job's emitter + completion sender, or the library's
 /// `GenerationContext`) rides along in [`extra`](Self::extra), which `step_round` never touches —
 /// each driver chooses what to attach and how to act on the per-round results.
-pub struct ActiveSeq<Cache, Extra = ()> {
-    /// The model's per-sequence cache, allocated by the driver and passed into every `forward`.
-    pub cache: Cache,
+pub struct ActiveSeq<Extra = ()> {
+    /// The decoder slot this sequence occupies. The engine owns the free-slot list (slots are
+    /// `0..max_slots`), assigns one at admission and releases it on every retire path; the
+    /// decoder keeps the sequence's cache behind this number.
+    pub slot: usize,
     /// Full token buffer (prompt + generated). The next forward consumes the unprocessed tail.
     pub tokens: Vec<u32>,
     /// Number of tokens already pushed through the decoder (== absolute position of next input).
@@ -220,9 +216,58 @@ pub enum StepOutcome {
     Failed(InferenceError),
 }
 
-/// Advance every active sequence by exactly one token: build input from the per-seq cache →
-/// [`forward`](BatchedDecoder::forward) → enforce the rows-in==rows-out contract → slice the last
-/// position's logits → sample → synchronous stop check → advance the cursor / counters.
+/// The one-prompt-per-round prefill budget, computed over the FULL active set at the start of a
+/// round and threaded through every [`step_round`] call of that round.
+///
+/// While any sequence is mid-decode, at most ONE prompt may prefill per round, so a long prompt
+/// cannot stall the decoders for more than one round; with no decoders to stall, prompts run
+/// freely. The budget is a separate value (rather than state `step_round` derives from its input
+/// slice) because a driver may step its sequences through several `step_round` calls in one round
+/// — the serving worker calls once per sequence, each with that sequence's own sampler — and the
+/// budget must be shared across all of them: derived per call, a single-sequence slice never sees
+/// the other sequences decoding and the budget silently stops existing.
+pub struct PrefillBudget {
+    /// Whether any live sequence's unprocessed tail is exactly one token this round (i.e. it is
+    /// decoding, and a long prefill would stall it).
+    any_decoding: bool,
+    /// Set once a prompt has prefilled this round; with `any_decoding`, later prompts defer.
+    prefilled: bool,
+}
+
+impl PrefillBudget {
+    /// Compute the budget for one round from the FULL active set (every sequence the driver will
+    /// step this round, however many `step_round` calls that takes).
+    pub fn for_round<X>(active: &[ActiveSeq<X>]) -> Self {
+        // "Decoding" means the sequence has been through the decoder before (`processed > 0`)
+        // and now owes exactly one new token. Without the `processed > 0` clause a never-run
+        // one-token prompt would count as decoding, making a fresh batch that mixes one-token
+        // and longer prompts defer the longer ones — different from running them all up front.
+        let any_decoding = active.iter().any(|seq| {
+            !seq.finished
+                && seq.generated < seq.max_gen
+                && seq.processed > 0
+                && seq.tokens.len() == seq.processed + 1
+        });
+        Self {
+            any_decoding,
+            prefilled: false,
+        }
+    }
+
+    /// May one more prompt prefill this round? Claims the budget when it answers yes.
+    fn admit_prefill(&mut self) -> bool {
+        if self.prefilled && self.any_decoding {
+            return false;
+        }
+        self.prefilled = true;
+        true
+    }
+}
+
+/// Advance every active sequence by exactly one token: route prompt work through
+/// [`prefill`](BatchedDecoder::prefill) and single-token work through
+/// [`decode`](BatchedDecoder::decode) → enforce the rows-in==rows-out contract → sample from the
+/// returned last-position logits → synchronous stop check → advance the cursor / counters.
 ///
 /// This is the single, generic decode core shared by both drivers (the serving
 /// [`BatchingChannel`](crate::channels::batching::BatchingChannel) worker and the library's
@@ -230,18 +275,23 @@ pub enum StepOutcome {
 /// completion signalling, no emitter ownership, no detokenization — those belong to the driver,
 /// which inspects the returned [`StepOutcome`]s (one per input sequence) to stream/retire.
 ///
+/// A sequence whose unprocessed tail is more than one token is prompt work and prefills, subject
+/// to the caller-supplied [`PrefillBudget`] (at most one prompt per round while others decode); a
+/// deferred prompt yields [`StepOutcome::Skipped`] and stays prompt work for the next round. A
+/// sequence with exactly one new token decodes — still one [`decode`](BatchedDecoder::decode)
+/// call per row for now; fusing the rows into a single call comes next.
+///
 /// Stop detection is **synchronous**: a sampled token that is in `stop_ids` finishes its sequence
 /// in the same round it is produced, so no extra token is generated past a stop id. The `max_gen`
 /// cap is likewise checked in-round.
 pub fn step_round<D: BatchedDecoder, X, S: NextTokenSampler>(
     decoder: &mut D,
-    active: &mut [ActiveSeq<D::Cache, X>],
+    active: &mut [ActiveSeq<X>],
     sampler: &mut S,
     stop_ids: &[u32],
+    budget: &mut PrefillBudget,
 ) -> Vec<StepOutcome> {
     let mut outcomes = Vec::with_capacity(active.len());
-    // Build each round's input tensor on the model's own device (see `BatchedDecoder::device`).
-    let device = decoder.device();
 
     for seq in active.iter_mut() {
         if seq.finished {
@@ -249,39 +299,46 @@ pub fn step_round<D: BatchedDecoder, X, S: NextTokenSampler>(
             continue;
         }
 
-        // No generation budget left (notably `max_gen == 0`): finish without a forward. The cap
-        // bounds *generated* tokens, so enforcing it before prefill keeps a zero-token request a
-        // true no-op instead of prefilling and producing one token.
+        // No generation budget left (notably `max_gen == 0`): finish without touching the model.
+        // The cap bounds *generated* tokens, so enforcing it before prefill keeps a zero-token
+        // request a true no-op instead of prefilling and producing one token.
         if seq.generated >= seq.max_gen {
             seq.finished = true;
             outcomes.push(StepOutcome::Skipped);
             continue;
         }
 
-        // The unprocessed tail: on the first step this is the whole prompt (prefill); afterwards a
-        // single token (decode). An empty prompt cannot generate, so retire it immediately.
+        // The unprocessed tail: on the first step this is the whole prompt; afterwards a single
+        // token. An empty prompt cannot generate, so retire it immediately.
         if seq.processed >= seq.tokens.len() {
             seq.finished = true;
             outcomes.push(StepOutcome::Skipped);
             continue;
         }
 
-        let input_ids: Vec<i32> = seq.tokens[seq.processed..]
-            .iter()
-            .map(|&t| t as i32)
-            .collect();
-        let seq_len = input_ids.len();
         let position = seq.processed;
-
-        let input_tokens =
-            Tensor::<2, Int>::from_data(TensorData::new(input_ids, [1, seq_len]), &device);
-        let batch = ForwardBatch {
-            input_tokens,
-            positions: vec![position],
-            cache_slots: vec![0],
+        let result = if seq.tokens.len() - position > 1 {
+            // Prompt work. Honor the one-prompt-per-round budget: a deferred prompt just waits
+            // for the next round (its tail is untouched, so it stays prompt work).
+            if !budget.admit_prefill() {
+                outcomes.push(StepOutcome::Skipped);
+                continue;
+            }
+            decoder
+                .prefill(seq.slot, &seq.tokens[position..], position)
+                .and_then(|logits| expect_rows(logits, 1))
+        } else {
+            let rows = [DecodeRow {
+                slot: seq.slot,
+                token: seq.tokens[position],
+                position,
+            }];
+            decoder
+                .decode(&rows)
+                .and_then(|logits| expect_rows(logits, rows.len()))
         };
 
-        let next_token = match forward_one(decoder, &mut seq.cache, batch, sampler) {
+        let next_token = match result.and_then(|logits| sample_token(logits, sampler)) {
             Ok(token) => token,
             Err(err) => {
                 seq.finished = true;
@@ -310,36 +367,27 @@ pub fn step_round<D: BatchedDecoder, X, S: NextTokenSampler>(
     outcomes
 }
 
-/// One batch-1 forward + sample. Takes the engine-owned cache for this sequence and runs the
-/// model's `forward` against it, then framework-samples the next token id from the last position.
-fn forward_one<D: BatchedDecoder, S: NextTokenSampler>(
-    decoder: &mut D,
-    cache: &mut D::Cache,
-    batch: ForwardBatch,
-    sampler: &mut S,
-) -> InferenceResult<u32> {
-    let in_rows = batch.input_tokens.dims()[0];
-    let output = decoder.forward(batch, cache)?;
-
-    // Forward contract: the decoder must return exactly one logits row per input row, with at least
-    // one position. Enforce it as a per-sequence error (never a panic): on the worker thread a
-    // panic here would unwind and brick the whole channel, and a wrong row count would otherwise
-    // silently sample the wrong sequence. The caller's per-sequence error path retires just this
-    // one.
-    let [batch_size, seq_len, vocab_size] = output.logits.dims();
-    if batch_size != in_rows || seq_len == 0 {
+/// The framework's rows-in==rows-out check, applied at every
+/// [`prefill`](BatchedDecoder::prefill)/[`decode`](BatchedDecoder::decode) call site: the decoder
+/// must return exactly one logits row per input row. Enforced as a per-sequence error (never a
+/// panic): on the worker thread a panic here would unwind and brick the whole channel, and a
+/// wrong row count would otherwise silently sample the wrong sequence. The caller's per-sequence
+/// error path retires just this one.
+fn expect_rows(logits: Tensor<2>, in_rows: usize) -> InferenceResult<Tensor<2>> {
+    let [rows, vocab] = logits.dims();
+    if rows != in_rows {
         return Err(InferenceError::BatchContractViolation(format!(
-            "forward returned logits {:?} for {in_rows} input row(s); expected [{in_rows}, >=1, vocab]",
-            [batch_size, seq_len, vocab_size]
+            "decoder returned logits {:?} for {in_rows} input row(s); expected [{in_rows}, vocab]",
+            [rows, vocab]
         )));
     }
+    Ok(logits)
+}
 
-    let next_token_logits = output
-        .logits
-        .slice([0..batch_size, seq_len - 1..seq_len])
-        .reshape([batch_size, vocab_size]);
-
-    let token = sampler.sample_next(next_token_logits);
+/// Framework-samples the next token id from a single sequence's last-position logits
+/// (`[1, vocab]`).
+fn sample_token<S: NextTokenSampler>(logits: Tensor<2>, sampler: &mut S) -> InferenceResult<u32> {
+    let token = sampler.sample_next(logits);
     let ids = token
         .into_data()
         .convert::<u32>()

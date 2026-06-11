@@ -7,15 +7,19 @@
 //! own command.
 //!
 //! The worker owns the whole continuous-batching loop: an inbound queue of submitted jobs plus an
-//! active set of in-flight sequences. All per-sequence state (the model's
-//! [`BatchedDecoder::Cache`], token buffer, position, emitter, completion sender, detok cursor,
-//! generated count, finished flag) lives HERE in the framework — the model only exposes `forward`,
-//! tokenizer primitives and capacity (see [`BatchedInferenceServer`]).
+//! active set of in-flight sequences. All per-sequence engine state (decoder slot number, token
+//! buffer, position, emitter, completion sender, detok cursor, generated count, finished flag)
+//! lives HERE in the framework — the model only exposes
+//! [`prefill`](crate::batching::BatchedDecoder::prefill)/
+//! [`decode`](crate::batching::BatchedDecoder::decode)/
+//! [`release`](crate::batching::BatchedDecoder::release) (with its caches kept inside the
+//! decoder, behind the engine-assigned slot numbers), tokenizer primitives and capacity (see
+//! [`BatchedInferenceServer`]).
 //!
-//! Phase 1 STUB: the decode step is round-robin — each active sequence gets its own batch-1
-//! [`forward`](BatchedDecoder::forward) call against its own engine-owned cache. This proves the
-//! scheduling/admission/streaming plumbing end to end. Phase 2 will replace only the forward body
-//! with a fused multi-row GPU call.
+//! The decode step is round-robin — each active sequence gets its own single-row
+//! [`decode`](crate::batching::BatchedDecoder::decode) call against its own slot. This proves the
+//! scheduling/admission/streaming plumbing end to end; fusing the rows into one multi-row GPU
+//! call comes next.
 //!
 //! BACKPRESSURE: the job queue is bounded ([`DEFAULT_MAX_QUEUE_DEPTH`], settable via
 //! [`with_queue_depth`](BatchingChannel::with_queue_depth)). [`submit`](BatchingChannel::submit)
@@ -30,7 +34,7 @@
 //! `Server::default()`. Callers can never park forever on a dead worker. Caller-visible
 //! consequence: the fresh server starts UNLOADED, so a previously observed `load()` success does
 //! not survive a panic — jobs still work because admission lazy-loads through
-//! [`decoder`](BatchedInferenceServer::decoder)/`allocate_cache`, the first post-panic job just
+//! [`decoder`](BatchedInferenceServer::decoder), the first post-panic job just
 //! pays the load again.
 //!
 //! Layout: `mod.rs` = caller-side facade and protocol types (`BatchingChannel`, `Command`,

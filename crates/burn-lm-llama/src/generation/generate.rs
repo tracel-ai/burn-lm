@@ -4,7 +4,7 @@ use super::Sampler;
 use crate::{inference::Llama, tokenizer::Tokenizer};
 use burn::{prelude::*, tensor::activation::softmax};
 use burn_lm_inference::{
-    batching::{step_round, ActiveSeq, BatchCapacity, BatchedDecoder, StepOutcome},
+    batching::{step_round, ActiveSeq, BatchedDecoder, PrefillBudget, StepOutcome},
     sampler::NextTokenSampler,
     GeneratedItemEmitter, InferenceResult,
 };
@@ -80,8 +80,13 @@ impl<T: Tokenizer + 'static> Llama<T> {
         sampler: &mut Sampler,
         emitter: GeneratedItemEmitter,
     ) -> InferenceResult<GenerationOutput> {
-        let mut outputs =
-            self.generate_batch(vec![prompt], sample_len, temperature, sampler, vec![emitter])?;
+        let mut outputs = self.generate_batch(
+            vec![prompt],
+            sample_len,
+            temperature,
+            sampler,
+            vec![emitter],
+        )?;
         Ok(outputs
             .pop()
             .expect("one prompt in yields exactly one output"))
@@ -90,11 +95,11 @@ impl<T: Tokenizer + 'static> Llama<T> {
     /// Generate for a batch of prompts, advancing them round-robin one token at a time.
     ///
     /// This is a thin batch driver that exercises the [`BatchedDecoder`] seam exactly the way the
-    /// framework's continuous engine does: each sequence owns its own engine-side cache
-    /// ([`LlamaDecoder::Cache`](crate::inference::LlamaDecoder)), allocated up front and passed back
-    /// into [`forward`](BatchedDecoder::forward) on every step. The round-robin sweep makes the
-    /// sequences' output streams interleave. This is **not** fused batching — Phase 2 replaces the
-    /// per-row forward with a single multi-row call.
+    /// framework's continuous engine does: each sequence is assigned a decoder slot up front
+    /// (this driver owns the slot list, `0..prompts.len()`), prompts prefill into their slots,
+    /// each round decodes one token per sequence, and every slot is released before returning.
+    /// The round-robin sweep makes the sequences' output streams interleave. This is **not**
+    /// fused batching — the per-row decode becomes a single multi-row call next.
     pub fn generate_batch(
         &mut self,
         prompts: Vec<&str>,
@@ -111,18 +116,14 @@ impl<T: Tokenizer + 'static> Llama<T> {
 
         self.reset();
 
-        let capacity = BatchCapacity {
-            max_slots: prompts.len(),
-            max_kv_tokens: usize::MAX,
-        };
-
-        // Build the active set from the prompts. Each sequence carries its engine-owned per-seq
-        // cache and token buffer (the generic decode state) plus its `GenerationContext` (the
-        // library-side streaming/detok payload) in `extra`. `max_gen = sample_len` caps generation.
-        let mut active: Vec<ActiveSeq<_, GenerationContext>> = prompts
+        // Build the active set from the prompts. Each sequence carries its decoder slot and token
+        // buffer (the generic decode state) plus its `GenerationContext` (the library-side
+        // streaming/detok payload) in `extra`. `max_gen = sample_len` caps generation.
+        let mut active: Vec<ActiveSeq<GenerationContext>> = prompts
             .into_iter()
             .zip(emitters)
-            .map(|(prompt, emitter)| {
+            .enumerate()
+            .map(|(slot, (prompt, emitter))| {
                 let token_ids: Vec<u32> = self
                     .tokenize(prompt)
                     .into_data()
@@ -131,7 +132,7 @@ impl<T: Tokenizer + 'static> Llama<T> {
                     .expect("prompt tokens should convert to u32");
                 let state = GenerationContext::new(emitter, self.tokenizer.clone());
                 ActiveSeq {
-                    cache: self.decoder.allocate_cache(capacity),
+                    slot,
                     tokens: token_ids,
                     processed: 0,
                     generated: 0,
@@ -154,8 +155,18 @@ impl<T: Tokenizer + 'static> Llama<T> {
         // forward → sample → SYNCHRONOUS stop-check; the driver-side work left here is streaming
         // each new (non-stop) token through its `GenerationContext`. A stop id retires its
         // sequence in the same round it is produced, so no token is generated past it.
-        while active.iter().any(|seq| !seq.finished) {
-            let outcomes = step_round(&mut self.decoder, &mut active, &mut sampler, &stop_ids);
+        let mut failure = None;
+        'rounds: while active.iter().any(|seq| !seq.finished) {
+            // A fresh prefill budget per round over the whole batch. All prompts start at
+            // position 0, so round 1 has nothing decoding and they prefill freely.
+            let mut budget = PrefillBudget::for_round(&active);
+            let outcomes = step_round(
+                &mut self.decoder,
+                &mut active,
+                &mut sampler,
+                &stop_ids,
+                &mut budget,
+            );
             for (seq, outcome) in active.iter_mut().zip(outcomes) {
                 match outcome {
                     StepOutcome::Stepped { token, is_stop, .. } => {
@@ -165,10 +176,22 @@ impl<T: Tokenizer + 'static> Llama<T> {
                     }
                     // A failed forward (e.g. context length exceeded) aborts the whole batch,
                     // exactly as the pre-seam loop's `forward(..)?` did.
-                    StepOutcome::Failed(err) => return Err(err),
+                    StepOutcome::Failed(err) => {
+                        failure = Some(err);
+                        break 'rounds;
+                    }
                     StepOutcome::Skipped => {}
                 }
             }
+        }
+
+        // Free every slot before returning — on failure too. The decoder outlives this call, and
+        // a slot left behind would leak this generation's KV history into the next one.
+        for seq in active.iter() {
+            self.decoder.release(seq.slot);
+        }
+        if let Some(err) = failure {
+            return Err(err);
         }
 
         let elapsed = now.elapsed();
@@ -357,10 +380,7 @@ mod tests {
 
     #[test]
     fn llama_generate_leaks_autoregressive_kv_cache_across_independent_generations() {
-        fn run_once(
-            llama: &mut crate::inference::Llama<ByteTokenizer>,
-            prompt: &str,
-        ) -> String {
+        fn run_once(llama: &mut crate::inference::Llama<ByteTokenizer>, prompt: &str) -> String {
             let (emitter, handle) = GeneratedItemEmitter::init(TextGenerationListener::default());
 
             // This observes streamed text, which can race with the decoder thread.

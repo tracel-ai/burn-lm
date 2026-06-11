@@ -283,8 +283,8 @@ impl BatchedInferenceServer for Llama321bInstructServer {
     fn batch_capacity(&self) -> BatchCapacity {
         // `max_slots = 2` lets the engine keep two sequences active and INTERLEAVE them round-robin
         // (advancing each by one token per sweep), so two concurrent requests stream back
-        // interleaved. Each round-robin step is still a batch-1 `forward` (one row at a time); Phase 2
-        // fuses the active rows into a single GPU forward and raises this further.
+        // interleaved. Each round-robin step is still a single-row `decode` call (one row at a
+        // time); fusing the active rows into one GPU forward comes next and raises this further.
         BatchCapacity {
             max_slots: 2,
             max_kv_tokens: self.config.max_seq_len,
@@ -565,7 +565,7 @@ impl Llama3BaseServer {
     ///
     /// Thin wrapper over the existing Tiktoken tokenizer, exposed so the framework continuous loop
     /// can tokenize without owning the tokenizer. Requires the model to be loaded (the engine
-    /// allocates the per-sequence cache, which loads the model, before tokenizing).
+    /// borrows the decoder, which loads the model, before tokenizing).
     fn encode(&self, prompt: &str) -> InferenceResult<Vec<u32>> {
         Ok(self.model.get()?.tokenizer.encode(prompt, false, false))
     }

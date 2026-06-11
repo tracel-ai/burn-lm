@@ -8,7 +8,9 @@ use std::{
 };
 
 use crate::{
-    batching::{step_round, ActiveSeq, BatchedInferenceServer, CacheOf, StepOutcome},
+    batching::{
+        step_round, ActiveSeq, BatchedDecoder, BatchedInferenceServer, PrefillBudget, StepOutcome,
+    },
     errors::{InferenceError, InferenceResult},
     job::CancelSignal,
     sampler::NextTokenSampler,
@@ -20,7 +22,7 @@ use super::{Command, QueuedJob, WorkerInner};
 
 /// Serving-driver payload attached to a generic [`ActiveSeq`]: where a sequence's text is streamed
 /// and the one-shot completion signal fired when it retires. The generic decode core
-/// ([`step_round`]) never touches this — it advances the [`ActiveSeq`]'s cache/tokens/counters and
+/// ([`step_round`]) never touches this — it advances the [`ActiveSeq`]'s tokens/counters and
 /// reports back; the worker uses this payload to stream tokens and signal completion.
 struct JobMeta {
     /// Where this sequence's text is streamed.
@@ -57,7 +59,7 @@ struct JobMeta {
 pub const FINISH_REASON_STAT_NAME: &str = "Finish Reason";
 
 /// The framework's in-flight sequence: the generic per-seq decode state plus the serving payload.
-type JobSeq<S> = ActiveSeq<CacheOf<S>, JobMeta>;
+type JobSeq = ActiveSeq<JobMeta>;
 
 /// Loop-control outcome of one worker iteration.
 enum Flow {
@@ -80,7 +82,7 @@ pub(super) fn spawn<S: BatchedInferenceServer + 'static>(seed: S) -> InferenceRe
         .spawn(move || {
             let mut server = seed;
             let mut queue: VecDeque<QueuedJob> = VecDeque::new();
-            let mut active: Vec<JobSeq<S>> = Vec::new();
+            let mut active: Vec<JobSeq> = Vec::new();
 
             loop {
                 // PANIC BOUNDARY (failure ladder): one `catch_unwind` per loop ITERATION — not
@@ -118,7 +120,7 @@ pub(super) fn spawn<S: BatchedInferenceServer + 'static>(seed: S) -> InferenceRe
                             active.len(),
                             queue.len()
                         );
-                        fail_everything::<S>(&mut queue, &mut active);
+                        fail_everything(&mut queue, &mut active);
                         break;
                     }
                 }
@@ -134,7 +136,7 @@ pub(super) fn spawn<S: BatchedInferenceServer + 'static>(seed: S) -> InferenceRe
 fn worker_iteration<S: BatchedInferenceServer>(
     server: &mut S,
     queue: &mut VecDeque<QueuedJob>,
-    active: &mut Vec<JobSeq<S>>,
+    active: &mut Vec<JobSeq>,
     receiver: &std::sync::mpsc::Receiver<Command>,
 ) -> Flow {
     // Block for the next command only when there is genuinely no progress to make:
@@ -183,11 +185,10 @@ fn worker_iteration<S: BatchedInferenceServer>(
 /// discipline; every queued job is answered `WorkerDied` too, its queue permit released on drop.
 /// Commands still buffered in the mpsc when the thread exits are dropped with the receiver, which
 /// disconnects their reply senders — those callers also observe `WorkerDied`, and their permits
-/// drop with the commands, so the depth counter cannot leak.
-fn fail_everything<S: BatchedInferenceServer>(
-    queue: &mut VecDeque<QueuedJob>,
-    active: &mut Vec<JobSeq<S>>,
-) {
+/// drop with the commands, so the depth counter cannot leak. No slots are released here: the
+/// server (and with it every slot's cache inside the decoder) is dropped when the thread exits,
+/// and the respawned worker starts with a fresh server.
+fn fail_everything(queue: &mut VecDeque<QueuedJob>, active: &mut Vec<JobSeq>) {
     for seq in active.iter_mut() {
         flush_detok(&mut seq.extra);
         if let Some(completion) = seq.extra.completion.take() {
@@ -210,7 +211,7 @@ fn fail_everything<S: BatchedInferenceServer>(
 fn handle_command<S: BatchedInferenceServer>(
     server: &mut S,
     queue: &mut VecDeque<QueuedJob>,
-    active: &[JobSeq<S>],
+    active: &[JobSeq],
     command: Command,
 ) -> bool {
     match command {
@@ -241,8 +242,8 @@ fn handle_command<S: BatchedInferenceServer>(
             // POLICY: unload is REJECTED while work is in flight (active sequences or queued
             // jobs). Commands drain between rounds, so an unload could otherwise land
             // mid-generation; the next round's `decoder()` would then silently reload the model
-            // and resume in-flight sequences with per-seq caches built against the previous
-            // instance — accidental semantics. Callers must wait out (or drain) in-flight work.
+            // and resume in-flight sequences whose slot caches died with the previous instance —
+            // accidental semantics. Callers must wait out (or drain) in-flight work.
             let result = if active.is_empty() && queue.is_empty() {
                 server.unload()
             } else {
@@ -255,7 +256,7 @@ fn handle_command<S: BatchedInferenceServer>(
         }
         Command::ClearState(reply) => {
             // Same hazard as `Unload`: clearing model state under in-flight sequences would yank
-            // shared state out from under their per-seq caches mid-generation, so it is likewise
+            // their slot caches out from under them mid-generation, so it is likewise
             // rejected while work is in flight.
             let result = if active.is_empty() && queue.is_empty() {
                 server.clear_state()
@@ -278,7 +279,7 @@ fn handle_command<S: BatchedInferenceServer>(
 fn admit<S: BatchedInferenceServer>(
     server: &mut S,
     queue: &mut VecDeque<QueuedJob>,
-    active: &mut Vec<JobSeq<S>>,
+    active: &mut Vec<JobSeq>,
 ) {
     while active.len() < server.batch_capacity().max_slots {
         let Some(QueuedJob {
@@ -303,16 +304,12 @@ fn admit<S: BatchedInferenceServer>(
             continue;
         }
 
-        // Allocate the cache first: this loads the model if needed (via `decoder`), so the
-        // subsequent `tokenize`/`detokenize` primitives can rely on the tokenizer being available.
-        let capacity = server.batch_capacity();
-        let cache = match server.allocate_cache(capacity) {
-            Ok(cache) => cache,
-            Err(err) => {
-                let _ = completion.send(Err(err));
-                continue;
-            }
-        };
+        // Borrow the decoder first: this loads the model if needed, so the subsequent
+        // `tokenize`/`detokenize` primitives can rely on the tokenizer being available.
+        if let Err(err) = server.decoder().map(|_| ()) {
+            let _ = completion.send(Err(err));
+            continue;
+        }
 
         let tokens = match server.tokenize(&job.task) {
             Ok(tokens) => tokens,
@@ -330,8 +327,25 @@ fn admit<S: BatchedInferenceServer>(
             None => server.max_gen_tokens(),
         };
 
+        // Assign the lowest free slot. The engine owns the free-slot list: slots are
+        // `0..max_slots`, and a slot is free iff no active sequence holds it. The admission
+        // guard above guarantees one is free.
+        let slot = (0..server.batch_capacity().max_slots)
+            .find(|candidate| active.iter().all(|seq| seq.slot != *candidate))
+            .expect("admission only runs while a slot is free");
+
+        // Release the slot before handing it to the new sequence (added after a safety review).
+        // The retire sweep normally already did this — releasing twice is a documented no-op —
+        // but doing it here too means one prompt's leftovers can never be resumed by the next,
+        // even if some retire path or a model author's prefill-error rollback forgot. The one
+        // thing isolation rests on is the simplest method in the trait: `release(slot)` drops
+        // that slot's state. (The decoder borrow cannot fail here; it was checked just above.)
+        if let Ok(decoder) = server.decoder() {
+            decoder.release(slot);
+        }
+
         active.push(ActiveSeq {
-            cache,
+            slot,
             tokens,
             processed: 0,
             generated: 0,
@@ -360,7 +374,7 @@ fn admit<S: BatchedInferenceServer>(
 /// forward → contract-check → sample → stop-check dance; the framework-specific work that stays
 /// here is detokenizing/streaming each new token to its job emitter and signalling per-job
 /// completion on retire.
-fn step<S: BatchedInferenceServer>(server: &mut S, active: &mut Vec<JobSeq<S>>) {
+fn step<S: BatchedInferenceServer>(server: &mut S, active: &mut Vec<JobSeq>) {
     // Idle fast-path: nothing to advance, so do not touch the model. `decoder()` lazy-loads, so
     // borrowing it on an empty round would force-load the model from any lifecycle command — and
     // reload it in the very same loop iteration after a successful `Unload`.
@@ -385,6 +399,11 @@ fn step<S: BatchedInferenceServer>(server: &mut S, active: &mut Vec<JobSeq<S>>) 
     // sequence with that error rather than panicking the worker.
     let outcomes = match server.decoder() {
         Ok(decoder) => {
+            // ONE prefill budget for the whole round, computed over the FULL active set: each
+            // sequence is stepped through its own `step_round` call below (it needs its own
+            // sampler), and per-call budgets would never see the other sequences decoding — every
+            // queued prompt would prefill every round, stalling all in-flight decoders.
+            let mut budget = PrefillBudget::for_round(active);
             // Advance each sequence with ITS OWN sampler, taken out of `extra` for the duration of
             // the call (`step_round` borrows the sequence and the sampler separately).
             let mut outcomes = Vec::with_capacity(active.len());
@@ -399,6 +418,7 @@ fn step<S: BatchedInferenceServer>(server: &mut S, active: &mut Vec<JobSeq<S>>) 
                     &mut active[index..index + 1],
                     &mut sampler,
                     &stop_ids,
+                    &mut budget,
                 )
                 .pop()
                 .expect("one sequence in yields exactly one outcome");
@@ -408,6 +428,9 @@ fn step<S: BatchedInferenceServer>(server: &mut S, active: &mut Vec<JobSeq<S>>) 
             outcomes
         }
         Err(err) => {
+            // Mass-retire: the decoder could not even be borrowed, so there is nothing to
+            // `release` slots into — the caches live inside the decoder, and a later fresh load
+            // starts with every slot empty. Clearing `active` is what frees the slots here.
             for seq in active.iter_mut() {
                 flush_detok(&mut seq.extra);
                 if let Some(completion) = seq.extra.completion.take() {
@@ -456,8 +479,15 @@ fn step<S: BatchedInferenceServer>(server: &mut S, active: &mut Vec<JobSeq<S>>) 
     // bounded one-shot, so a second send with the `Err` still buffered would block the worker —
     // and the public `submit()` lets callers hold the receiver and recv much later — stalling
     // every other active sequence.
+    //
+    // Every retire through this sweep — stop token, `max_gen` cap, empty prompt, forward failure,
+    // cancellation — frees its decoder slot: the slot numbers are collected here and released
+    // below, after the sweep, so the slot's cache is dropped and the next admitted sequence
+    // starts clean.
+    let mut freed_slots = Vec::new();
     active.retain_mut(|seq| {
         if seq.finished {
+            freed_slots.push(seq.slot);
             flush_detok(&mut seq.extra);
             if let Some(completion) = seq.extra.completion.take() {
                 let mut stats = Stats::new();
@@ -489,6 +519,17 @@ fn step<S: BatchedInferenceServer>(server: &mut S, active: &mut Vec<JobSeq<S>>) 
             true
         }
     });
+
+    // Release the retired sequences' slots so the decoder drops their caches. The decoder was
+    // borrowable at the top of this round, so a failure here is unreachable in practice; if it
+    // does fail, the slots are free engine-side anyway and a fresh decoder load starts empty.
+    if !freed_slots.is_empty() {
+        if let Ok(decoder) = server.decoder() {
+            for slot in freed_slots {
+                decoder.release(slot);
+            }
+        }
+    }
 }
 
 /// Drain a retiring sequence's detok cursor into its emitter. At true end of stream a held-back

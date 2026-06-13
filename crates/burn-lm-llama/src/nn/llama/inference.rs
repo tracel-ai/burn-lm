@@ -12,7 +12,6 @@ use burn_lm_inference::{
     batching::{BatchedDecoder, DecodeRow},
     InferenceError, InferenceResult,
 };
-use std::collections::HashMap;
 
 use crate::{
     generation::GenerationError,
@@ -33,19 +32,24 @@ pub struct Llama<T: Tokenizer> {
 }
 
 /// Reusable Llama decoder state for autoregressive inference.
+///
+/// The KV/RoPE state is a single shared slab: `cache` holds `max_batch_size` lanes (one per engine
+/// slot, see [`BatchCapacity`](burn_lm_inference::batching::BatchCapacity)), and a whole round of
+/// active sequences advances through ONE lane-aware forward. Slot numbers index lanes directly
+/// (the server sets `max_batch_size == max_slots`).
 #[derive(Debug)]
 pub struct LlamaDecoder {
     /// Llama decoder-only transformer.
     pub model: Transformer,
-    /// Key-value cache for each transformer block.
+    /// Shared, lane-indexed KV cache (one lane per engine slot). Writes/reads are lane-sliced and
+    /// [`release`](BatchedDecoder::release) resets a lane. The single-sequence
+    /// [`forward`](Self::forward) path uses lane 0's whole-cache view; the two paths are never
+    /// mixed on one instance.
     pub cache: TransformerCache,
-    /// Rotary positional encoding (RoPE).
+    /// Rotary positional encoding (RoPE). Lane decode reads `rope` directly at each lane's absolute
+    /// position (no table shift); the single-sequence path uses the stateful counters.
     pub pos_encoding: PositionalEncodingState,
     pub device: Device,
-    /// One private KV/RoPE state per engine slot (see [`BatchedDecoder`]), created on first use
-    /// and dropped on [`release`](BatchedDecoder::release). Today each slot is an independent
-    /// batch-1 cache; replacing this map with one shared, slot-indexed cache is the next step.
-    pub(crate) slots: HashMap<usize, LlamaSeqCache>,
 }
 
 impl LlamaDecoder {
@@ -66,109 +70,93 @@ impl LlamaDecoder {
     pub fn reset(&mut self) {
         self.cache.reset();
         self.pos_encoding.reset();
-        // Slot caches are normally all released by the engine before this is called; clearing
-        // them too keeps "reset" meaning what it says — no decoding state survives.
-        self.slots.clear();
     }
 
-    /// A fresh, empty per-slot state: the decoder's (weights-independent) cache + RoPE templates,
-    /// cloned and reset.
-    fn fresh_slot_state(&self) -> LlamaSeqCache {
-        let mut cache = self.cache.clone();
-        cache.reset();
-        let mut pos_encoding = self.pos_encoding.clone();
-        pos_encoding.reset();
-        LlamaSeqCache {
-            cache,
-            pos_encoding,
-        }
-    }
-
-    /// Forward `input` through the given slot's cache, returning the last position's logits
-    /// (`[1, vocab]`).
+    /// Forward `seq_len` new tokens for each lane in `lanes` (all the same length) through the
+    /// shared slab, returning each lane's last-position logits, `[lanes.len(), vocab]`.
     ///
-    /// The slot's state is taken OUT of the map (created fresh on first use), swapped into the
-    /// decoder's own cache/RoPE fields for the duration of the inner forward, then swapped back.
-    /// On success it is put back into the map; on error it is dropped, which leaves the slot as
-    /// if it had never been used (the contract `prefill` promises).
-    fn forward_slot(&mut self, slot: usize, input: Tensor<2, Int>) -> InferenceResult<Tensor<2>> {
-        let mut state = self
-            .slots
-            .remove(&slot)
-            .unwrap_or_else(|| self.fresh_slot_state());
-
-        std::mem::swap(&mut self.cache, &mut state.cache);
-        std::mem::swap(&mut self.pos_encoding, &mut state.pos_encoding);
-
-        let result = self.forward(input);
-
-        std::mem::swap(&mut self.cache, &mut state.cache);
-        std::mem::swap(&mut self.pos_encoding, &mut state.pos_encoding);
-
-        let logits = result.map_err(|err| match err {
-            GenerationError::MaxSequenceLengthExceeded { actual, max } => {
-                InferenceError::ContextLengthExceeded(actual, max)
-            }
-        })?;
-        self.slots.insert(slot, state);
-
-        let [batch, seq_len, vocab] = logits.dims();
+    /// Prefill is one lane with `seq_len == prompt_len`; fused decode is N active lanes with
+    /// `seq_len == 1`. [`prepare_lanes`](TransformerCache::prepare_lanes) snapshots each lane's
+    /// start position, builds the per-lane causal+padding mask, and advances the lane lengths; the
+    /// model then writes/reads each lane sliced and rotates each at its own absolute position. A
+    /// lane past `max_seq_len` is an error (lane mode has no cache eviction), surfaced as
+    /// `ContextLengthExceeded`.
+    fn forward_lanes(
+        &mut self,
+        lanes: &[usize],
+        input: Tensor<2, Int>,
+    ) -> InferenceResult<Tensor<2>> {
+        let seq_len_in = input.dims()[1];
+        // The cache's per-lane lengths (RoPE positions + mask) must agree with each layer's KV write
+        // offset before we forward. They only ever move together, but check it here so a future
+        // wiring regression fails loudly instead of silently attending to the wrong KV columns.
+        debug_assert!(
+            self.cache.lanes_in_lockstep(lanes),
+            "lane bookkeepers desynced before forward (cache lens vs layer KV)"
+        );
+        let plan = self
+            .cache
+            .prepare_lanes(lanes, seq_len_in)
+            .map_err(|err| match err {
+                GenerationError::MaxSequenceLengthExceeded { actual, max } => {
+                    InferenceError::ContextLengthExceeded(actual, max)
+                }
+            })?;
+        let logits =
+            self.model
+                .forward_lanes(input, &mut self.cache, &self.pos_encoding.rope, &plan);
+        let [n, seq_len, vocab] = logits.dims();
         Ok(logits
-            .slice([0..batch, seq_len - 1..seq_len, 0..vocab])
-            .reshape([batch, vocab]))
+            .slice([0..n, seq_len - 1..seq_len, 0..vocab])
+            .reshape([n, vocab]))
     }
-}
-
-/// One slot's decoding state: the KV cache and RoPE position for a single sequence. Kept inside
-/// [`LlamaDecoder`] behind the engine's slot numbers; nothing outside this module touches it.
-#[derive(Debug, Clone)]
-pub(crate) struct LlamaSeqCache {
-    cache: TransformerCache,
-    pos_encoding: PositionalEncodingState,
 }
 
 impl BatchedDecoder for LlamaDecoder {
-    /// Run a whole prompt into one slot. A `position == 0` prompt starts the slot fresh; the slot's
-    /// own cache/RoPE state tracks everything else, and the engine only prefills at position 0 today.
-    /// The parameter exists for the shared, slot-indexed cache that replaces the per-slot map
-    /// next.
+    /// Run a whole prompt into one lane, returning the last position's logits (`[1, vocab]`).
+    ///
+    /// A `position == 0` prompt is a NEW sequence: reset the lane first so a fresh sequence can
+    /// never resume a previous occupant's KV (normally `release` already did this — resetting again
+    /// makes the lane self-healing). Chunked prompts (`position > 0`, future work) legitimately
+    /// continue the lane's state.
     fn prefill(
         &mut self,
         slot: usize,
         tokens: &[u32],
         position: usize,
     ) -> InferenceResult<Tensor<2>> {
-        // A prompt starting at position 0 is a NEW sequence: drop whatever a previous occupant
-        // left in this slot. Normally `release` already did, but this makes the slot self-healing
-        // even if a retire path missed it (e.g. a hypothetical server whose `decoder()` fails
-        // transiently while staying loaded) — a fresh sequence can never resume a dead one's
-        // cache. Chunked prompts (position > 0, future work) legitimately continue the state.
         if position == 0 {
-            self.slots.remove(&slot);
+            self.cache.reset_lane(slot);
         }
+        debug_assert_eq!(
+            position,
+            self.cache.lane_len(slot),
+            "prefill position must equal the lane's current length"
+        );
         let ids: Vec<i32> = tokens.iter().map(|&t| t as i32).collect();
         let input =
             Tensor::<2, Int>::from_data(TensorData::new(ids, [1, tokens.len()]), &self.device);
-        self.forward_slot(slot, input)
+        self.forward_lanes(&[slot], input)
     }
 
-    /// Advance each row's slot by one token. Still one inner forward per row (the fused
-    /// multi-row call comes next); an error on any row fails the whole call, which is fine
-    /// because the framework only passes single-row slices today.
+    /// Advance every row's lane by one token in ONE fused forward, returning logits
+    /// `[rows.len(), vocab]` where row `i` belongs to `rows[i]`. Each lane sits at its own absolute
+    /// position; the lane-aware forward writes/reads each sliced and masks each lane's stale tail.
     fn decode(&mut self, rows: &[DecodeRow]) -> InferenceResult<Tensor<2>> {
-        let mut outputs = Vec::with_capacity(rows.len());
-        for row in rows {
-            let input = Tensor::<2, Int>::from_data(
-                TensorData::new(vec![row.token as i32], [1, 1]),
-                &self.device,
-            );
-            outputs.push(self.forward_slot(row.slot, input)?);
-        }
-        Ok(Tensor::cat(outputs, 0))
+        let lanes: Vec<usize> = rows.iter().map(|row| row.slot).collect();
+        let ids: Vec<i32> = rows.iter().map(|row| row.token as i32).collect();
+        debug_assert!(
+            rows.iter()
+                .all(|row| row.position == self.cache.lane_len(row.slot)),
+            "each decode row's position must equal its lane's current length"
+        );
+        let input =
+            Tensor::<2, Int>::from_data(TensorData::new(ids, [rows.len(), 1]), &self.device);
+        self.forward_lanes(&lanes, input)
     }
 
     fn release(&mut self, slot: usize) {
-        self.slots.remove(&slot);
+        self.cache.reset_lane(slot);
     }
 }
 

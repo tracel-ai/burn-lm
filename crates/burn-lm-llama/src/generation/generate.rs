@@ -113,6 +113,17 @@ impl<T: Tokenizer + 'static> Llama<T> {
             emitters.len(),
             "each prompt needs exactly one emitter"
         );
+        // The decoder owns a fixed KV slab with one lane per slot, so the batch cannot exceed its
+        // lane count (`max_batch_size`). Fail fast with a clear message instead of a cryptic
+        // out-of-bounds inside the cache. The framework serving path never trips this — admission
+        // bounds in-flight sequences by `batch_capacity().max_slots`, wired to the same number.
+        assert!(
+            prompts.len() <= self.decoder.cache.lane_count(),
+            "generate_batch got {} prompts but the decoder slab has only {} lane(s); \
+             build the model with a larger max_batch_size",
+            prompts.len(),
+            self.decoder.cache.lane_count(),
+        );
 
         self.reset();
 
@@ -245,7 +256,8 @@ mod tests {
     #[test]
     fn generate_batch_interleaves_two_sequences() {
         let device: Device = Default::default();
-        let config = LlamaConfig::llama3_2_1b_test();
+        // Two sequences ⇒ the decoder slab needs two lanes (slot == lane).
+        let config = LlamaConfig::llama3_2_1b_test().with_max_batch_size(2);
         let mut llama = config.init::<ByteTokenizer>(&device).unwrap();
         llama.decoder.model = Reinitializer::default()
             .random_float(0, -1.0, 1.0)
@@ -311,7 +323,9 @@ mod tests {
         }
 
         let device: Device = Default::default();
+        // Runs batches of up to two prompts ⇒ two lanes (solo runs use lane 0).
         let mut llama = LlamaConfig::llama3_2_1b_test()
+            .with_max_batch_size(2)
             .init::<ByteTokenizer>(&device)
             .unwrap();
         llama.decoder.model = Reinitializer::default()

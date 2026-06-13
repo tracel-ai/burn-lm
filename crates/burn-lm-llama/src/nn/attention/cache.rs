@@ -26,13 +26,14 @@ pub(crate) struct AutoregressiveCache<const D: usize> {
     seq_dim: usize,
     /// Per-lane sequence lengths.
     ///
-    /// TRANSITIONAL: the lane math is not plugged into the decoder yet, so today only the
-    /// whole-cache methods run in production, and they keep their old single counter in
-    /// `lens[0]` — every `lens[0]` below is the former `cur_seq_len` under its new name, NOT
-    /// "the first of several lanes". The next change wires the decoder onto the lane path
-    /// (`append_lanes`/`reset_lane`), after which every entry is a live, independent lane
-    /// length and the lens[0]-as-the-only-counter pattern goes away with the lockstep path.
-    /// Until then: never mix `append` and `append_lanes` on one cache instance.
+    /// The lane path (`append_lanes`/`reset_lane`) is the PRODUCTION decode path: each entry is one
+    /// live, independent lane's length. The whole-cache methods (`append`/`len`/`reset`) operate on
+    /// `lens[0]` and are now used only by the test-only single-sequence reference forward.
+    ///
+    /// A given cache INSTANCE is driven by exactly one family — never mix `append` and
+    /// `append_lanes` on the same instance (their offset semantics differ: `append` writes every
+    /// batch row at `lens[0]`; `append_lanes` writes lane `j` at `lens[lane]`). The production
+    /// decoder and the test reference build separate instances, so they never alias.
     lens: Vec<usize>,
     strategy: CacheStrategy,
 }

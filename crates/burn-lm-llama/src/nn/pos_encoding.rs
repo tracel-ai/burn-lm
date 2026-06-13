@@ -98,8 +98,6 @@ impl PositionalEncodingState {
 ///
 /// - x: `[n_lanes, heads, seq_len, head_dim]`
 /// - output: same.
-// The decoder switch-over onto the lane-aware path lands in the next change.
-#[allow(dead_code)]
 pub(crate) fn apply_rope_lanes(rope: &RotaryEncoding, x: Tensor<4>, starts: &[usize]) -> Tensor<4> {
     let [n, heads, q, head_dim] = x.dims();
     debug_assert_eq!(n, starts.len());

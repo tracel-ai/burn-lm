@@ -28,6 +28,15 @@ pub struct Llama3ServerConfig {
     /// The seed to use when generating random samples. If it is 0 then a random seed is used for each inference.
     #[config(default = 0)]
     pub seed: u64,
+    /// Maximum number of sequences the batched decoder runs concurrently. For the batched
+    /// `Llama321bInstructServer` (the only `BatchedInferenceServer`) this single knob sizes the
+    /// shared KV slab (one lane per slot) AND is what the engine reads as
+    /// `batch_capacity().max_slots`, so the two can never disagree. Single-shot servers (the Q4 1b,
+    /// the 3b) ignore it and keep a one-lane slab. The default is tuned to fit comfortably on a
+    /// Mac/Metal box; raise it on larger GPUs (modal/H100). KV memory grows linearly with this
+    /// times `max_seq_len`.
+    #[config(default = 4)]
+    pub max_slots: usize,
 }
 
 impl Llama3ServerConfig {
@@ -281,13 +290,17 @@ impl BatchedInferenceServer for Llama321bInstructServer {
     }
 
     fn batch_capacity(&self) -> BatchCapacity {
-        // `max_slots = 2` lets the engine keep two sequences active and INTERLEAVE them round-robin
-        // (advancing each by one token per sweep), so two concurrent requests stream back
-        // interleaved. Each round-robin step is still a single-row `decode` call (one row at a
-        // time); fusing the active rows into one GPU forward comes next and raises this further.
+        // ONE knob (`config.max_slots`) drives both the engine's concurrent-sequence budget here
+        // AND the decoder's shared KV slab lane count (see the `decoder()` loaders), so the slab
+        // always has exactly one lane per slot the engine can admit. A whole round of active
+        // sequences advances through one fused lane-aware forward.
         BatchCapacity {
-            max_slots: 2,
-            max_kv_tokens: self.config.max_seq_len,
+            max_slots: self.config.max_slots,
+            // In lane mode each of the `max_slots` lanes independently holds up to `max_seq_len`
+            // tokens (no shared eviction), so the aggregate KV budget is the product. The field is
+            // declared-but-not-yet-enforced; reporting the true slab capacity keeps it correct for
+            // when KV-based admission lands.
+            max_kv_tokens: self.config.max_slots * self.config.max_seq_len,
         }
     }
 
@@ -612,10 +625,12 @@ impl Llama3BaseServer {
                     LlamaConfig::llama3_2_3b_pretrained(config.max_seq_len, &*INFERENCE_DEVICE)
                         .unwrap()
                 }
-                LlamaVersion::Llama321bInstruct => {
-                    LlamaConfig::llama3_2_1b_pretrained(config.max_seq_len, &*INFERENCE_DEVICE)
-                        .unwrap()
-                }
+                LlamaVersion::Llama321bInstruct => LlamaConfig::llama3_2_1b_pretrained(
+                    config.max_seq_len,
+                    config.max_slots,
+                    &*INFERENCE_DEVICE,
+                )
+                .unwrap(),
                 LlamaVersion::Llama321bInstructQ4FB32 => {
                     LlamaConfig::llama3_2_1b_pretrained_q4(config.max_seq_len, &*INFERENCE_DEVICE)
                         .unwrap()

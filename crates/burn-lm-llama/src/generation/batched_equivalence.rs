@@ -20,6 +20,8 @@ use burn::{
     tensor::{activation::softmax, Tolerance},
 };
 
+use burn_lm_inference::batching::{BatchedDecoder, DecodeRow};
+
 use crate::{
     inference::Llama, nn::transformer::Transformer, tests::Reinitializer,
     tokenizer::byte::ByteTokenizer, LlamaConfig,
@@ -452,6 +454,165 @@ fn batch2_per_lane_loop_rope_equivalent_to_two_batch1_runs() {
     assert_equivalent(RopeMode::PerLaneLoop);
 }
 
+/// Build the tiny test model with an `n_lanes`-lane slab (slot == lane), seeded identically to
+/// [`test_llama`] so its output is directly comparable to [`reference_run`].
+fn test_llama_lanes(n_lanes: usize, device: &Device) -> Llama<ByteTokenizer> {
+    let config = LlamaConfig::llama3_2_1b_test().with_max_batch_size(n_lanes);
+    let mut llama = config.init::<ByteTokenizer>(device).unwrap();
+    llama.decoder.model = Reinitializer::default()
+        .random_float(0, -1.0, 1.0)
+        .apply(llama.decoder.model);
+    llama
+}
+
+/// Greedy multi-lane run through the REAL decoder: staggered prefill into each lane, then fused
+/// `[n, 1]` decode rounds. Returns each lane's (argmax stream, per-step last-position logits).
+fn real_decoder_batched_run(
+    prompts: &[Vec<u32>],
+    steps: usize,
+    device: &Device,
+) -> Vec<(Vec<u32>, Vec<Vec<f32>>)> {
+    let n = prompts.len();
+    let vocab = LlamaConfig::llama3_2_1b_test().vocab_size;
+    let mut llama = test_llama_lanes(n, device);
+
+    let mut tokens: Vec<Vec<u32>> = vec![Vec::new(); n];
+    let mut logits: Vec<Vec<Vec<f32>>> = vec![Vec::new(); n];
+    let mut last = vec![0u32; n];
+
+    for (lane, prompt) in prompts.iter().enumerate() {
+        let out = llama.decoder.prefill(lane, prompt, 0).unwrap();
+        tokens[lane].push(argmax_rows(&out)[0]);
+        logits[lane].push(logits_row(&out, 0, vocab));
+        last[lane] = tokens[lane][0];
+    }
+    for _ in 1..steps {
+        let rows: Vec<DecodeRow> = (0..n)
+            .map(|lane| DecodeRow {
+                slot: lane,
+                token: last[lane],
+                position: prompts[lane].len() + tokens[lane].len() - 1,
+            })
+            .collect();
+        let out = llama.decoder.decode(&rows).unwrap();
+        let next = argmax_rows(&out);
+        for lane in 0..n {
+            tokens[lane].push(next[lane]);
+            logits[lane].push(logits_row(&out, lane, vocab));
+            last[lane] = next[lane];
+        }
+    }
+    for lane in 0..n {
+        llama.decoder.release(lane);
+    }
+
+    tokens.into_iter().zip(logits).collect()
+}
+
+/// Every lane's fused real-decoder run must match its independent batch-1 reference — both
+/// byte-exact argmax stream AND tight-tolerance per-step logits (the latter catches a sub-argmax
+/// numerical drift that an argmax-only check would miss).
+fn assert_real_decoder_equivalent(prompts: Vec<Vec<u32>>, steps: usize, device: &Device) {
+    let batched = real_decoder_batched_run(&prompts, steps, device);
+    let tolerance = Tolerance::<f32>::rel_abs(1e-4, 1e-5);
+    for (lane, prompt) in prompts.iter().enumerate() {
+        let (ref_tokens, ref_logits) = reference_run(prompt, steps, device);
+        let (lane_tokens, lane_logits) = &batched[lane];
+        assert_eq!(
+            lane_tokens, &ref_tokens,
+            "lane {lane}: fused real-decoder argmax stream diverged from the batch-1 run"
+        );
+        for (got, expected) in lane_logits.iter().zip(ref_logits.iter()) {
+            let got = TensorData::new(got.clone(), [got.len()]);
+            let expected = TensorData::new(expected.clone(), [expected.len()]);
+            got.assert_approx_eq::<f32>(&expected, tolerance);
+        }
+    }
+}
+
+/// Helper: first `take` bytes of `s` as token ids (asserting the length so divergent positions are
+/// guaranteed).
+fn prompt_bytes(s: &str, take: usize) -> Vec<u32> {
+    let v: Vec<u32> = s.bytes().take(take).map(|b| b as u32).collect();
+    assert_eq!(v.len(), take, "prompt too short for the requested length");
+    v
+}
+
+/// S7a production-path equivalence: prefill + fused `[n, 1]` decode rounds through the REAL
+/// [`LlamaDecoder`] (`prepare_lanes` → `forward_lanes`, slot == lane) must match independent
+/// batch-1 runs through the single-sequence forward path. Unlike the `BatchedHarness` tests above,
+/// this drives the actual production seam (`prefill`/`decode`/`release`) — the standing guard the
+/// hand-rolled harness becomes when it is deleted in S7c. Two lanes at divergent positions (37, 5).
+#[test]
+fn fused_decode_through_real_decoder_matches_batch1() {
+    let device: Device = Default::default();
+    assert_real_decoder_equivalent(divergent_prompts(), 24, &device);
+}
+
+/// Three lanes at three distinct positions. n=2 cannot distinguish a correct per-lane mapping from
+/// a row-vs-lane index swap in the mask build or the RoPE gather (both symmetric at 2), so this is
+/// the test that actually pins the lane indexing at n >= 3.
+#[test]
+fn fused_decode_three_lanes_matches_batch1() {
+    let device: Device = Default::default();
+    let prompts = vec![
+        prompt_bytes("This is a long prompt for lane X in the gate", 37),
+        prompt_bytes("Hello", 5),
+        prompt_bytes("A medium length lane Y goes here now", 19),
+    ];
+    assert_real_decoder_equivalent(prompts, 16, &device);
+}
+
+/// A lane reused after `release` must NOT inherit the retired occupant's KV: a second sequence
+/// prefilled into the same slot (`position == 0`) self-heals the lane. This is the only test that
+/// makes that self-heal load-bearing — with a clean fresh decoder the reset is a no-op, so it must
+/// run on a DIRTY lane (slot previously held a longer sequence) while a sibling lane stays live.
+#[test]
+fn lane_reuse_after_release_starts_clean() {
+    let device: Device = Default::default();
+    let steps = 16;
+
+    let a = prompt_bytes("First sequence occupies the slot for a while", 28);
+    let b = prompt_bytes("Totally different", 12);
+    let other = prompt_bytes("Sibling lane stays busy", 9);
+
+    // What B should produce on its own.
+    let b_solo = reference_run(&b, steps, &device).0;
+
+    let mut llama = test_llama_lanes(2, &device);
+
+    // Lane 1 holds an unrelated live sequence the whole time.
+    llama.decoder.prefill(1, &other, 0).unwrap();
+
+    // Sequence A fills (dirties) lane 0 with a LONGER history, decodes a few rounds, then retires.
+    let mut last_a = argmax_rows(&llama.decoder.prefill(0, &a, 0).unwrap())[0];
+    for k in 0..3 {
+        let row = DecodeRow {
+            slot: 0,
+            token: last_a,
+            position: a.len() + k,
+        };
+        last_a = argmax_rows(&llama.decoder.decode(&[row]).unwrap())[0];
+    }
+    llama.decoder.release(0);
+
+    // Sequence B reused into lane 0: position 0 must wipe A's residue.
+    let mut tokens_b = vec![argmax_rows(&llama.decoder.prefill(0, &b, 0).unwrap())[0]];
+    for _ in 1..steps {
+        let row = DecodeRow {
+            slot: 0,
+            token: *tokens_b.last().unwrap(),
+            position: b.len() + tokens_b.len() - 1,
+        };
+        tokens_b.push(argmax_rows(&llama.decoder.decode(&[row]).unwrap())[0]);
+    }
+
+    assert_eq!(
+        tokens_b, b_solo,
+        "reused lane inherited stale KV from the released sequence"
+    );
+}
+
 /// Both RoPE implementations must agree with each other token-for-token.
 #[test]
 fn gather_and_per_lane_loop_rope_agree() {
@@ -554,7 +715,9 @@ fn bench_real_weights_batched_decode_throughput() {
     let max_seq_len = 128;
 
     // Load the real weights once; each batch config gets a cheap handle clone.
-    let llama = LlamaConfig::llama3_2_1b_pretrained(max_seq_len, &device)
+    // max_batch_size is irrelevant here: `run_bench` drives its own `BatchedHarness` slabs and
+    // only borrows this model's weights + RoPE table.
+    let llama = LlamaConfig::llama3_2_1b_pretrained(max_seq_len, 1, &device)
         .expect("Llama-3.2-1B-Instruct weights must already be downloaded");
     let model = llama.decoder.model;
     let rope = llama.decoder.pos_encoding.rope;

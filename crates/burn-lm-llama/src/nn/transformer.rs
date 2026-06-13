@@ -102,6 +102,26 @@ impl Transformer {
         self.output.forward(h)
     }
 
+    /// Lane-aware forward: advance the given lanes (uniform input length) through the shared slab,
+    /// using each lane's own start position for RoPE and KV writes and the per-lane mask, then
+    /// returns logits `[n, seq_len, vocab]`. See [`LanePlan`] / [`TransformerCache::prepare_lanes`].
+    pub fn forward_lanes(
+        &self,
+        input: Tensor<2, Int>,
+        cache: &mut TransformerCache,
+        rope: &RotaryEncoding,
+        plan: &LanePlan,
+    ) -> Tensor<3> {
+        let mut h = self.tok_embeddings.forward(input);
+
+        for (layer, c) in self.layers.iter().zip(cache.layers.iter_mut()) {
+            h = layer.forward_lanes(h, c, rope, plan);
+        }
+
+        let h = self.norm.forward(h);
+        self.output.forward(h)
+    }
+
     /// Forward with non-autoregressive and creates a mask for training.
     pub fn forward_train(&self, input: Tensor<2, Int>, rope: &RotaryEncoding) -> Tensor<3> {
         let mut h = self.tok_embeddings.forward(input);
@@ -141,11 +161,12 @@ pub struct TransformerCache {
     layers: Vec<KeyValueCache>,
     device: Device,
     max_seq_len: usize,
-    /// Single-sequence bookkeeping (`prepare`/`reset`).
+    /// Single-sequence bookkeeping (`prepare`/`reset`). Used only by the test-only single-sequence
+    /// [`Transformer::forward`] reference path now.
     curr_seq_len: usize,
-    /// Per-lane bookkeeping (`prepare_lanes`/`reset_lane`). A cache instance
-    /// uses one mode or the other, never both; the decoder switch-over onto
-    /// the lane-aware path lands in the next change.
+    /// Per-lane bookkeeping (`prepare_lanes`/`reset_lane`) — the PRODUCTION decode path. One entry
+    /// per slab lane. Must stay in lockstep with each layer's KV `lane_len` (see `prepare_lanes`).
+    /// A cache instance uses one mode or the other, never both.
     lens: Vec<usize>,
 }
 
@@ -173,33 +194,57 @@ impl TransformerCache {
     }
 
     /// Number of buffer lanes (the model's `max_batch_size`).
-    // The decoder switch-over onto the lane-aware path lands in the next change.
-    #[allow(dead_code)]
     pub fn lane_count(&self) -> usize {
         self.lens.len()
     }
 
     /// Sequence length of one lane.
-    // The decoder switch-over onto the lane-aware path lands in the next change.
-    #[allow(dead_code)]
     pub fn lane_len(&self, lane: usize) -> usize {
         self.lens[lane]
     }
 
+    /// Debug self-check: this cache's per-lane lengths (which drive RoPE positions + the mask) agree
+    /// with each layer's KV write offset for the given lanes. The two advance together on every
+    /// lane forward and reset together, so they must match before a forward; this makes that
+    /// otherwise convention-only invariant self-checking at the production entry point.
+    pub fn lanes_in_lockstep(&self, lanes: &[usize]) -> bool {
+        lanes.iter().all(|&lane| {
+            self.layers
+                .iter()
+                .all(|layer| layer.lane_len(lane) == self.lens[lane])
+        })
+    }
+
     /// Plan one lane-aware forward of `seq_len` new tokens for `lanes`:
     /// validate per-lane capacity, snapshot each lane's start position, build
-    /// the per-lane mask, and advance the lane lengths.
+    /// the per-lane mask, and advance the lane lengths. This is the production
+    /// decode path (prefill = one lane; fused decode = the active lanes).
     ///
     /// There is NO Shift eviction in lane mode: a lane that would exceed
     /// `max_seq_len` is an error — the runtime finishes lanes that hit their
     /// token budget before they get here.
-    // The decoder switch-over onto the lane-aware path lands in the next change.
-    #[allow(dead_code)]
     pub fn prepare_lanes(
         &mut self,
         lanes: &[usize],
         seq_len: usize,
     ) -> Result<LanePlan, GenerationError> {
+        // Local self-checking invariants the equivalence rests on (debug-only, cheap):
+        // - lanes are DISTINCT: a duplicate would double-advance the bookkeeper while the per-row
+        //   RoPE/mask used a stale start, silently corrupting that lane's attention.
+        // - lanes are in range: a slot past the slab would otherwise be a raw index panic.
+        // (The cross-component lockstep check — this cache's lens vs each layer's KV write offset —
+        // lives in `LlamaDecoder::forward_lanes`, the production entry point, because `prepare_lanes`
+        // is also exercised standalone by unit tests that never run a layer forward.)
+        debug_assert!(
+            lanes.iter().collect::<std::collections::HashSet<_>>().len() == lanes.len(),
+            "prepare_lanes got a duplicate lane: {lanes:?}"
+        );
+        debug_assert!(
+            lanes.iter().all(|&lane| lane < self.lens.len()),
+            "prepare_lanes got a lane >= lane_count ({}): {lanes:?}",
+            self.lens.len()
+        );
+
         for &lane in lanes {
             if self.lens[lane] + seq_len > self.max_seq_len {
                 return Err(GenerationError::MaxSequenceLengthExceeded {
@@ -280,8 +325,6 @@ impl TransformerCache {
 
     /// Free one lane: zero its length in this bookkeeping AND in every
     /// layer's KV cache. The buffer row is overwritten on the next use.
-    // The decoder switch-over onto the lane-aware path lands in the next change.
-    #[allow(dead_code)]
     pub fn reset_lane(&mut self, lane: usize) {
         self.lens[lane] = 0;
         self.layers
@@ -359,6 +402,25 @@ impl TransformerBlock {
                 cache,
                 pos_encoding,
                 mask,
+            );
+        h.clone() + self.feed_forward.forward(self.ffn_norm.forward(h))
+    }
+
+    /// Lane-aware variant of [`forward`](Self::forward): per-lane RoPE positions, lane-sliced KV,
+    /// and the per-lane mask from [`LanePlan`].
+    pub fn forward_lanes(
+        &self,
+        input: Tensor<3>,
+        cache: &mut KeyValueCache,
+        rope: &RotaryEncoding,
+        plan: &LanePlan,
+    ) -> Tensor<3> {
+        let h = input.clone()
+            + self.attention.forward_cache_lanes(
+                self.attention_norm.forward(input),
+                cache,
+                rope,
+                plan,
             );
         h.clone() + self.feed_forward.forward(self.ffn_norm.forward(h))
     }

@@ -4,7 +4,10 @@ use burn::{
     tensor::{module::attention, ops::AttentionModuleOptions},
 };
 
-use crate::nn::pos_encoding::PositionalEncodingState;
+use crate::nn::{
+    pos_encoding::{apply_rope_lanes, PositionalEncodingState},
+    transformer::LanePlan,
+};
 
 use super::kv_cache::KeyValueCache;
 
@@ -117,6 +120,40 @@ impl MultiHeadAttention {
         };
 
         let output = self.forward_attention(q, k, v, mask, batch_size, seq_len, hidden_size);
+
+        self.wo.forward(output)
+    }
+
+    /// Lane-aware variant of [`forward_cache`](Self::forward_cache): rotate each lane's Q/K at its
+    /// own absolute position, write/read K/V lane-sliced into the shared slab, and attend under the
+    /// per-lane causal+padding mask. `input` is `[n, seq_len, d_model]`, one row per active lane.
+    pub fn forward_cache_lanes(
+        &self,
+        input: Tensor<3>,
+        cache: &mut KeyValueCache,
+        rope: &RotaryEncoding,
+        plan: &LanePlan,
+    ) -> Tensor<3> {
+        let [n, seq_len, hidden_size] = input.dims();
+
+        let (q, k, v) = self.forward_projection(input);
+
+        // Per-lane RoPE: rotate each lane at its own ABSOLUTE position (no table shift in lane
+        // mode). This equals the single-sequence `pos_encoding.apply` ONLY inside the no-shift
+        // window: `prepare_lanes` caps each lane at `max_seq_len`, and the RoPE table is built
+        // `max_seq_len * 5` rows (see `LlamaConfig::init`), so every lane position is a direct table
+        // index and the single-sequence path's `index()` would equal `position()` here too. Lane
+        // mode never shifts; the single-sequence reference would past `max_seq_len`, but a lane
+        // never reaches there (it finishes or errors first), so the two stay numerically identical.
+        let q = apply_rope_lanes(rope, q, &plan.starts);
+        let k = apply_rope_lanes(rope, k, &plan.starts);
+
+        // Lane-sliced KV write + ragged read-back to the longest active lane.
+        let (k, v) = cache.forward_lanes(&plan.lanes, k, v);
+
+        // plan.mask is [n, 1, seq_len, l_max]; broadcasts over heads inside forward_attention.
+        let output =
+            self.forward_attention(q, k, v, Some(plan.mask.clone()), n, seq_len, hidden_size);
 
         self.wo.forward(output)
     }

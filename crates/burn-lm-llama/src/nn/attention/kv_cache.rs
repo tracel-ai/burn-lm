@@ -43,8 +43,6 @@ impl KeyValueCache {
     /// written into buffer lane `lanes[j]` at that lane's own position.
     /// Returns the active lanes' K/V up to the longest active lane; the
     /// caller masks each lane's stale tail.
-    // The decoder switch-over onto the lane-aware path lands in the next change.
-    #[allow(dead_code)]
     pub fn forward_lanes(
         &mut self,
         lanes: &[usize],
@@ -57,8 +55,6 @@ impl KeyValueCache {
     }
 
     /// Free one lane (its buffer row is overwritten on the next use).
-    // The decoder switch-over onto the lane-aware path lands in the next change.
-    #[allow(dead_code)]
     pub fn reset_lane(&mut self, lane: usize) {
         self.key.reset_lane(lane);
         self.value.reset_lane(lane);
@@ -72,8 +68,6 @@ impl KeyValueCache {
     }
 
     /// Returns the cached sequence length of one lane.
-    // The decoder switch-over onto the lane-aware path lands in the next change.
-    #[allow(dead_code)]
     pub fn lane_len(&self, lane: usize) -> usize {
         // We can assume key and value have the same length
         self.key.lane_len(lane)

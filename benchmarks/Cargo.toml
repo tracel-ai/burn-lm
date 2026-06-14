@@ -44,4 +44,16 @@ burn-lm-llama = { path = "../crates/burn-lm-llama" }
 
 [[bench]]
 harness = false
+name = "attention"
+
+[[bench]]
+harness = false
+name = "transformer_block"
+
+[[bench]]
+harness = false
 name = "embedding"
+
+[[bench]]
+harness = false
+name = "transformer"

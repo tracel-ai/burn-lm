@@ -325,7 +325,15 @@ impl TransformerCache {
 
     /// Free one lane: zero its length in this bookkeeping AND in every
     /// layer's KV cache. The buffer row is overwritten on the next use.
+    ///
+    /// Releasing a lane outside the slab is a no-op (there is nothing to free): a defensive guard so
+    /// a slot the slab never had — e.g. if `config.max_slots` were raised above the loaded lane
+    /// count — cannot index the fixed-length lane vector out of bounds and panic. Admission also
+    /// caps slots at the slab's `lane_count` (see `batch_capacity`), so this is belt-and-suspenders.
     pub fn reset_lane(&mut self, lane: usize) {
+        if lane >= self.lens.len() {
+            return;
+        }
         self.lens[lane] = 0;
         self.layers
             .iter_mut()
@@ -734,5 +742,17 @@ mod tests {
             assert_eq!(layer.lane_len(0), 0);
             assert_eq!(layer.lane_len(1), 2);
         }
+    }
+
+    /// Releasing a lane outside the slab is a no-op, not a panic — defends against a
+    /// `config.max_slots` raised above the loaded lane count handing admission an out-of-range slot.
+    #[test]
+    fn test_reset_lane_out_of_range_is_a_noop() {
+        let config = lane_test_config(8);
+        let mut cache = TransformerCache::new(&config, 2, &Default::default());
+        cache.prepare_lanes(&[0], 3).unwrap();
+        cache.reset_lane(5); // 5 >= lane_count 2 — must not panic
+        assert_eq!(cache.lane_count(), 2);
+        assert_eq!(cache.lane_len(0), 3, "an in-range lane is untouched");
     }
 }

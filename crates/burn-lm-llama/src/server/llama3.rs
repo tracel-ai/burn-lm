@@ -294,13 +294,24 @@ impl BatchedInferenceServer for Llama321bInstructServer {
         // AND the decoder's shared KV slab lane count (see the `decoder()` loaders), so the slab
         // always has exactly one lane per slot the engine can admit. A whole round of active
         // sequences advances through one fused lane-aware forward.
+        //
+        // SAFETY against mid-flight reconfigure: the slab is sized once at load, but `config` can be
+        // mutated between rounds (`parse_cli/json_config`). Once loaded, cap the reported budget at
+        // the slab's actual `lane_count` so a raised `max_slots` can never make admission hand out a
+        // slot past the slab (which would index a fixed-length lane vector out of bounds and panic
+        // the worker). Raising `max_slots` thus takes effect only after a reload — the slab cannot
+        // grow live. Before load, report `config` (the slab will be that size at load).
+        let max_slots = match self.server.loaded_lane_count() {
+            Some(lanes) => self.config.max_slots.min(lanes),
+            None => self.config.max_slots,
+        };
         BatchCapacity {
-            max_slots: self.config.max_slots,
-            // In lane mode each of the `max_slots` lanes independently holds up to `max_seq_len`
-            // tokens (no shared eviction), so the aggregate KV budget is the product. The field is
+            max_slots,
+            // In lane mode each lane independently holds up to `max_seq_len` tokens (no shared
+            // eviction), so the aggregate KV budget is `lanes * max_seq_len`. The field is
             // declared-but-not-yet-enforced; reporting the true slab capacity keeps it correct for
             // when KV-based admission lands.
-            max_kv_tokens: self.config.max_slots * self.config.max_seq_len,
+            max_kv_tokens: max_slots * self.config.max_seq_len,
         }
     }
 
@@ -566,6 +577,16 @@ impl Llama3BaseServer {
     fn clear_state(&mut self) -> InferenceResult<()> {
         self.model.get_mut()?.reset();
         Ok(())
+    }
+
+    /// The loaded decoder's KV-slab lane count, or `None` if the model is not loaded yet. The slab
+    /// is sized once at load, so this is the real upper bound on admittable slots regardless of any
+    /// later `config.max_slots` change.
+    fn loaded_lane_count(&self) -> Option<usize> {
+        self.model
+            .get()
+            .ok()
+            .map(|model| model.decoder.cache.lane_count())
     }
 
     /// Mutably borrow the loaded decoder, loading the model first if needed.

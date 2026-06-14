@@ -60,27 +60,35 @@ fn logits_row(logits: &Tensor<2>, row: usize, vocab: usize) -> Vec<f32> {
         .collect()
 }
 
-/// Independent batch-1 greedy run through the production forward path
-/// (`LlamaDecoder::forward`: `TransformerCache::prepare` +
-/// `PositionalEncodingState` + `Transformer::forward`), mirroring
+/// Independent batch-1 greedy run through the production lane path
+/// (`LlamaDecoder::prefill` then single-row `decode` into lane 0), mirroring
 /// `Llama::generate`. Returns the argmax token stream and the last-position
 /// logits of every step.
 fn reference_run(prompt: &[u32], steps: usize, device: &Device) -> (Vec<u32>, Vec<Vec<f32>>) {
-    let mut llama = test_llama(device);
+    let mut llama = test_llama_lanes(1, device);
+    let vocab = LlamaConfig::llama3_2_1b_test().vocab_size;
     let mut tokens = Vec::with_capacity(steps);
     let mut logits_steps = Vec::with_capacity(steps);
 
-    let mut input: Vec<u32> = prompt.to_vec();
-    for _ in 0..steps {
-        let x = tokens_tensor(&[input.clone()], device);
-        let logits = llama.decoder.forward(x).unwrap();
-        let [b, q, v] = logits.dims();
-        let last = logits.slice([0..b, q - 1..q, 0..v]).reshape([b, v]);
-        let next = argmax_rows(&last)[0];
-        logits_steps.push(logits_row(&last, 0, v));
-        tokens.push(next);
-        input = vec![next];
+    let out = llama.decoder.prefill(0, prompt, 0).unwrap();
+    let mut last = argmax_rows(&out)[0];
+    tokens.push(last);
+    logits_steps.push(logits_row(&out, 0, vocab));
+
+    for _ in 1..steps {
+        let out = llama
+            .decoder
+            .decode(&[DecodeRow {
+                slot: 0,
+                token: last,
+            }])
+            .unwrap();
+        last = argmax_rows(&out)[0];
+        tokens.push(last);
+        logits_steps.push(logits_row(&out, 0, vocab));
     }
+
+    llama.decoder.release(0);
 
     (tokens, logits_steps)
 }

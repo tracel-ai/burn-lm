@@ -142,8 +142,10 @@ pub struct TransformerCache {
     layers: Vec<KeyValueCache>,
     device: Device,
     max_seq_len: usize,
-    /// Per-lane bookkeeping (`prepare_lanes`/`reset_lane`) — the production decode path. One entry
-    /// per slab lane. Must stay in lockstep with each layer's KV `lane_len` (see `prepare_lanes`).
+    /// Per-lane bookkeeping (`prepare_lanes`/`reset_lane`) — the production decode path and the
+    /// single source of each lane's length. One entry per slab lane. `prepare_lanes` snapshots these
+    /// into `LanePlan.starts`, which the model threads down as the KV write offsets (the KV caches
+    /// keep no length counter of their own).
     lens: Vec<usize>,
 }
 
@@ -179,18 +181,6 @@ impl TransformerCache {
         self.lens[lane]
     }
 
-    /// Debug self-check: this cache's per-lane lengths (which drive RoPE positions + the mask) agree
-    /// with each layer's KV write offset for the given lanes. The two advance together on every
-    /// lane forward and reset together, so they must match before a forward; this makes that
-    /// otherwise convention-only invariant self-checking at the production entry point.
-    pub fn lanes_in_lockstep(&self, lanes: &[usize]) -> bool {
-        lanes.iter().all(|&lane| {
-            self.layers
-                .iter()
-                .all(|layer| layer.lane_len(lane) == self.lens[lane])
-        })
-    }
-
     /// Plan one lane-aware forward of `seq_len` new tokens for `lanes`:
     /// validate per-lane capacity, snapshot each lane's start position, build
     /// the per-lane mask, and advance the lane lengths. This is the production
@@ -208,9 +198,6 @@ impl TransformerCache {
         // - lanes are DISTINCT: a duplicate would double-advance the bookkeeper while the per-row
         //   RoPE/mask used a stale start, silently corrupting that lane's attention.
         // - lanes are in range: a slot past the slab would otherwise be a raw index panic.
-        // (The cross-component lockstep check — this cache's lens vs each layer's KV write offset —
-        // lives in `LlamaDecoder::forward_lanes`, the production entry point, because `prepare_lanes`
-        // is also exercised standalone by unit tests that never run a layer forward.)
         debug_assert!(
             lanes.iter().collect::<std::collections::HashSet<_>>().len() == lanes.len(),
             "prepare_lanes got a duplicate lane: {lanes:?}"
@@ -259,16 +246,15 @@ impl TransformerCache {
         })
     }
 
-    /// Reset every lane: zero all lane lengths in this bookkeeping AND in every layer's KV cache.
-    /// Used between independent generations.
+    /// Reset every lane: zero all lane lengths. Used between independent generations.
     pub fn reset(&mut self) {
         for lane in 0..self.lens.len() {
             self.reset_lane(lane);
         }
     }
 
-    /// Free one lane: zero its length in this bookkeeping AND in every
-    /// layer's KV cache. The buffer row is overwritten on the next use.
+    /// Free one lane: zero its length. The buffer row is overwritten on the next use, since the next
+    /// `prepare_lanes` snapshots a zeroed start and the KV write lands at offset 0.
     ///
     /// Releasing a lane outside the slab is a no-op (there is nothing to free): a defensive guard so
     /// a slot the slab never had — e.g. if `config.max_slots` were raised above the loaded lane
@@ -279,9 +265,6 @@ impl TransformerCache {
             return;
         }
         self.lens[lane] = 0;
-        self.layers
-            .iter_mut()
-            .for_each(|cache| cache.reset_lane(lane));
     }
 }
 
@@ -474,8 +457,9 @@ mod tests {
         assert_eq!(cache.lane_len(1), 1);
     }
 
-    /// `reset_lane` zeroes one lane's bookkeeping and every layer's KV length
-    /// for that lane, leaving the other lane untouched.
+    /// `reset_lane` zeroes one lane's length, leaving the other lane untouched.
+    /// With `TransformerCache.lens` the single source of length, the freed
+    /// lane's next write lands at offset 0 (the KV caches carry no counter).
     #[test]
     fn test_reset_lane_isolates_one_lane() {
         let device: Device = Default::default();
@@ -483,12 +467,12 @@ mod tests {
         let mut cache = TransformerCache::new(&config, 2, &device);
         let head_dim = config.d_model / config.n_heads;
 
-        // Write real KV rows so the per-layer lane lengths advance too.
+        // Write real KV rows; the plan's starts come from this cache's lengths.
         let write = |cache: &mut TransformerCache, lanes: &[usize], seq_len: usize| {
             let x = Tensor::ones([lanes.len(), config.n_kv_heads, seq_len, head_dim], &device);
-            cache.prepare_lanes(lanes, seq_len).unwrap();
+            let plan = cache.prepare_lanes(lanes, seq_len).unwrap();
             for layer in cache.layers.iter_mut() {
-                layer.forward_lanes(lanes, x.clone(), x.clone());
+                layer.forward_lanes(&plan.lanes, &plan.starts, x.clone(), x.clone());
             }
         };
 
@@ -497,18 +481,16 @@ mod tests {
         write(&mut cache, &[0, 1], 1);
         assert_eq!(cache.lane_len(0), 4);
         assert_eq!(cache.lane_len(1), 2);
-        for layer in cache.layers.iter() {
-            assert_eq!(layer.lane_len(0), 4);
-            assert_eq!(layer.lane_len(1), 2);
-        }
 
         cache.reset_lane(0);
         assert_eq!(cache.lane_len(0), 0);
         assert_eq!(cache.lane_len(1), 2);
-        for layer in cache.layers.iter() {
-            assert_eq!(layer.lane_len(0), 0);
-            assert_eq!(layer.lane_len(1), 2);
-        }
+
+        // Lane 0 is recycled from position 0; lane 1 keeps growing from its own length.
+        write(&mut cache, &[0], 2);
+        write(&mut cache, &[1], 1);
+        assert_eq!(cache.lane_len(0), 2);
+        assert_eq!(cache.lane_len(1), 3);
     }
 
     /// Releasing a lane outside the slab is a no-op, not a panic — defends against a

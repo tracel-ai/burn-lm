@@ -72,13 +72,6 @@ impl LlamaDecoder {
         input: Tensor<2, Int>,
     ) -> InferenceResult<Tensor<2>> {
         let seq_len_in = input.dims()[1];
-        // The cache's per-lane lengths (RoPE positions + mask) must agree with each layer's KV write
-        // offset before we forward. They only ever move together, but check it here so a future
-        // wiring regression fails loudly instead of silently attending to the wrong KV columns.
-        debug_assert!(
-            self.cache.lanes_in_lockstep(lanes),
-            "lane bookkeepers desynced before forward (cache lens vs layer KV)"
-        );
         let plan = self
             .cache
             .prepare_lanes(lanes, seq_len_in)

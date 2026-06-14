@@ -4,55 +4,51 @@ use burn::tensor::{Device, Tensor};
 /// Cache that keeps track of a tensor state in an autoregressive decoding process.
 ///
 /// Bookkeeping is per lane: dimension 0 is the lane (batch row of the shared
-/// buffer) and `lens[lane]` tracks how many positions that lane holds.
+/// buffer). The caller owns the per-lane lengths (see
+/// [`TransformerCache`](crate::nn::transformer::TransformerCache)) and passes
+/// each lane's write offset into `append_lanes`.
 pub(crate) struct AutoregressiveCache<const D: usize> {
     cache: Tensor<D>,
     seq_dim: usize,
-    /// Per-lane sequence lengths.
-    ///
-    /// The lane path (`append_lanes`/`reset_lane`) is the production decode path: each entry is one
-    /// live, independent lane's length. `append_lanes` writes lane `j` at `lens[lane]`.
-    lens: Vec<usize>,
 }
 
 impl<const D: usize> AutoregressiveCache<D> {
     /// Creates a new empty cache.
     pub fn new(shape: [usize; D], seq_dim: usize, device: &Device) -> Self {
-        // Lanes live on dimension 0; when dim 0 *is* the sequence dimension
-        // (1D-style caches) there is exactly one lane.
-        let n_lanes = if seq_dim == 0 { 1 } else { shape[0] };
         Self {
             cache: Tensor::empty(shape, device),
             seq_dim,
-            lens: vec![0; n_lanes],
         }
     }
 
-    /// Reset a single lane; its buffer row is overwritten on the next append.
-    pub fn reset_lane(&mut self, lane: usize) {
-        self.lens[lane] = 0;
-    }
-
     /// Lane-sliced append: write row `j` of `tokens` into buffer row
-    /// `lanes[j]` at that lane's current length, then return the active
-    /// lanes' contents up to the longest active lane.
+    /// `lanes[j]` at offset `starts[j]` (its length before this write), then
+    /// return the active lanes' contents up to the longest active lane.
     ///
-    /// Lanes are independent: each sits at its own position; columns past a
-    /// lane's own length in the returned tensor are stale buffer data and
-    /// MUST be masked by the caller (per-lane padding mask).
+    /// The caller owns the per-lane lengths and supplies `starts`; this cache
+    /// keeps no counter of its own. Lanes are independent: each sits at its own
+    /// position; columns past a lane's own length in the returned tensor are
+    /// stale buffer data and MUST be masked by the caller (per-lane padding
+    /// mask).
     ///
     /// # Shapes
     ///
     /// - tokens: `[n_active, num_heads, seq_len_input, d_model]`
-    /// - output: `[n_active, num_heads, max(lens[lane]) + seq_len_input, d_model]`
-    pub fn append_lanes(&mut self, lanes: &[usize], tokens: Tensor<D>) -> Tensor<D> {
+    /// - output: `[n_active, num_heads, max(starts) + seq_len_input, d_model]`
+    pub fn append_lanes(
+        &mut self,
+        lanes: &[usize],
+        starts: &[usize],
+        tokens: Tensor<D>,
+    ) -> Tensor<D> {
         debug_assert_ne!(self.seq_dim, 0, "lane dimension is dim 0");
         let shape = tokens.shape();
         debug_assert_eq!(shape[0], lanes.len());
+        debug_assert_eq!(starts.len(), lanes.len());
         let seq_len_input = shape[self.seq_dim];
 
         for (j, &lane) in lanes.iter().enumerate() {
-            let start = self.lens[lane];
+            let start = starts[j];
             let mut value_idx = Vec::with_capacity(shape.len());
             let mut cache_idx = Vec::with_capacity(shape.len());
             for (i, dim) in shape.iter().enumerate() {
@@ -70,11 +66,10 @@ impl<const D: usize> AutoregressiveCache<D> {
             let row = tokens.clone().slice(value_idx.as_slice());
             self.cache
                 .inplace(|cache| cache.slice_assign(cache_idx.as_slice(), row));
-            self.lens[lane] = start + seq_len_input;
         }
 
         // Read the active lanes back, ragged tails included (mask handles them).
-        let l_max = lanes.iter().map(|&lane| self.lens[lane]).max().unwrap();
+        let l_max = starts.iter().map(|&s| s + seq_len_input).max().unwrap();
         let cache_shape = self.cache.shape();
         let rows = lanes
             .iter()
@@ -94,11 +89,6 @@ impl<const D: usize> AutoregressiveCache<D> {
             .collect::<Vec<_>>();
         Tensor::cat(rows, 0)
     }
-
-    /// Returns the cached sequence length of one lane.
-    pub fn lane_len(&self, lane: usize) -> usize {
-        self.lens[lane]
-    }
 }
 
 #[cfg(test)]
@@ -107,8 +97,9 @@ mod tests {
     use burn::tensor::TensorData;
 
     /// Lanes at divergent positions: ragged writes land at each lane's own
-    /// offset, the read-back covers the longest active lane, and `reset_lane`
-    /// frees one lane without touching its siblings.
+    /// caller-supplied offset, the read-back covers the longest active lane,
+    /// and recycling a lane (offset 0) overwrites its row without touching its
+    /// siblings.
     #[test]
     fn test_append_lanes_ragged_positions_and_reset_lane() {
         let device = Default::default();
@@ -117,21 +108,17 @@ mod tests {
 
         // Prefill lane 0 with 3 positions, lane 2 with 1 position.
         let p0 = Tensor::<4>::full([1, 1, 3, 2], 1.0, &device);
-        cache.append_lanes(&[0], p0);
+        cache.append_lanes(&[0], &[0], p0);
         let p2 = Tensor::<4>::full([1, 1, 1, 2], 3.0, &device);
-        cache.append_lanes(&[2], p2);
-        assert_eq!(cache.lane_len(0), 3);
-        assert_eq!(cache.lane_len(1), 0);
-        assert_eq!(cache.lane_len(2), 1);
+        cache.append_lanes(&[2], &[0], p2);
 
-        // Fused decode write: one new position per active lane (0 and 2).
+        // Fused decode write: one new position per active lane (0 and 2) at
+        // each lane's own offset (3 and 1).
         let step = Tensor::<4>::from_data(
             [[[[10.0, 10.0]]], [[[30.0, 30.0]]]], // rows: lane 0, lane 2
             &device,
         );
-        let out = cache.append_lanes(&[0, 2], step);
-        assert_eq!(cache.lane_len(0), 4);
-        assert_eq!(cache.lane_len(2), 2);
+        let out = cache.append_lanes(&[0, 2], &[3, 1], step);
         // Read-back spans the longest active lane (4 positions).
         assert_eq!(out.dims(), [2, 1, 4, 2]);
         // Lane 0 row: 3 prefill positions then the step write.
@@ -148,15 +135,9 @@ mod tests {
             .to_data()
             .assert_eq(&TensorData::from([[[[3.0f32, 3.0], [30.0, 30.0]]]]), false);
 
-        // Releasing lane 0 leaves lane 2 untouched.
-        cache.reset_lane(0);
-        assert_eq!(cache.lane_len(0), 0);
-        assert_eq!(cache.lane_len(2), 2);
-
-        // Lane 0 is recycled from position 0.
+        // Lane 0 is recycled from position 0, overwriting its old row.
         let fresh = Tensor::<4>::full([1, 1, 2, 2], 7.0, &device);
-        let out = cache.append_lanes(&[0], fresh);
-        assert_eq!(cache.lane_len(0), 2);
+        let out = cache.append_lanes(&[0], &[0], fresh);
         out.to_data()
             .assert_eq(&TensorData::from([[[[7.0f32, 7.0], [7.0, 7.0]]]]), false);
     }

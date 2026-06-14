@@ -141,27 +141,6 @@ pub(crate) fn apply_rope_lanes(rope: &RotaryEncoding, x: Tensor<4>, starts: &[us
     out.sum_dim(3).reshape([n, heads, q, head_dim])
 }
 
-/// Correctness-floor fallback for [`apply_rope_lanes`]: loop
-/// `rope.apply(x_lane, pos)` over per-lane slices and `cat`. Kept test-only
-/// to cross-validate the gather path against the production single-lane op.
-#[cfg(test)]
-pub(crate) fn apply_rope_lanes_looped(
-    rope: &RotaryEncoding,
-    x: Tensor<4>,
-    starts: &[usize],
-) -> Tensor<4> {
-    let [n, heads, q, head_dim] = x.dims();
-    let lanes = (0..n)
-        .map(|j| {
-            rope.apply(
-                x.clone().slice([j..j + 1, 0..heads, 0..q, 0..head_dim]),
-                starts[j],
-            )
-        })
-        .collect::<Vec<_>>();
-    Tensor::cat(lanes, 0)
-}
-
 /// Rotary positional encoding (RoPE)
 #[derive(Config, Debug)]
 pub struct RopeConfig {
@@ -261,10 +240,10 @@ mod tests {
             .assert_approx_eq::<f32>(&expected, Tolerance::relative(0.05));
     }
 
-    /// The gather RoPE path equals both the per-lane-loop fallback and the
-    /// production `RotaryEncoding::apply` at every lane's position.
+    /// The gather RoPE path equals the production `RotaryEncoding::apply` at every lane's position —
+    /// the authoritative cross-check against the single-position op.
     #[test]
-    fn test_rope_lanes_gather_matches_loop_and_production_apply() {
+    fn test_rope_lanes_gather_matches_production_apply() {
         let device: Device = Default::default();
         let rope = RotaryEncodingConfig::new(64, 4).init(&device);
 
@@ -277,11 +256,6 @@ mod tests {
         );
 
         let gathered = apply_rope_lanes(&rope, x.clone(), &starts);
-        let looped = apply_rope_lanes_looped(&rope, x.clone(), &starts);
-        gathered
-            .clone()
-            .into_data()
-            .assert_approx_eq::<f32>(&looped.into_data(), Tolerance::rel_abs(1e-5, 1e-6));
 
         for (j, &start) in starts.iter().enumerate() {
             let lane = x.clone().slice([j..j + 1, 0..2, 0..2, 0..4]);

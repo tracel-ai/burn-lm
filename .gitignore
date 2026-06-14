@@ -6,3 +6,4 @@ burnlm.config
 
 # Local-only docs / scratch notes (not committed)
 local-docs/
+.zed

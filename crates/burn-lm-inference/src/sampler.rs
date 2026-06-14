@@ -1,28 +1,27 @@
-//! Minimal next-token sampling owned by the framework continuous engine.
+//! Next-token sampling, owned by the framework rather than the model.
 //!
-//! The continuous-batching engine in [`BatchingChannel`](crate::channels::batching::BatchingChannel)
-//! owns sampling rather than delegating it to the model: the model seam is forward + tokenizer
-//! primitives only. Phase 1 only needs deterministic argmax; richer strategies (top-p, temperature)
-//! can be ported here later without touching the model trait.
+//! The continuous-batching engine owns sampling instead of delegating it to the model, which keeps
+//! the model boundary to forward and tokenizer primitives only. Today the framework's own sampler
+//! only needs deterministic argmax; richer strategies like top-p and temperature can be added here
+//! later without touching the model trait. A model that has its own sampling config supplies its
+//! own sampler through `next_token_sampler` instead.
 
 use burn::tensor::{Int, Tensor};
 
-/// Picks the next token id from a `[batch, vocab]` row of logits.
+/// Picks the next token id from a `[batch, vocab]` tensor of logits.
 ///
-/// The generic decode core ([`step_round`](crate::batching::step_round)) is parameterized over this
-/// trait rather than a concrete sampler so that callers can plug in their own strategy — the
-/// framework's argmax [`Sampler`], or (on the library side) a temperature-/top-p-aware sampler —
-/// without the core knowing which. Implementations return one token id per input row, shaped
-/// `[batch, 1]`.
+/// The generic decode core `step_round` is parameterized over this trait rather than a concrete
+/// sampler so callers can plug in their own strategy — the framework's argmax `Sampler`, or a
+/// temperature- or top-p-aware sampler on the library side — without the core knowing which.
+/// Implementations return one token id per input row, shaped `[batch, 1]`.
 pub trait NextTokenSampler {
     /// Sample one token id per row of a `[batch, vocab]` logits tensor, returning `[batch, 1]`.
     fn sample_next(&mut self, logits: Tensor<2>) -> Tensor<2, Int>;
 }
 
-/// Boxed samplers delegate, so the worker can hold the server-built
-/// `Box<dyn NextTokenSampler + Send>` (see
-/// [`BatchedInferenceServer::next_token_sampler`](crate::batching::BatchedInferenceServer::next_token_sampler))
-/// while [`step_round`](crate::batching::step_round) keeps its plain `S: NextTokenSampler` bound.
+/// A boxed sampler is itself a `NextTokenSampler`, forwarding to its inner one. The server hands out
+/// per-request samplers as `Box<dyn NextTokenSampler + Send>` (see `next_token_sampler`), and this
+/// impl lets that box be used anywhere the trait is expected.
 impl NextTokenSampler for Box<dyn NextTokenSampler + Send> {
     fn sample_next(&mut self, logits: Tensor<2>) -> Tensor<2, Int> {
         (**self).sample_next(logits)

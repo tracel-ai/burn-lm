@@ -2,20 +2,18 @@
 //!
 //! Byte-level BPE tokenizers (e.g. Llama-3's Tiktoken) routinely split a multi-byte character
 //! across tokens, so decoding token-by-token yields byte chunks that are not individually valid
-//! UTF-8. [`Utf8Buffer`] turns such a byte stream into a text stream: each
-//! [`push`](Utf8Buffer::push) emits the longest valid prefix and holds back a trailing
-//! *incomplete* sequence (at most 3 bytes) until later bytes complete it;
-//! [`finish`](Utf8Buffer::finish) drains whatever remains at true end of stream, where lossy
-//! replacement (U+FFFD) is permitted.
+//! UTF-8. `Utf8Buffer` turns such a byte stream into a text stream. Each `push` emits the longest
+//! valid prefix and holds back a trailing incomplete sequence — at most 3 bytes — until later bytes
+//! complete it. `finish` drains whatever remains at the true end of the stream, where lossy
+//! replacement with U+FFFD is permitted.
 //!
-//! Bytes that are *definitely* invalid (no future byte can complete them —
-//! `Utf8Error::error_len() == Some(_)`) are replaced with U+FFFD immediately in `push`: holding
-//! them back would stall all later text behind bytes that can never become valid and would break
-//! the ≤3-byte hold-back bound. For in-vocab tokenizer output this case does not occur; only
-//! boundary splits (the `error_len() == None` case) do.
+//! Bytes that are definitely invalid, meaning no future byte can complete them, are replaced with
+//! U+FFFD immediately in `push` rather than held back. Holding them back would stall all later text
+//! behind bytes that can never become valid, and would break the 3-byte hold-back bound. For
+//! in-vocab tokenizer output this never happens; only boundary splits do.
 
-/// Streaming UTF-8 assembler. Holds at most 3 pending bytes between pushes (the longest
-/// incomplete UTF-8 sequence prefix).
+/// A streaming UTF-8 assembler. It holds at most 3 pending bytes between pushes, which is the
+/// longest a partial UTF-8 sequence can run before its final byte arrives.
 #[derive(Debug, Default)]
 pub struct Utf8Buffer {
     pending: Vec<u8>,
@@ -26,13 +24,14 @@ impl Utf8Buffer {
         Self::default()
     }
 
-    /// Number of held-back bytes (≤ 3 for any input that is a prefix of valid UTF-8).
+    /// The number of held-back bytes, at most 3 for any input that is a prefix of valid UTF-8.
     pub fn pending_len(&self) -> usize {
         self.pending.len()
     }
 
-    /// Append bytes; return all newly complete UTF-8 text, holding back a trailing incomplete
-    /// sequence. Never panics; never emits U+FFFD for bytes a later push could complete.
+    /// Append bytes and return all the text that is now complete, holding back a trailing incomplete
+    /// sequence for a later push. This never panics, and never emits U+FFFD for bytes that a later
+    /// push could still complete.
     pub fn push(&mut self, bytes: &[u8]) -> Option<String> {
         self.pending.extend_from_slice(bytes);
         let mut out = String::new();
@@ -45,7 +44,7 @@ impl Utf8Buffer {
                 }
                 Err(err) => {
                     let valid = err.valid_up_to();
-                    // Unsafe-free path: re-slice through the checked API.
+                    // Re-slice through the checked API rather than an unsafe `from_utf8_unchecked`.
                     out.push_str(
                         std::str::from_utf8(&self.pending[..valid])
                             .expect("prefix up to valid_up_to() is valid UTF-8"),
@@ -72,8 +71,9 @@ impl Utf8Buffer {
         }
     }
 
-    /// End of stream: drain whatever remains, replacing genuinely invalid or incomplete bytes
-    /// with U+FFFD (permitted only here).
+    /// End of stream: drain whatever bytes remain, replacing genuinely invalid or incomplete ones
+    /// with U+FFFD. This is the one place that lossy replacement is allowed, because a held-back
+    /// partial character can never be completed once the stream has ended.
     pub fn finish(&mut self) -> Option<String> {
         if self.pending.is_empty() {
             return None;

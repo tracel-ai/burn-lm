@@ -1,10 +1,10 @@
-//! Production-path equivalence + throughput tests for the fused lane decoder.
+//! Production-path equivalence and throughput tests for the fused lane decoder.
 //!
 //! The fused multi-row `LlamaDecoder::decode` (lane-sliced KV writes into a shared slab, gather RoPE
 //! at per-lane positions, per-lane padding masks) must be numerically identical to independent
-//! batch-1 runs through the single-sequence forward path. These tests drive the REAL production seam
+//! batch-1 runs through the single-sequence forward path. These tests drive the real production seam
 //! (`prefill`/`decode`/`release`):
-//! - byte-exact argmax + tight-tolerance logits at 2 and 3 lanes at divergent positions;
+//! - byte-exact argmax plus tight-tolerance logits at 2 and 3 lanes at divergent positions;
 //! - a non-contiguous lane subset after a mid-batch release;
 //! - lane reuse after release starts clean.
 //!
@@ -89,7 +89,7 @@ fn divergent_prompts() -> Vec<Vec<u32>> {
 }
 
 /// Build the tiny test model with an `n_lanes`-lane slab (slot == lane), seeded with a fixed reinit
-/// so its output is directly comparable to [`reference_run`].
+/// so its output is directly comparable to `reference_run`.
 fn test_llama_lanes(n_lanes: usize, device: &Device) -> Llama<ByteTokenizer> {
     let config = LlamaConfig::llama3_2_1b_test().with_max_batch_size(n_lanes);
     let mut llama = config.init::<ByteTokenizer>(device).unwrap();
@@ -99,7 +99,7 @@ fn test_llama_lanes(n_lanes: usize, device: &Device) -> Llama<ByteTokenizer> {
     llama
 }
 
-/// Greedy multi-lane run through the REAL decoder: staggered prefill into each lane, then fused
+/// Greedy multi-lane run through the real decoder: staggered prefill into each lane, then fused
 /// `[n, 1]` decode rounds. Returns each lane's (argmax stream, per-step last-position logits).
 fn real_decoder_batched_run(
     prompts: &[Vec<u32>],
@@ -142,9 +142,9 @@ fn real_decoder_batched_run(
     tokens.into_iter().zip(logits).collect()
 }
 
-/// Every lane's fused real-decoder run must match its independent batch-1 reference — both
-/// byte-exact argmax stream AND tight-tolerance per-step logits (the latter catches a sub-argmax
-/// numerical drift that an argmax-only check would miss).
+/// Every lane's fused real-decoder run must match its independent batch-1 reference: both the
+/// byte-exact argmax stream and the tight-tolerance per-step logits. The logits check catches a
+/// sub-argmax numerical drift that an argmax-only check would miss.
 fn assert_real_decoder_equivalent(prompts: Vec<Vec<u32>>, steps: usize, device: &Device) {
     let batched = real_decoder_batched_run(&prompts, steps, device);
     let tolerance = Tolerance::<f32>::rel_abs(1e-4, 1e-5);
@@ -171,20 +171,20 @@ fn prompt_bytes(s: &str, take: usize) -> Vec<u32> {
     v
 }
 
-/// S7a production-path equivalence: prefill + fused `[n, 1]` decode rounds through the REAL
-/// [`LlamaDecoder`] (`prepare_lanes` → `forward_lanes`, slot == lane) must match independent
+/// Production-path equivalence: prefill plus fused `[n, 1]` decode rounds through the real
+/// `LlamaDecoder` (`prepare_lanes` then `forward_lanes`, slot == lane) must match independent
 /// batch-1 runs through the single-sequence forward path, driving the actual production seam
-/// (`prefill`/`decode`/`release`). Two lanes at divergent positions (37, 5). Two lanes at divergent positions (37, 5).
+/// (`prefill`/`decode`/`release`). Two lanes at divergent positions (37, 5).
 #[test]
 fn fused_decode_through_real_decoder_matches_batch1() {
     let device: Device = Default::default();
     assert_real_decoder_equivalent(divergent_prompts(), 24, &device);
 }
 
-/// A lane retires mid-batch and the survivors continue as a NON-CONTIGUOUS subset. The worker does
-/// this whenever one request finishes before its batchmates (`decode(&rows)` over lanes `[0, 2]`
+/// A lane retires mid-batch and the survivors continue as a non-contiguous subset. The worker does
+/// this whenever one request finishes before its batchmates (`decode(&rows)` over lanes `0` and `2`
 /// after lane 1 was released), but the other equivalence tests run every lane to the same length, so
-/// the ragged-subset masking / RoPE / KV-slice keying off the explicit `lanes` slice (not a dense
+/// the ragged-subset masking, RoPE, and KV-slice keying off the explicit `lanes` slice (not a dense
 /// `0..n`) had no real-weights coverage. Here lane 1 is released after a few rounds and lanes 0 and 2
 /// must keep matching their solo runs.
 #[test]
@@ -249,9 +249,9 @@ fn fused_decode_with_a_released_middle_lane_matches_batch1() {
     );
 }
 
-/// Three lanes at three distinct positions. n=2 cannot distinguish a correct per-lane mapping from
-/// a row-vs-lane index swap in the mask build or the RoPE gather (both symmetric at 2), so this is
-/// the test that actually pins the lane indexing at n >= 3.
+/// Three lanes at three distinct positions. Two lanes cannot distinguish a correct per-lane mapping
+/// from a row-versus-lane index swap in the mask build or the RoPE gather (both are symmetric at
+/// two), so this is the test that actually pins the lane indexing at three or more lanes.
 #[test]
 fn fused_decode_three_lanes_matches_batch1() {
     let device: Device = Default::default();
@@ -263,10 +263,10 @@ fn fused_decode_three_lanes_matches_batch1() {
     assert_real_decoder_equivalent(prompts, 16, &device);
 }
 
-/// A lane reused after `release` must NOT inherit the retired occupant's KV: a second sequence
-/// prefilled into the same slot (`position == 0`) self-heals the lane. This is the only test that
-/// makes that self-heal load-bearing — with a clean fresh decoder the reset is a no-op, so it must
-/// run on a DIRTY lane (slot previously held a longer sequence) while a sibling lane stays live.
+/// A lane reused after `release` must not inherit the retired occupant's KV: a second sequence
+/// prefilled into the same slot (`position == 0`) resets the lane first. This is the only test where
+/// that reset actually does something — with a clean fresh decoder it is a no-op, so the reused lane
+/// here is dirty (the slot previously held a longer sequence) while a sibling lane stays live.
 #[test]
 fn lane_reuse_after_release_starts_clean() {
     let device: Device = Default::default();
@@ -284,7 +284,7 @@ fn lane_reuse_after_release_starts_clean() {
     // Lane 1 holds an unrelated live sequence the whole time.
     llama.decoder.prefill(1, &other, 0).unwrap();
 
-    // Sequence A fills (dirties) lane 0 with a LONGER history, decodes a few rounds, then retires.
+    // Sequence A fills (dirties) lane 0 with a longer history, decodes a few rounds, then retires.
     let mut last_a = argmax_rows(&llama.decoder.prefill(0, &a, 0).unwrap())[0];
     for _ in 0..3 {
         let row = DecodeRow {
@@ -311,9 +311,9 @@ fn lane_reuse_after_release_starts_clean() {
     );
 }
 
-/// Shared benchmark: drive the REAL `LlamaDecoder` at batch 1/2/4/8 over a slab sized to the max
+/// Shared benchmark: drive the real `LlamaDecoder` at batch 1/2/4/8 over a slab sized to the max
 /// batch (reset between runs, using lanes `0..batch`). Prefill plus a few warmup decode steps
-/// (shader compile / autotune) are untimed. This times the SHIPPED fused decode path
+/// (shader compile and autotune) are untimed. This times the shipped fused decode path
 /// (`prefill`/`decode`), not a stand-in re-implementation.
 fn run_bench(prompt: &[u32], steps: usize, decoder: &mut LlamaDecoder) {
     use std::time::Instant;

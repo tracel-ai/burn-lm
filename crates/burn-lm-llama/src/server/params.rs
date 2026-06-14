@@ -1,5 +1,5 @@
 //! Per-job sampling settings: server config defaults merged with the per-request
-//! [`GenerationParams`] carried on the job.
+//! `GenerationParams` carried on the job.
 //!
 //! Both generation paths resolve through here — the batching worker (via
 //! `next_token_sampler`/admission) and the single-request `run_job` path — so a request means the
@@ -10,8 +10,8 @@ use rand::RngExt;
 
 use crate::generation::{Sampler, TopP};
 
-/// The effective sampling settings for ONE job: server config defaults with any per-job overrides
-/// applied. Built fresh per job — never mutates shared server config, so concurrent requests
+/// The effective sampling settings for one job: server config defaults with any per-job overrides
+/// applied. Built fresh per job, never mutating shared server config, so concurrent requests
 /// cannot clobber each other.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SamplingSettings {
@@ -23,9 +23,9 @@ pub struct SamplingSettings {
 }
 
 impl SamplingSettings {
-    /// Merge per-job `params` over the server config `defaults`. Job params take precedence;
-    /// `None` falls back to the default — except `max_tokens`, which can only LOWER the
-    /// configured `sample_len` (the operator-set cap stays authoritative).
+    /// Merge per-job `params` over the server config `defaults`. Job params take precedence, and
+    /// `None` falls back to the default — except `max_tokens`, which can only lower the configured
+    /// `sample_len`, never raise it, so the operator-set cap stays authoritative.
     pub fn resolve(defaults: Self, params: &GenerationParams) -> Self {
         Self {
             top_p: params.top_p.unwrap_or(defaults.top_p),

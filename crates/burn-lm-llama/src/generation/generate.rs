@@ -15,18 +15,18 @@ pub(crate) fn temperature_scaled_softmax(logits: Tensor<2>, temperature: f64) ->
     softmax(logits / temperature, 1)
 }
 
-/// Adapts the library's [`Sampler`] (argmax / top-p) to the framework's
-/// [`NextTokenSampler`] seam, applying the request's temperature scaling first.
+/// Adapts the library's `Sampler` (argmax or top-p) to the framework's `NextTokenSampler` seam,
+/// applying the request's temperature scaling first.
 ///
-/// The generic decode core ([`step_round`]) slices the last-position logits and asks this for the
+/// The generic decode core (`step_round`) slices the last-position logits and asks this for the
 /// next token. To keep request-parameterized sampling (temperature, top-p) working exactly as the
 /// old bespoke loop did, the scaling that used to sit inline in `generate_batch` lives here: when
-/// `temperature > 0.0` the logits are softmaxed by `1/temperature` before sampling (argmax with
-/// `temperature == 0.0` is unchanged, so greedy decoding stays byte-identical).
+/// `temperature > 0.0` the logits are softmaxed by `1/temperature` before sampling. Argmax with
+/// `temperature == 0.0` is unchanged, so greedy decoding stays byte-identical.
 ///
-/// Generic over how it holds the [`Sampler`] so one adapter serves both drivers:
-/// `generate_batch` borrows the caller's sampler (`&mut Sampler`), while the server's
-/// `next_token_sampler` config primitive returns it boxed and therefore OWNING its `Sampler`.
+/// Generic over how it holds the `Sampler` so one adapter serves both drivers: `generate_batch`
+/// borrows the caller's sampler (`&mut Sampler`), while the server's `next_token_sampler` config
+/// primitive returns it boxed and so owns its `Sampler`.
 pub(crate) struct TemperatureSampler<S> {
     pub(crate) sampler: S,
     pub(crate) temperature: f64,
@@ -70,8 +70,8 @@ impl<T: Tokenizer + 'static> Llama<T> {
     /// The generated text along with some other metadata (see [GenerationOutput]).
     ///
     /// Single-request generation is just batched generation with one sequence, so this delegates to
-    /// [`generate_batch`](Self::generate_batch). Keeping one decode loop means there is a single
-    /// place to maintain (and, later, to replace with a fused forward).
+    /// `generate_batch`. Keeping one decode loop means there is a single place to maintain (and,
+    /// later, to replace with a fused forward).
     pub fn generate(
         &mut self,
         prompt: &str,
@@ -94,10 +94,10 @@ impl<T: Tokenizer + 'static> Llama<T> {
 
     /// Generate for a batch of prompts, advancing all of them one token per round.
     ///
-    /// This is a thin batch driver that exercises the [`BatchedDecoder`] seam exactly the way the
-    /// framework's continuous engine does: each sequence is assigned a decoder slot up front
-    /// (this driver owns the slot list, `0..prompts.len()`), prompts prefill into their slots, and
-    /// each round advances every decoding sequence through ONE fused `decode` call before releasing
+    /// This is a thin batch driver that exercises the `BatchedDecoder` seam exactly the way the
+    /// framework's continuous engine does: each sequence is assigned a decoder slot up front (this
+    /// driver owns the slot list, `0..prompts.len()`), prompts prefill into their slots, and each
+    /// round advances every decoding sequence through one fused `decode` call before releasing
     /// every slot on return. The sequences' output streams interleave round by round.
     pub fn generate_batch(
         &mut self,
@@ -162,24 +162,24 @@ impl<T: Tokenizer + 'static> Llama<T> {
         let now = Instant::now();
         // Run the shared generic decode core to completion: one round advances every still-active
         // sequence by a token (one fused decode call, so their streams interleave). `step_round`
-        // does the forward → sample → SYNCHRONOUS stop-check; the driver-side work left is streaming
-        // each new (non-stop) token through its `GenerationContext`. A stop id retires its
+        // does the forward, the sample, and the synchronous stop-check; the driver-side work left is
+        // streaming each new non-stop token through its `GenerationContext`. A stop id retires its
         // sequence in the same round it is produced, so no token is generated past it.
         let mut failure = None;
         'rounds: while active.iter().any(|seq| !seq.finished) {
             // A fresh prefill budget per round over the whole batch.
             let mut budget = PrefillBudget::for_round(&active);
-            // The library path uses ONE shared sampler for every sequence, so the per-row sampling
+            // The library path uses one shared sampler for every sequence, so the per-row sampling
             // closure ignores the row index (the serving worker is what gives each request its own).
             //
-            // NOTE on sampling order: `step_round` samples all prefill rows before all decode rows.
-            // With a STATELESS sampler (argmax, temperature 0) the order is irrelevant. With a
-            // stateful shared sampler (top-p RNG), the per-round draw order is prefills-then-decodes
-            // — which already differs from a solo run because one RNG is shared across the batch, so
-            // batched stochastic output is inherently not solo-identical regardless of order. (A
-            // batch mixing a 1-token prompt — a decode row in round 1 — with longer prompts is the
-            // case where this round is "mixed".) Giving `generate_batch` per-sequence samplers, like
-            // the serving worker, would make order irrelevant; that is part of the open D4 sampling
+            // Sampling order: `step_round` samples all prefill rows before all decode rows. With a
+            // stateless sampler (argmax, temperature 0) the order is irrelevant. With a stateful
+            // shared sampler (top-p RNG), the per-round draw order is prefills then decodes — which
+            // already differs from a solo run because one RNG is shared across the batch, so batched
+            // stochastic output is inherently not solo-identical regardless of order. (A batch mixing
+            // a 1-token prompt, which is a decode row in round 1, with longer prompts is the case
+            // where this round is mixed.) Giving `generate_batch` per-sequence samplers, like the
+            // serving worker, would make order irrelevant; that is part of the open D4 sampling
             // re-evaluation.
             let outcomes = step_round(
                 &mut self.decoder,

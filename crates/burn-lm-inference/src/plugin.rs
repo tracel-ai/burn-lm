@@ -21,8 +21,9 @@ pub trait InferencePlugin: Send + Sync + Debug {
     fn unload(&self) -> InferenceResult<Option<Stats>>;
     fn run_job(&self, job: InferenceJob) -> InferenceResult<Stats>;
     fn clear_state(&self) -> InferenceResult<()>;
-    /// Advisory backpressure probe (see `InferenceChannel::is_overloaded`): lets HTTP answer an
-    /// overloaded streaming request with a real 429 BEFORE committing the SSE response headers.
+    /// Advisory backpressure probe (see `InferenceChannel::is_overloaded`). It lets an HTTP server
+    /// answer an overloaded streaming request with a 429 before it commits the SSE response headers,
+    /// since once the 200 stream has started a 429 can no longer be sent.
     fn is_overloaded(&self) -> bool {
         false
     }

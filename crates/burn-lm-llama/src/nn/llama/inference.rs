@@ -33,19 +33,19 @@ pub struct Llama<T: Tokenizer> {
 
 /// Reusable Llama decoder state for autoregressive inference.
 ///
-/// The KV/RoPE state is a single shared slab: `cache` holds `max_batch_size` lanes (one per engine
-/// slot, see [`BatchCapacity`](burn_lm_inference::batching::BatchCapacity)), and a whole round of
-/// active sequences advances through ONE lane-aware forward. Slot numbers index lanes directly
-/// (the server sets `max_batch_size == max_slots`).
+/// The KV and RoPE state is a single shared slab: `cache` holds `max_batch_size` lanes (one per
+/// engine slot, per `BatchCapacity`), and a whole round of active sequences advances through one
+/// lane-aware forward. Slot numbers index lanes directly (the server sets
+/// `max_batch_size == max_slots`).
 #[derive(Debug)]
 pub struct LlamaDecoder {
     /// Llama decoder-only transformer.
     pub model: Transformer,
-    /// Shared, lane-indexed KV cache (one lane per engine slot). Writes/reads are lane-sliced and
-    /// [`release`](BatchedDecoder::release) resets a lane.
+    /// Shared, lane-indexed KV cache (one lane per engine slot). Writes and reads are lane-sliced,
+    /// and `release` resets a lane.
     pub cache: TransformerCache,
     /// Rotary positional encoding (RoPE). Lane decode reads `rope` directly at each lane's absolute
-    /// position (no table shift).
+    /// position, with no table shift.
     pub pos_encoding: PositionalEncodingState,
     pub device: Device,
 }
@@ -60,12 +60,11 @@ impl LlamaDecoder {
     /// Forward `seq_len` new tokens for each lane in `lanes` (all the same length) through the
     /// shared slab, returning each lane's last-position logits, `[lanes.len(), vocab]`.
     ///
-    /// Prefill is one lane with `seq_len == prompt_len`; fused decode is N active lanes with
-    /// `seq_len == 1`. [`prepare_lanes`](TransformerCache::prepare_lanes) snapshots each lane's
-    /// start position, builds the per-lane causal+padding mask, and advances the lane lengths; the
-    /// model then writes/reads each lane sliced and rotates each at its own absolute position. A
-    /// lane past `max_seq_len` is an error (lane mode has no cache eviction), surfaced as
-    /// `ContextLengthExceeded`.
+    /// Prefill is one lane with `seq_len == prompt_len`; fused decode is several active lanes with
+    /// `seq_len == 1`. `prepare_lanes` snapshots each lane's start position, builds the per-lane
+    /// causal and padding mask, and advances the lane lengths; the model then writes and reads each
+    /// lane sliced and rotates each at its own absolute position. A lane past `max_seq_len` is an
+    /// error (lane mode has no cache eviction), surfaced as `ContextLengthExceeded`.
     fn forward_lanes(
         &mut self,
         lanes: &[usize],
@@ -93,10 +92,10 @@ impl LlamaDecoder {
 impl BatchedDecoder for LlamaDecoder {
     /// Run a whole prompt into one lane, returning the last position's logits (`[1, vocab]`).
     ///
-    /// A `position == 0` prompt is a NEW sequence: reset the lane first so a fresh sequence can
-    /// never resume a previous occupant's KV (normally `release` already did this — resetting again
-    /// makes the lane self-healing). Chunked prompts (`position > 0`, future work) legitimately
-    /// continue the lane's state.
+    /// A `position == 0` prompt is a new sequence: reset the lane first so a fresh sequence can
+    /// never resume a previous occupant's KV. Normally `release` already did this, so resetting
+    /// again is a no-op that lets the lane recover if some release was missed. Chunked prompts
+    /// (`position > 0`, future work) legitimately continue the lane's state.
     fn prefill(
         &mut self,
         slot: usize,
@@ -117,9 +116,10 @@ impl BatchedDecoder for LlamaDecoder {
         self.forward_lanes(&[slot], input)
     }
 
-    /// Advance every row's lane by one token in ONE fused forward, returning logits
+    /// Advance every row's lane by one token in one fused forward, returning logits
     /// `[rows.len(), vocab]` where row `i` belongs to `rows[i]`. Each lane sits at its own absolute
-    /// position; the lane-aware forward writes/reads each sliced and masks each lane's stale tail.
+    /// position; the lane-aware forward writes and reads each sliced and masks each lane's stale
+    /// tail.
     fn decode(&mut self, rows: &[DecodeRow]) -> InferenceResult<Tensor<2>> {
         let lanes: Vec<usize> = rows.iter().map(|row| row.slot).collect();
         let ids: Vec<i32> = rows.iter().map(|row| row.token as i32).collect();

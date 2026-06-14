@@ -1,5 +1,7 @@
-//! The worker engine: the long-lived thread that owns the server and runs the continuous
-//! batching loop. See `mod.rs` for the caller-side facade and protocol types.
+//! The worker engine: the background thread that owns the model server and runs the continuous
+//! batching loop. Requests reach it as commands over a channel; this thread admits them, drives
+//! every in-flight sequence forward one token per round, and streams the results back out. The
+//! caller-side facade and the command/protocol types it speaks live in `mod.rs`.
 
 use std::{
     collections::VecDeque,
@@ -21,60 +23,69 @@ use crate::{
 
 use super::{Command, QueuedJob, WorkerInner};
 
-/// Serving-driver payload attached to a generic [`ActiveSeq`]: where a sequence's text is streamed
-/// and the one-shot completion signal fired when it retires. The generic decode core
-/// ([`step_round`]) never touches this — it advances the [`ActiveSeq`]'s tokens/counters and
-/// reports back; the worker uses this payload to stream tokens and signal completion.
+/// Everything the serving worker needs to remember about one in-flight request, kept next to the
+/// generic decode state in its `ActiveSeq`. The shared decode core (`step_round`) is deliberately
+/// model-agnostic — it only advances tokens and reports back — so all the serving-specific
+/// machinery for turning those tokens into a streamed response lives here instead. A request picks
+/// up a `JobMeta` when it is admitted, streams through it each round, and is retired from it when
+/// it finishes.
 struct JobMeta {
-    /// Where this sequence's text is streamed.
+    /// The channel we stream this request's generated text back to the caller on.
     emitter: GeneratedItemEmitter,
-    /// Per-sequence detok cursor: byte-level BPE can split a multi-byte UTF-8 character across
-    /// tokens, so the loop streams each token's RAW BYTES
-    /// ([`detokenize_bytes`](BatchedInferenceServer::detokenize_bytes)) through this buffer and
-    /// emits only complete text — never a panic, never mid-stream U+FFFD. Every retire path
-    /// flushes it ([`flush_detok`]) so trailing held-back bytes are not silently dropped.
+    /// The detokenizer cursor for this request. A token is just bytes, and byte-level BPE can split
+    /// a single UTF-8 character across two tokens, so we can't simply decode tokens to text one at
+    /// a time. Each round we push the new token's raw bytes in here and emit only the text that is
+    /// now complete, holding a trailing partial character back until its next byte arrives. Without
+    /// this the stream could surface a broken U+FFFD character, or the decoder could panic on
+    /// invalid UTF-8.
     detok: Utf8Buffer,
-    /// Per-sequence sampler, built from the server's sampling config at admission and persisted
-    /// for the sequence's whole generation — same as the single-request path, where one (possibly
-    /// seeded) sampler's RNG advances across all of a request's tokens. Rebuilding per round would
-    /// reset a seeded RNG before every token. `Option` so [`step`] can `.take()` it while the
-    /// sequence itself is mutably borrowed for the round.
+    /// The sampler that turns this request's logits into a token id, built once when the request is
+    /// admitted and kept for its whole life. Sampling can be stateful — a seeded RNG has to advance
+    /// across the request's tokens rather than restart every round — so we never rebuild it
+    /// mid-flight, and two concurrent requests with different settings each get their own. It is an
+    /// `Option` only so `step` can briefly `take` it out while the sequence is borrowed for the
+    /// round, then put it back.
     sampler: Option<Box<dyn NextTokenSampler + Send>>,
-    /// One-shot completion signal for the submitting caller, fired when the sequence retires.
-    /// `Option` so every send site `.take()`s it: completion fires exactly once (first send wins).
-    /// The channel is a bounded one-shot, so a second send with the first still buffered would
-    /// block the worker thread — `take()` makes that impossible by construction.
+    /// The one-shot channel that tells the caller their request is done, with stats or an error. It
+    /// is an `Option` so every place that might send must first `take`, to guarantee we reply
+    /// exactly once: the first send wins. This matters because the channel is a bounded one-shot —
+    /// a second send, with the first still sitting unread, would block this whole worker thread.
     completion: Option<std::sync::mpsc::SyncSender<InferenceResult<Stats>>>,
-    /// The job's cancellation signal, observed once per round by [`step`]'s cancel sweep.
+    /// The caller's cancellation signal. `step` checks it once per round, so a cancelled request
+    /// stops promptly instead of running all the way to its natural end.
     cancel: CancelSignal,
-    /// How long the job sat queued before admission, reported as the queue-wait stat on
-    /// completion (see [`super::QUEUE_WAIT_STAT_NAME`]).
+    /// How long this request waited in the queue before it was admitted. We hold on to it so we can
+    /// report it as a stat when the request completes.
     queue_wait: Duration,
-    /// Set by the cancel sweep so the retire sweep can report the right finish reason. (Reading
-    /// `cancel` again at retire would do, but a signal fired between sweep and retire would then
-    /// mislabel a normally-finished sequence.)
+    /// Set by the cancel sweep when it retires a sequence, so the later retire step knows to label
+    /// the finish reason as cancelled. We record it here rather than re-reading `cancel` at retire,
+    /// because a signal arriving in the gap between the two would otherwise mislabel a request that
+    /// had already finished normally.
     cancelled: bool,
 }
 
-/// Stat name reported when a sequence is retired by cancellation rather than finishing.
+/// The stat key a retiring sequence reports its stop reason under (set today only when a request is
+/// cancelled mid-flight).
 pub const FINISH_REASON_STAT_NAME: &str = "Finish Reason";
 
-/// The framework's in-flight sequence: the generic per-seq decode state plus the serving payload.
+/// One in-flight request as the worker sees it: the generic per-sequence decode state, plus the
+/// serving payload above.
 type JobSeq = ActiveSeq<JobMeta>;
 
-/// Loop-control outcome of one worker iteration.
+/// What one turn of the worker loop decided to do next: keep going, or shut the thread down.
 enum Flow {
     Continue,
     Shutdown,
 }
 
-/// Spawn the worker thread that owns the server and runs the continuous loop around `seed`.
-/// Production calls this with `Server::default()`; tests seed a configured server so capacity
-/// and behavior are controllable.
+/// Start the worker thread. It takes ownership of `seed` (the model server) and runs the continuous
+/// batching loop for the rest of the process's life. Production passes a fresh `Server::default()`;
+/// tests pass a server they have pre-configured so they can control its capacity and behaviour.
 ///
-/// Spawn failure is returned as an error so the caller fails synchronously — setting up
-/// channel state as if a worker existed and then panicking would leave every later caller
-/// parked forever on a worker that was never born.
+/// If the thread fails to spawn we hand the error straight back, so the caller finds out
+/// synchronously. The alternative — wiring up the channel as if a worker existed and only then
+/// discovering it never started — would leave every future caller blocked forever on a worker that
+/// was never born.
 pub(super) fn spawn<S: BatchedInferenceServer + 'static>(seed: S) -> InferenceResult<WorkerInner> {
     let (sender, receiver) = std::sync::mpsc::channel::<Command>();
 
@@ -86,18 +97,11 @@ pub(super) fn spawn<S: BatchedInferenceServer + 'static>(seed: S) -> InferenceRe
             let mut active: Vec<JobSeq> = Vec::new();
 
             loop {
-                // PANIC BOUNDARY (failure ladder): one `catch_unwind` per loop ITERATION — not
-                // per server call (an iteration is the unit of state consistency: a panic
-                // anywhere mid-iteration leaves queue/active partially advanced, and we discard
-                // rather than repair), and not around the whole loop (the boundary must return
-                // control HERE so the intact `queue`/`active` locals can be failed over to
-                // their callers).
-                //
-                // `AssertUnwindSafe` is justified because nothing that crossed the boundary is
-                // reused after a panic: the server (the only state model code can have left
-                // half-mutated) is dropped when the thread exits, and `queue`/`active` are only
-                // read to send `WorkerDied` replies and then cleared. A fresh worker gets a
-                // fresh `Server::default()`.
+                // One panic boundary per loop turn — a turn is the unit we keep consistent. If model
+                // code panics mid-turn we don't repair the half-updated `queue`/`active`; we catch
+                // here and fail the affected callers before the thread dies. `AssertUnwindSafe` holds
+                // because nothing crossing the boundary is reused: the server is dropped on exit, and
+                // `queue`/`active` are only read to send `WorkerDied` replies, then cleared.
                 let flow = catch_unwind(AssertUnwindSafe(|| {
                     worker_iteration(&mut server, &mut queue, &mut active, &receiver)
                 }));
@@ -105,11 +109,12 @@ pub(super) fn spawn<S: BatchedInferenceServer + 'static>(seed: S) -> InferenceRe
                     Ok(Flow::Continue) => {}
                     Ok(Flow::Shutdown) => break,
                     Err(payload) => {
-                        // Panic: log the payload (the default panic hook's stderr line has no
-                        // correlation to the `WorkerDied` replies callers are about to see),
-                        // answer everyone (active AND queued) with `WorkerDied`, then let the
-                        // thread die. The next command lazily respawns a fresh worker (see
-                        // `sender`).
+                        // The worker panicked. We log the payload ourselves because the default
+                        // panic hook's line on stderr has nothing tying it to the `WorkerDied`
+                        // replies the callers are about to get. Then we answer everyone waiting —
+                        // both the active sequences and the still-queued jobs — with `WorkerDied`
+                        // and let the thread end. The next command to arrive lazily spawns a fresh
+                        // worker (see `sender`).
                         let message = payload
                             .downcast_ref::<&str>()
                             .map(|s| s.to_string())
@@ -132,24 +137,18 @@ pub(super) fn spawn<S: BatchedInferenceServer + 'static>(seed: S) -> InferenceRe
     Ok(WorkerInner { sender, handle })
 }
 
-/// One iteration of the worker's continuous loop: park/drain commands, admit, step. Runs inside
-/// the per-iteration panic boundary (see `spawn`).
+/// One turn of the worker loop: take in any pending commands, admit what fits, and advance the
+/// round by one token. Runs inside the per-turn panic boundary set up in `spawn`.
 fn worker_iteration<S: BatchedInferenceServer>(
     server: &mut S,
     queue: &mut VecDeque<QueuedJob>,
     active: &mut Vec<JobSeq>,
     receiver: &std::sync::mpsc::Receiver<Command>,
 ) -> Flow {
-    // Block for the next command only when there is genuinely no progress to make:
-    // nothing active to advance AND nothing admittable right now. "Admittable" means a
-    // job is queued and the server reports a free slot. Parking otherwise (e.g. while a
-    // job is queued and a slot just freed up after a retire) would dead-lock: the queued
-    // job's `Submit` was already drained into `queue`, so no further command is coming to
-    // wake the `recv()` — the worker would sleep forever with admittable work in hand.
-    // (Pre-existing latent bug: the old guard parked on `active.is_empty()` alone, which
-    // only stayed live because a job's submit usually raced in after the previous one
-    // retired; with a freed slot and a job already queued it hangs.) When `max_slots ==
-    // 0` with a job queued, `can_admit` is false, so we still park instead of busy-spin.
+    // Only block for a command when there's genuinely nothing to do: nothing active, and nothing
+    // admittable (a queued job with a free slot). We only wake from `recv` when a new command
+    // arrives — but an admittable job is already in `queue`, with no further command coming to wake
+    // us — so blocking now would sleep forever on work we could have run.
     let can_admit = !queue.is_empty() && server.batch_capacity().max_slots > active.len();
     if active.is_empty() && !can_admit {
         match receiver.recv() {
@@ -161,34 +160,32 @@ fn worker_iteration<S: BatchedInferenceServer>(
             Err(_) => return Flow::Shutdown, // all senders dropped
         }
     }
-    // Drain any further pending commands without blocking, so a burst of submissions is
-    // fully enqueued before the next admit/step sweep. Admission then sees all ready
-    // jobs together (deterministic batching) rather than one per iteration.
+    // Drain whatever else is already waiting, without blocking, so a burst of submissions is fully
+    // enqueued before we decide what to admit. That way admission sees the whole batch of ready
+    // jobs at once and batches them deterministically, instead of letting them in one per turn.
     while let Ok(command) = receiver.try_recv() {
         if handle_command(server, queue, active, command) {
             return Flow::Shutdown;
         }
     }
 
-    // ADMISSION (backpressure): admit queued jobs while there is free capacity. A job
-    // that does not fit stays at the front of the queue for a later iteration.
+    // Admit queued jobs while there is room for them. Anything that doesn't fit stays at the front
+    // of the queue for a later turn — this is where backpressure happens.
     admit(server, queue, active);
 
-    // STEP: advance the round — ≤1 prefill plus one fused decode over every decoding sequence —
-    // then retire any that finished. Retiring frees a slot so the next iteration admits more.
+    // Advance every decoding sequence by one token (plus at most one prefill), then retire whatever
+    // just finished. Each retire frees a slot, so the next turn can admit more.
     step(server, active);
 
     Flow::Continue
 }
 
-/// The panic fallout path: every active sequence gets its detok cursor flushed (trailing
-/// held-back bytes reach the emitter) and a `WorkerDied` reply via the usual send-once `.take()`
-/// discipline; every queued job is answered `WorkerDied` too, its queue permit released on drop.
-/// Commands still buffered in the mpsc when the thread exits are dropped with the receiver, which
-/// disconnects their reply senders — those callers also observe `WorkerDied`, and their permits
-/// drop with the commands, so the depth counter cannot leak. No slots are released here: the
-/// server (and with it every slot's cache inside the decoder) is dropped when the thread exits,
-/// and the respawned worker starts with a fresh server.
+/// Tell everyone the worker has died. Active sequences are retired with `WorkerDied` (same send-once
+/// discipline as a normal retire) and queued jobs answered the same way, each releasing its queue
+/// permit as it drops. Commands still buffered in the channel disconnect when the receiver drops, so
+/// those callers also see `WorkerDied` and their permits drop too — the in-flight counter can't
+/// leak. No slots are released: the server, and every slot's cache with it, dies with the thread,
+/// and the replacement worker starts empty.
 fn fail_everything(queue: &mut VecDeque<QueuedJob>, active: &mut Vec<JobSeq>) {
     for seq in active.iter_mut() {
         retire(&mut seq.extra, Err(InferenceError::WorkerDied));
@@ -199,13 +196,12 @@ fn fail_everything(queue: &mut VecDeque<QueuedJob>, active: &mut Vec<JobSeq>) {
     }
 }
 
-/// Handle a lifecycle/config command between loop iterations. Returns `true` on shutdown.
+/// Handle one lifecycle or config command, in between rounds. Returns `true` if it was a shutdown.
 ///
-/// `Submit` is special: it does not run the job, it just enqueues it; the completion reply is sent
-/// later by [`step`] when the sequence retires.
-///
-/// `active` is read-only context: `Unload` and `ClearState` are rejected while work is in flight
-/// (see the policy comments on those arms).
+/// `Submit` is the exception: it doesn't run anything, it just puts the job on the queue — the
+/// completion reply is sent later, by `step`, when the sequence finally retires. `active` is passed
+/// in read-only, used only to refuse `Unload` and `ClearState` while work is still in flight (see
+/// the reasons on those two arms).
 fn handle_command<S: BatchedInferenceServer>(
     server: &mut S,
     queue: &mut VecDeque<QueuedJob>,
@@ -237,11 +233,9 @@ fn handle_command<S: BatchedInferenceServer>(
             let _ = reply.send(server.is_loaded());
         }
         Command::Unload(reply) => {
-            // POLICY: unload is REJECTED while work is in flight (active sequences or queued
-            // jobs). Commands drain between rounds, so an unload could otherwise land
-            // mid-generation; the next round's `decoder()` would then silently reload the model
-            // and resume in-flight sequences whose slot caches died with the previous instance —
-            // accidental semantics. Callers must wait out (or drain) in-flight work.
+            // Refuse to unload while work is in flight. An unload slipping in between rounds would
+            // be quietly destructive: the next round lazily reloads the model and carries on with
+            // sequences whose KV caches died with the old instance. Callers must drain first.
             let result = if active.is_empty() && queue.is_empty() {
                 server.unload()
             } else {
@@ -253,9 +247,8 @@ fn handle_command<S: BatchedInferenceServer>(
             queue.push_back(queued);
         }
         Command::ClearState(reply) => {
-            // Same hazard as `Unload`: clearing model state under in-flight sequences would yank
-            // their slot caches out from under them mid-generation, so it is likewise
-            // rejected while work is in flight.
+            // The same hazard as `Unload`: wiping model state out from under in-flight sequences
+            // would pull their KV caches away mid-generation, so we refuse it the same way.
             let result = if active.is_empty() && queue.is_empty() {
                 server.clear_state()
             } else {
@@ -268,12 +261,14 @@ fn handle_command<S: BatchedInferenceServer>(
     false
 }
 
-/// Admit queued jobs into the active set while there is free capacity (backpressure).
+/// Move queued jobs into the active set for as long as there is free capacity. This is the one
+/// place new work enters a round.
 ///
-/// `batch_capacity().max_slots` is the server's reported concurrent-sequence budget. The engine
-/// owns the active set, so "free" = that budget minus what is already active: a job is admitted
-/// only while `active.len() < max_slots`. A job that does not fit stays queued for a later sweep
-/// (which runs after a retire frees a slot), making admission continuous.
+/// `batch_capacity().max_slots` is how many sequences the server can run at once. The engine owns
+/// the active set, so "free" is simply that limit minus what is already running, and we keep
+/// admitting while `active.len()` is below it. A job that doesn't fit stays on the queue until a
+/// later sweep — and since that sweep runs right after each retire frees a slot, admission is in
+/// effect continuous.
 fn admit<S: BatchedInferenceServer>(
     server: &mut S,
     queue: &mut VecDeque<QueuedJob>,
@@ -289,21 +284,20 @@ fn admit<S: BatchedInferenceServer>(
         else {
             break;
         };
-        // Whatever happens next — admitted or rejected — the job has left the queue: release its
-        // depth slot so submitters see the freed capacity.
+        // The job has now left the queue whatever we decide next, so release its queue permit right
+        // away; that is what lets waiting submitters see capacity free up.
         drop(permit);
         let queue_wait = enqueued_at.elapsed();
 
-        // Cancelled while queued: reply WITHOUT touching the model — no prefill, no slot. The
-        // caller never received a token, so the reply is an error (unlike an in-flight cancel,
-        // which retires with the stats of what was already streamed).
+        // Cancelled while still queued: reply without touching the model — no prefill, no slot.
+        // It never produced a token, so unlike an in-flight cancel this comes back as an error.
         if job.cancel.is_cancelled() {
             let _ = completion.send(Err(InferenceError::Cancelled));
             continue;
         }
 
-        // Borrow the decoder first: this loads the model if needed, so the subsequent
-        // `tokenize`/`detokenize` primitives can rely on the tokenizer being available.
+        // Borrow the decoder first, since that's what loads the model if needed — so the
+        // `tokenize`/`detokenize` calls below can count on the tokenizer being ready.
         if let Err(err) = server.decoder().map(|_| ()) {
             let _ = completion.send(Err(err));
             continue;
@@ -317,27 +311,25 @@ fn admit<S: BatchedInferenceServer>(
             }
         };
 
-        // The request's `max_tokens` can LOWER the server's generation cap but never raise it:
-        // the server cap is a capacity/config bound the operator set, so a request asking for
-        // more is clamped rather than trusted.
+        // A request may ask for fewer tokens than the server's cap, but never more — the cap is an
+        // operator-set limit, so anything larger is clamped down to it.
         let max_gen = match job.params.max_tokens {
             Some(requested) => requested.min(server.max_gen_tokens()),
             None => server.max_gen_tokens(),
         };
 
-        // Assign the lowest free slot. The engine owns the free-slot list: slots are
-        // `0..max_slots`, and a slot is free iff no active sequence holds it. The admission
-        // guard above guarantees one is free.
+        // Give the new sequence the lowest-numbered free slot. Slots are just `0..max_slots`, and a
+        // slot is free when no active sequence is using it; the admission check above guarantees at
+        // least one is.
         let slot = (0..server.batch_capacity().max_slots)
             .find(|candidate| active.iter().all(|seq| seq.slot != *candidate))
             .expect("admission only runs while a slot is free");
 
-        // Release the slot before handing it to the new sequence (added after a safety review).
-        // The retire sweep normally already did this — releasing twice is a documented no-op —
-        // but doing it here too means one prompt's leftovers can never be resumed by the next,
-        // even if some retire path or a model author's prefill-error rollback forgot. The one
-        // thing isolation rests on is the simplest method in the trait: `release(slot)` drops
-        // that slot's state. (The decoder borrow cannot fail here; it was checked just above.)
+        // Release the slot before handing it over, even though retire normally already did. A safety
+        // net added after a review: re-releasing a free slot is a no-op, but it guarantees one
+        // prompt's leftover state can never bleed into the next if some retire or failed-prefill
+        // rollback forgot to. Per-request isolation rests on this method actually dropping the state.
+        // (The decoder borrow can't fail — we just checked it.)
         if let Ok(decoder) = server.decoder() {
             decoder.release(slot);
         }
@@ -352,9 +344,9 @@ fn admit<S: BatchedInferenceServer>(
             extra: JobMeta {
                 emitter: job.emitter,
                 detok: Utf8Buffer::new(),
-                // Built once at admission, from THIS job's params merged over the server config,
-                // so the sampler (and its RNG) persists across the sequence's rounds and two
-                // concurrent jobs with different params sample independently.
+                // Built once, here, from this request's params layered over the server defaults, so
+                // the sampler and its RNG live for the whole sequence and two concurrent requests
+                // with different settings sample independently.
                 sampler: Some(server.next_token_sampler(&job.params)),
                 completion: Some(completion),
                 cancel: job.cancel,
@@ -365,25 +357,21 @@ fn admit<S: BatchedInferenceServer>(
     }
 }
 
-/// Advance the round (one fused decode over all decoding sequences, plus ≤1 prefill) via the generic
-/// [`step_round`] core, stream the new tokens to their job emitters, then retire finished sequences.
-///
-/// This is the serving driver's thin wrapper around the shared decode core: `step_round` owns the
-/// forward → contract-check → sample → stop-check dance; the framework-specific work that stays
-/// here is detokenizing/streaming each new token to its job emitter and signalling per-job
-/// completion on retire.
+/// Run one round and deal with its results. The shared `step_round` core does the actual work — one
+/// fused decode over every decoding sequence, plus at most one prefill — and this function handles
+/// the serving-specific part around it: stream each new token out to its caller, and retire the
+/// sequences that just finished.
 fn step<S: BatchedInferenceServer>(server: &mut S, active: &mut Vec<JobSeq>) {
-    // Idle fast-path: nothing to advance, so do not touch the model. `decoder()` lazy-loads, so
-    // borrowing it on an empty round would force-load the model from any lifecycle command — and
-    // reload it in the very same loop iteration after a successful `Unload`.
+    // Nothing active, so don't touch the model. This guard matters because `decoder()` loads
+    // lazily: borrowing it on an empty round would force a load — even reloading right after a
+    // successful `Unload` in the same turn.
     if active.is_empty() {
         return;
     }
 
-    // CANCEL SWEEP (once per round, so a fired signal retires its sequence within one round): mark
-    // cancelled sequences finished BEFORE stepping. `step_round` then skips them — no further
-    // forward is spent on a client that is gone — and the retire sweep below handles them like any
-    // other finished sequence: detok flushed first, completion fired exactly once.
+    // Sweep for cancellations once per round so a fired signal retires its sequence this round, not
+    // later. Marking them finished before stepping makes `step_round` skip them — no forward pass
+    // wasted on a caller who left — and the retire sweep below handles them like any other.
     for seq in active.iter_mut() {
         if !seq.finished && seq.extra.cancel.is_cancelled() {
             seq.finished = true;
@@ -393,16 +381,16 @@ fn step<S: BatchedInferenceServer>(server: &mut S, active: &mut Vec<JobSeq>) {
 
     let stop_ids = server.stop_ids();
 
-    // Borrow the decoder for the whole round. If the model is not loaded, retire every active
-    // sequence with that error rather than panicking the worker.
+    // Borrow the decoder for the whole round. If the model isn't loaded we can't run anything, so
+    // rather than panic the worker we retire every active sequence with that error.
     let outcomes = match server.decoder() {
         Ok(decoder) => {
-            // ONE prefill budget for the whole round, computed over the FULL active set, so a long
-            // prompt cannot stall the in-flight decoders for more than one round.
+            // One prefill budget covers the whole round and is computed across the full active set,
+            // so a single long prompt can't hold up the in-flight decoders for more than one round.
             let mut budget = PrefillBudget::for_round(active);
-            // Each in-flight request has its OWN sampler (a seeded RNG persists across its tokens).
-            // Take them all out of `extra` into a parallel Vec so the per-row sampling closure can
-            // index them while `step_round` holds `active` borrowed; restore them after the round.
+            // Each request has its own sampler (a seeded RNG that persists across its tokens). Move
+            // them out of `extra` into a parallel vec so the per-row closure can reach them by index
+            // while `step_round` holds `active` borrowed, then put them back after the round.
             let mut samplers: Vec<Box<dyn NextTokenSampler + Send>> = active
                 .iter_mut()
                 .map(|seq| {
@@ -421,9 +409,9 @@ fn step<S: BatchedInferenceServer>(server: &mut S, active: &mut Vec<JobSeq>) {
             outcomes
         }
         Err(err) => {
-            // Mass-retire: the decoder could not even be borrowed, so there is nothing to
-            // `release` slots into — the caches live inside the decoder, and a later fresh load
-            // starts with every slot empty. Clearing `active` is what frees the slots here.
+            // Couldn't borrow the decoder, so retire every sequence with this error. There's nothing
+            // to release slots into (the caches live inside the decoder, and a fresh load starts
+            // empty), so clearing `active` is what frees them.
             for seq in active.iter_mut() {
                 retire(&mut seq.extra, Err(err.clone()));
             }
@@ -432,10 +420,9 @@ fn step<S: BatchedInferenceServer>(server: &mut S, active: &mut Vec<JobSeq>) {
         }
     };
 
-    // STREAM: for each advanced sequence, push the new token's raw bytes through its detok
-    // cursor and emit whatever text is now complete (a stop token is not streamed; bytes that end
-    // mid-character are held back for the next round). A per-sequence forward error goes to its
-    // completion sender instead.
+    // Stream the round's output. For each sequence that advanced, push its new token's bytes through
+    // the detok cursor and emit whatever text is now complete — a stop token isn't streamed, and a
+    // mid-character byte is held back for next round. A sequence whose forward failed is retired here.
     for (seq, outcome) in active.iter_mut().zip(outcomes) {
         match outcome {
             StepOutcome::Stepped { token, is_stop, .. } => {
@@ -447,30 +434,21 @@ fn step<S: BatchedInferenceServer>(server: &mut S, active: &mut Vec<JobSeq>) {
                 }
             }
             StepOutcome::Failed(err) => {
-                // Flush held-back bytes BEFORE the completion fires (mirrors the
-                // `decoder()`-error path above), so the RETIRE invariant — trailing text always
-                // reaches the emitter before completion — holds on this path too.
+                // Flush the held-back bytes before completion fires, just like the decoder-error
+                // path above, so that trailing text always reaches the caller before we tell them
+                // the request is done.
                 retire(&mut seq.extra, Err(err));
             }
             StepOutcome::Skipped => {}
         }
     }
 
-    // RETIRE: drop finished sequences and signal completion, freeing capacity for admission.
-    // Flushing the detok cursor FIRST covers every retire path through this sweep — stop token,
-    // `max_gen` cap, empty prompt and forward failure (`step_round` marks failed sequences
-    // finished) — so held-back trailing bytes always reach the emitter before completion fires.
-
-    // The completion sender is `.take()`n at every send site, so a sequence retired by a forward
-    // error (its `Err` already sent above) sends nothing here. That matters: the channel is a
-    // bounded one-shot, so a second send with the `Err` still buffered would block the worker —
-    // and the public `submit()` lets callers hold the receiver and recv much later — stalling
-    // every other active sequence.
-    //
-    // Every retire through this sweep — stop token, `max_gen` cap, empty prompt, forward failure,
-    // cancellation — frees its decoder slot: the slot numbers are collected here and released
-    // below, after the sweep, so the slot's cache is dropped and the next admitted sequence
-    // starts clean.
+    // Retire finished sequences: drop them and signal completion, freeing capacity to admit.
+    // `retire` flushes the detok cursor first, so trailing bytes reach the caller before completion
+    // on every path here (stop token, `max_gen` cap, empty prompt, forward failure). A sequence
+    // already failed above sent its `Err` and `took` its sender, so it won't send twice — which
+    // matters because the completion channel is a bounded one-shot a caller may read much later, so a
+    // second send would block the worker. Slots are collected now and released after the sweep.
     let mut freed_slots = Vec::new();
     active.retain_mut(|seq| {
         if seq.finished {
@@ -479,18 +457,16 @@ fn step<S: BatchedInferenceServer>(server: &mut S, active: &mut Vec<JobSeq>) {
             stats
                 .entries
                 .insert(crate::stats::StatEntry::TokensCount(seq.generated));
-            // Queue-wait observability: how long this job sat queued before admission.
-            // Rendered as fixed seconds to match every other duration stat (see
-            // `Stats::display_stats`); a `Named` entry rather than a new `StatEntry` variant
-            // because nothing needs the raw `Duration` back out.
+            // How long this request waited in the queue before admission. Rendered as fixed seconds
+            // to match the other duration stats, and a named entry rather than its own `StatEntry`
+            // variant because nothing needs the raw `Duration` back.
             stats.entries.insert(crate::StatEntry::Named(
                 super::QUEUE_WAIT_STAT_NAME.to_string(),
                 format!("{:.2}s", seq.extra.queue_wait.as_secs_f64()),
             ));
-            // An in-flight cancel still replies `Ok`: the caller already received real tokens,
-            // and the finish-reason stat says why the stream stopped short. (Only the
-            // cancelled path carries a finish reason today, so normally-finished sequences
-            // keep their existing, byte-identical stats output.)
+            // A request cancelled mid-flight still completes with `Ok`: the caller got real tokens,
+            // and this finish-reason stat says why the stream ended early. Only the cancelled path
+            // sets one today, so normally-finished requests keep their existing stats output.
             if seq.extra.cancelled {
                 stats.entries.insert(crate::StatEntry::Named(
                     FINISH_REASON_STAT_NAME.to_string(),
@@ -504,9 +480,9 @@ fn step<S: BatchedInferenceServer>(server: &mut S, active: &mut Vec<JobSeq>) {
         }
     });
 
-    // Release the retired sequences' slots so the decoder drops their caches. The decoder was
-    // borrowable at the top of this round, so a failure here is unreachable in practice; if it
-    // does fail, the slots are free engine-side anyway and a fresh decoder load starts empty.
+    // Release the retired slots so the decoder drops their caches. The borrow succeeded at the top
+    // of the round, so failing here is effectively impossible — and harmless if it did, since the
+    // slots are already free engine-side.
     if !freed_slots.is_empty() {
         if let Ok(decoder) = server.decoder() {
             for slot in freed_slots {
@@ -516,22 +492,21 @@ fn step<S: BatchedInferenceServer>(server: &mut S, active: &mut Vec<JobSeq>) {
     }
 }
 
-/// Drain a retiring sequence's detok cursor into its emitter. At true end of stream a held-back
-/// partial character can never complete, so lossy U+FFFD replacement is permitted here (and only
-/// here) rather than silently dropping the bytes. Called on EVERY retire path: the [`step`]
-/// retire sweep (stop token, `max_gen` cap, empty prompt, forward failure) and the
-/// `decoder()`-error mass-retire.
+/// Flush a retiring sequence's detok cursor out to its emitter. At the true end of a stream a
+/// held-back partial character can never be completed, so this is the one place we allow the lossy
+/// U+FFFD replacement rather than silently dropping those bytes. Every retire path calls it: the
+/// retire sweep in `step` and the decoder-error mass-retire.
 fn flush_detok(meta: &mut JobMeta) {
     if let Some(text) = meta.detok.finish() {
         meta.emitter.completed(GeneratedItem::Text(text));
     }
 }
 
-/// Retire a single sequence: flush its detok cursor into the emitter, then fire its completion
-/// reply exactly once. The flush happens BEFORE the send so trailing held-back bytes always reach
-/// the emitter before completion, and the `.take()` keeps the bounded one-shot reply send-once (a
-/// second send would block the worker). Used on every retire path; the success site builds its
-/// `Stats` first and passes `Ok(stats)`.
+/// Retire a single sequence: flush its detok cursor to the emitter, then send its completion reply
+/// exactly once. The flush comes first so trailing held-back bytes always reach the caller before
+/// the completion does, and the `take` keeps the bounded one-shot send-once — a second send would
+/// block the worker. Every retire path goes through here; on success the caller builds the `Stats`
+/// first and passes `Ok(stats)`.
 fn retire(meta: &mut JobMeta, reply: InferenceResult<Stats>) {
     flush_detok(meta);
     if let Some(completion) = meta.completion.take() {

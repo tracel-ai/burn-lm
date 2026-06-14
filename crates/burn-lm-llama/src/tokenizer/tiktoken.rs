@@ -116,9 +116,8 @@ impl Tokenizer for Tiktoken {
     }
 
     /// Byte-level decode: `CoreBPE::_decode_native` (public despite the name) never fails for
-    /// in-vocab ids, so the per-token "split UTF-8 character" panic class of
-    /// [`decode`](Self::decode) cannot occur here. The returned bytes are reassembled into text
-    /// by the framework's `Utf8Buffer`.
+    /// in-vocab ids, so the per-token "split UTF-8 character" panic that `decode` can hit cannot
+    /// occur here. The returned bytes are reassembled into text by the framework's `Utf8Buffer`.
     fn decode_bytes(&self, tokens: &[u32]) -> Vec<u8> {
         self.bpe
             ._decode_native(&tokens.iter().map(|&t| t as usize).collect::<Vec<_>>())

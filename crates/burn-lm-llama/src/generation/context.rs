@@ -19,8 +19,8 @@ use super::StreamingDecoder;
 /// Stop detection happens synchronously in the generic decode core (`step_round`), so only
 /// non-stop tokens ever reach this context.
 ///
-/// Not `Clone`: it owns the [`JoinHandle`] of the background decoder thread and is finalized via
-/// [`finish`](Self::finish), so cloning it would not make sense.
+/// Not `Clone`: it owns the `JoinHandle` of the background decoder thread and is finalized via
+/// `finish`, so cloning it would not make sense.
 pub struct GenerationContext {
     num_generated: Arc<AtomicUsize>,
     sender: Sender<u32>,

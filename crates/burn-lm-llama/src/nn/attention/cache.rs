@@ -1,12 +1,11 @@
 use burn::tensor::{Device, Tensor};
 
 #[derive(Debug, Clone)]
-/// Cache that keeps track of a tensor state in an autoregressive decoding process.
-///
-/// Bookkeeping is per lane: dimension 0 is the lane (batch row of the shared
-/// buffer). The caller owns the per-lane lengths (see
-/// [`TransformerCache`](crate::nn::transformer::TransformerCache)) and passes
-/// each lane's write offset into `append_lanes`.
+/// A fixed-size tensor buffer that accumulates one autoregressive sequence per lane. Dimension 0 is
+/// the lane (a batch row of the shared buffer); every other dimension is the per-token state. This
+/// cache keeps no length counter of its own: the caller owns the per-lane lengths (in
+/// `TransformerCache`) and passes each lane's write offset into `append_lanes`, so a lane can be
+/// recycled simply by writing it again from offset 0.
 pub(crate) struct AutoregressiveCache<const D: usize> {
     cache: Tensor<D>,
     seq_dim: usize,
@@ -21,15 +20,13 @@ impl<const D: usize> AutoregressiveCache<D> {
         }
     }
 
-    /// Lane-sliced append: write row `j` of `tokens` into buffer row
-    /// `lanes[j]` at offset `starts[j]` (its length before this write), then
-    /// return the active lanes' contents up to the longest active lane.
+    /// Write each active lane's new tokens into its own row of the buffer, then read the active lanes
+    /// back. Row `j` of `tokens` lands in buffer row `lanes[j]` at offset `starts[j]`, which the
+    /// caller supplies as that lane's length before this write.
     ///
-    /// The caller owns the per-lane lengths and supplies `starts`; this cache
-    /// keeps no counter of its own. Lanes are independent: each sits at its own
-    /// position; columns past a lane's own length in the returned tensor are
-    /// stale buffer data and MUST be masked by the caller (per-lane padding
-    /// mask).
+    /// The lanes sit at independent positions, so the read-back spans the longest active lane and the
+    /// shorter lanes come back with a stale tail past their own length. The caller MUST mask that tail
+    /// with the per-lane padding mask; this cache does not zero it.
     ///
     /// # Shapes
     ///

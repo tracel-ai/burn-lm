@@ -83,9 +83,11 @@ pub struct Transformer {
 }
 
 impl Transformer {
-    /// Lane-aware forward: advance the given lanes (uniform input length) through the shared slab,
-    /// using each lane's own start position for RoPE and KV writes and the per-lane mask, then
-    /// returns logits `[n, seq_len, vocab]`. See [`LanePlan`] / [`TransformerCache::prepare_lanes`].
+    /// Advance the active lanes through every layer by `seq_len` tokens and return their logits,
+    /// shaped `[n, seq_len, vocab]`. All lanes in one call share the same input length (one token for
+    /// a decode round, the prompt length for a prefill); they differ only in where each one sits in
+    /// the KV buffer, which the `plan` carries as the per-lane start position and mask. The plan is
+    /// built by `TransformerCache::prepare_lanes` and described on `LanePlan`.
     pub fn forward_lanes(
         &self,
         input: Tensor<2, Int>,
@@ -116,36 +118,40 @@ impl Transformer {
     }
 }
 
-/// One lane-aware forward, planned by [`TransformerCache::prepare_lanes`]:
-/// which buffer lanes participate, each lane's start position (RoPE + KV
-/// write offset), and the per-lane causal+padding mask over the shared
-/// KV buffer.
+/// Everything one lane-aware forward needs to know about where its lanes sit, produced by
+/// `TransformerCache::prepare_lanes` and consumed unchanged all the way down to the attention layer.
+/// It names which buffer lanes take part, each lane's start position (used both as the RoPE position
+/// and as the KV write offset), and the per-lane mask over the shared KV buffer.
 #[derive(Debug)]
 pub struct LanePlan {
-    /// Active buffer lanes, one per batch row of the forward input.
+    /// The active buffer lanes, one per row of the forward input.
     pub lanes: Vec<usize>,
-    /// Each lane's sequence length BEFORE this forward (its write offset and
-    /// the absolute RoPE position of its first new token).
+    /// Each lane's sequence length before this forward. It serves two roles: the absolute RoPE
+    /// position of the lane's first new token, and the offset its new tokens are written to in the KV
+    /// buffer.
     pub starts: Vec<usize>,
-    /// `[n, 1, q, l_max]` bool mask, `true` = masked: row `r` of lane `j`
-    /// attends to columns `0..=starts[j] + r`; everything past that (the
-    /// lane's own future and the buffer tail up to the longest active lane)
-    /// is masked. The attention op turns masked positions into negative
-    /// infinity before the softmax. Unlike the broadcast tril of the
-    /// single-sequence path, decode (`q == 1`) is masked too — ragged lanes
-    /// make it mandatory.
+    /// The per-lane attention mask, shaped `[n, 1, q, l_max]`, where `true` means masked. Row `r` of
+    /// lane `j` may attend to columns `0..=starts[j] + r`; everything past that is masked off — both
+    /// the lane's own future and the stale buffer tail out to the longest active lane. The attention
+    /// op turns masked positions into negative infinity before the softmax. Because the lanes are
+    /// ragged, even a single-token decode round (`q == 1`) needs this mask to hide each lane's tail,
+    /// which the old single-sequence path could skip.
     pub mask: Tensor<4, Bool>,
 }
 
+/// The model-owned KV cache for one batch of lanes: the per-layer key/value buffers plus the only
+/// length bookkeeping in the system. Each lane is an independent sequence sharing the fixed-size
+/// buffers, and a lane is addressed by its row index throughout. The whole batched decode loop runs
+/// against one of these.
 #[derive(Clone, Debug)]
 pub struct TransformerCache {
     layers: Vec<KeyValueCache>,
     device: Device,
     max_seq_len: usize,
-    /// Per-lane bookkeeping (`prepare_lanes`/`reset_lane`) — the production decode path and the
-    /// single source of each lane's length. One entry per slab lane. `prepare_lanes` snapshots these
-    /// into `LanePlan.starts`, which the model threads down as the KV write offsets (the KV caches
-    /// keep no length counter of their own).
+    /// Each lane's current sequence length, one entry per buffer lane. This is the single source of
+    /// truth for lane lengths: `prepare_lanes` reads these into `LanePlan.starts` and the model
+    /// threads them down as the KV write offsets, so the underlying KV buffers need no counter of
+    /// their own. `prepare_lanes` grows an entry; `reset_lane` zeroes one.
     lens: Vec<usize>,
 }
 
@@ -181,23 +187,23 @@ impl TransformerCache {
         self.lens[lane]
     }
 
-    /// Plan one lane-aware forward of `seq_len` new tokens for `lanes`:
-    /// validate per-lane capacity, snapshot each lane's start position, build
-    /// the per-lane mask, and advance the lane lengths. This is the production
-    /// decode path (prefill = one lane; fused decode = the active lanes).
+    /// Plan one forward of `seq_len` new tokens over the given lanes, and commit it. It checks each
+    /// lane has room, snapshots the lanes' start positions, builds the per-lane mask, advances the
+    /// lane lengths, and returns the resulting `LanePlan`. A prefill calls this with a single lane;
+    /// a decode round calls it with all the active lanes at once.
     ///
-    /// There is NO Shift eviction in lane mode: a lane that would exceed
-    /// `max_seq_len` is an error — the runtime finishes lanes that hit their
-    /// token budget before they get here.
+    /// Lane mode does not evict: a lane that would pass `max_seq_len` is an error rather than having
+    /// its oldest tokens dropped. The runtime retires a lane when it hits its token budget, so a live
+    /// lane never reaches that limit here.
     pub fn prepare_lanes(
         &mut self,
         lanes: &[usize],
         seq_len: usize,
     ) -> Result<LanePlan, GenerationError> {
-        // Local self-checking invariants the equivalence rests on (debug-only, cheap):
-        // - lanes are DISTINCT: a duplicate would double-advance the bookkeeper while the per-row
-        //   RoPE/mask used a stale start, silently corrupting that lane's attention.
-        // - lanes are in range: a slot past the slab would otherwise be a raw index panic.
+        // Two invariants the per-lane correctness rests on, checked only in debug builds. The lanes
+        // must be distinct: a repeated lane would advance its length twice while the RoPE and mask
+        // for the second row used the stale start, silently corrupting that lane. And the lanes must
+        // be in range, since an out-of-range lane would otherwise be a raw indexing panic below.
         debug_assert!(
             lanes.iter().collect::<std::collections::HashSet<_>>().len() == lanes.len(),
             "prepare_lanes got a duplicate lane: {lanes:?}"
@@ -246,20 +252,21 @@ impl TransformerCache {
         })
     }
 
-    /// Reset every lane: zero all lane lengths. Used between independent generations.
+    /// Reset the whole cache by zeroing every lane's length, reused between independent generations.
     pub fn reset(&mut self) {
         for lane in 0..self.lens.len() {
             self.reset_lane(lane);
         }
     }
 
-    /// Free one lane: zero its length. The buffer row is overwritten on the next use, since the next
-    /// `prepare_lanes` snapshots a zeroed start and the KV write lands at offset 0.
+    /// Free one lane by zeroing its length. Nothing clears the buffer row itself; the next use of the
+    /// lane overwrites it, because the next `prepare_lanes` reads a zeroed start and the KV write
+    /// lands at offset 0.
     ///
-    /// Releasing a lane outside the slab is a no-op (there is nothing to free): a defensive guard so
-    /// a slot the slab never had — e.g. if `config.max_slots` were raised above the loaded lane
-    /// count — cannot index the fixed-length lane vector out of bounds and panic. Admission also
-    /// caps slots at the slab's `lane_count` (see `batch_capacity`), so this is belt-and-suspenders.
+    /// A lane index past the buffer is silently ignored rather than panicking. This guards against a
+    /// slot the buffer never had — for instance if `config.max_slots` were set above the loaded lane
+    /// count — reaching here and indexing the fixed-length length vector out of bounds. Admission
+    /// already caps slots at `lane_count` (see `batch_capacity`), so this is a second line of defense.
     pub fn reset_lane(&mut self, lane: usize) {
         if lane >= self.lens.len() {
             return;
@@ -310,9 +317,9 @@ impl TransformerBlockConfig {
 /// Decoder-only transformer block.
 #[derive(Module, Debug)]
 pub struct TransformerBlock {
-    // NOTE: fields are `pub(crate)` so the batched-equivalence characterization
-    // harness (`generation/batched_equivalence.rs`, phase-2 S4 gate) can
-    // hand-roll a per-lane forward pass with the production weights.
+    // The fields are `pub(crate)` so the batched-equivalence test harness
+    // (`generation/batched_equivalence.rs`) can hand-roll a per-lane forward pass with the production
+    // weights and check the batched path against it.
     /// Self-attention.
     pub(crate) attention: MultiHeadAttention,
     /// Feed-forward transformation.
@@ -324,8 +331,9 @@ pub struct TransformerBlock {
 }
 
 impl TransformerBlock {
-    /// Lane-aware forward: per-lane RoPE positions, lane-sliced KV,
-    /// and the per-lane mask from [`LanePlan`].
+    /// One block of the lane-aware forward: pre-norm, the cached per-lane attention, and the
+    /// feed-forward, each wrapped in its residual. The `plan` carries the per-lane RoPE positions, KV
+    /// offsets, and mask through to the attention layer.
     pub fn forward_lanes(
         &self,
         input: Tensor<3>,

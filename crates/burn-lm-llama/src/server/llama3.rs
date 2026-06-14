@@ -29,8 +29,8 @@ pub struct Llama3ServerConfig {
     #[config(default = 0)]
     pub seed: u64,
     /// Maximum number of sequences the batched decoder runs concurrently. For the batched
-    /// `Llama321bInstructServer` (the only `BatchedInferenceServer`) this single knob sizes the
-    /// shared KV slab (one lane per slot) AND is what the engine reads as
+    /// `Llama321bInstructServer` (the only `BatchedInferenceServer`) this single knob both sizes the
+    /// shared KV slab (one lane per slot) and is what the engine reads as
     /// `batch_capacity().max_slots`, so the two can never disagree. Single-shot servers (the Q4 1b,
     /// the 3b) ignore it and keep a one-lane slab. The default is tuned to fit comfortably on a
     /// Mac/Metal box; raise it on larger GPUs (modal/H100). KV memory grows linearly with this
@@ -40,7 +40,7 @@ pub struct Llama3ServerConfig {
 }
 
 impl Llama3ServerConfig {
-    /// This config's sampling fields as the per-job merge defaults (see [`SamplingSettings`]).
+    /// This config's sampling fields as the per-job merge defaults (see `SamplingSettings`).
     fn sampling_defaults(&self) -> SamplingSettings {
         SamplingSettings {
             top_p: self.top_p,
@@ -290,17 +290,17 @@ impl BatchedInferenceServer for Llama321bInstructServer {
     }
 
     fn batch_capacity(&self) -> BatchCapacity {
-        // ONE knob (`config.max_slots`) drives both the engine's concurrent-sequence budget here
-        // AND the decoder's shared KV slab lane count (see the `decoder()` loaders), so the slab
-        // always has exactly one lane per slot the engine can admit. A whole round of active
+        // The single `config.max_slots` knob drives both the engine's concurrent-sequence budget
+        // here and the decoder's shared KV slab lane count (see the `decoder()` loaders), so the
+        // slab always has exactly one lane per slot the engine can admit. A whole round of active
         // sequences advances through one fused lane-aware forward.
         //
-        // SAFETY against mid-flight reconfigure: the slab is sized once at load, but `config` can be
-        // mutated between rounds (`parse_cli/json_config`). Once loaded, cap the reported budget at
-        // the slab's actual `lane_count` so a raised `max_slots` can never make admission hand out a
-        // slot past the slab (which would index a fixed-length lane vector out of bounds and panic
-        // the worker). Raising `max_slots` thus takes effect only after a reload — the slab cannot
-        // grow live. Before load, report `config` (the slab will be that size at load).
+        // The slab is sized once at load, but `config` can be mutated between rounds (by
+        // `parse_cli_config`/`parse_json_config`). Once loaded we cap the reported budget at the
+        // slab's actual `lane_count`, so a raised `max_slots` cannot make admission hand out a slot
+        // past the slab — that would index a fixed-length lane vector out of bounds and panic the
+        // worker. Raising `max_slots` therefore takes effect only after a reload, since the slab
+        // cannot grow live. Before load we report `config`, which is the size the slab will be.
         let max_slots = match self.server.loaded_lane_count() {
             Some(lanes) => self.config.max_slots.min(lanes),
             None => self.config.max_slots,
@@ -336,10 +336,10 @@ impl BatchedInferenceServer for Llama321bInstructServer {
     fn next_token_sampler(&self, params: &GenerationParams) -> Box<dyn NextTokenSampler + Send> {
         // Same semantics as the single-request path in `Llama3BaseServer::complete`: the engine
         // calls this once per admitted request and keeps the sampler for that request's whole
-        // generation, so the seeded RNG advances across its tokens. The REQUEST's params are
-        // merged over the server config (see [`SamplingSettings`]) — never by mutating shared
+        // generation, so the seeded RNG advances across its tokens. The request's params are
+        // merged over the server config (see `SamplingSettings`) rather than by mutating shared
         // config, so concurrent requests with different settings cannot clobber each other.
-        // Temperature scaling then top-p with the resolved seed (0 = a fresh random seed per
+        // Temperature scaling then top-p with the resolved seed (0 draws a fresh random seed per
         // request), and `temperature == 0.0` stays plain argmax/greedy.
         let settings = SamplingSettings::resolve(self.config.sampling_defaults(), params);
         Box::new(TemperatureSampler {
@@ -583,7 +583,7 @@ impl Llama3BaseServer {
     }
 
     /// Mutably borrow the loaded decoder, loading the model first if needed.
-    /// Used by [`BatchedInferenceServer::decoder`].
+    /// Used by `BatchedInferenceServer::decoder`.
     fn decoder(&mut self, config: &Llama3ServerConfig) -> InferenceResult<&mut LlamaDecoder> {
         self.load(config)?;
         Ok(&mut self.model.get_mut()?.decoder)
@@ -606,9 +606,9 @@ impl Llama3BaseServer {
             .unwrap_or_default()
     }
 
-    /// Decode token ids to raw bytes using the loaded model's tokenizer. Unlike
-    /// [`decode`](Self::decode), this is total per token: Tiktoken's byte-level decode cannot
-    /// fail on a multi-byte character split across tokens.
+    /// Decode token ids to raw bytes using the loaded model's tokenizer. Unlike `decode`, this is
+    /// total per token: Tiktoken's byte-level decode cannot fail on a multi-byte character split
+    /// across tokens.
     fn decode_bytes(&self, tokens: &[u32]) -> Vec<u8> {
         self.model
             .get()

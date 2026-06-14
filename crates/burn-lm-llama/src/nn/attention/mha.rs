@@ -21,9 +21,9 @@ pub struct MultiHeadAttentionConfig {
 
 #[derive(Module, Debug)]
 pub struct MultiHeadAttention {
-    // NOTE: fields are `pub(crate)` so the batched-equivalence characterization
-    // harness (`generation/batched_equivalence.rs`, phase-2 S4 gate) can drive
-    // the attention math with per-lane KV slabs/RoPE positions.
+    // The fields are `pub(crate)` so the batched-equivalence test harness
+    // (`generation/batched_equivalence.rs`) can drive the attention math directly with per-lane KV
+    // and RoPE positions, checking the batched path against a hand-rolled per-lane reference.
     /// Query projection.
     pub(crate) wq: Linear,
     /// Key projection.
@@ -71,9 +71,11 @@ impl MultiHeadAttention {
         self.wo.forward(output)
     }
 
-    /// Lane-aware cached attention: rotate each lane's Q/K at its
-    /// own absolute position, write/read K/V lane-sliced into the shared slab, and attend under the
-    /// per-lane causal+padding mask. `input` is `[n, seq_len, d_model]`, one row per active lane.
+    /// The cached attention step, one active lane per input row. It rotates each lane's queries and
+    /// keys at that lane's own absolute position, writes and reads the keys and values into the
+    /// shared per-lane KV buffer, and attends under the per-lane causal and padding mask. `input` is
+    /// `[n, seq_len, d_model]`, one row per active lane. This is the per-layer core of the batched
+    /// decode loop; the single-token decode and the multi-token prefill both come through here.
     pub fn forward_cache_lanes(
         &self,
         input: Tensor<3>,
@@ -85,13 +87,11 @@ impl MultiHeadAttention {
 
         let (q, k, v) = self.forward_projection(input);
 
-        // Per-lane RoPE: rotate each lane at its own ABSOLUTE position (no table shift in lane
-        // mode). This equals the single-sequence `pos_encoding.apply` ONLY inside the no-shift
-        // window: `prepare_lanes` caps each lane at `max_seq_len`, and the RoPE table is built
-        // `max_seq_len * 5` rows (see `LlamaConfig::init`), so every lane position is a direct table
-        // index and the single-sequence path's `index()` would equal `position()` here too. Lane
-        // mode never shifts; the single-sequence reference would past `max_seq_len`, but a lane
-        // never reaches there (it finishes or errors first), so the two stay numerically identical.
+        // Rotate each lane at its own absolute position. Unlike the old single-sequence path, lane
+        // mode never shifts the RoPE table: it indexes the precomputed table directly. That stays
+        // correct because the table is built with `max_seq_len * 5` rows (see `LlamaConfig::init`)
+        // while `prepare_lanes` caps every lane at `max_seq_len`, so no lane position can fall past
+        // the precomputed window — the shift the old path used only ever triggered beyond it.
         let q = apply_rope_lanes(rope, q, &plan.starts);
         let k = apply_rope_lanes(rope, k, &plan.starts);
 

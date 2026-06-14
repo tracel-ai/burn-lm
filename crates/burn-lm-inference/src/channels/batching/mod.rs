@@ -1,45 +1,38 @@
 //! A channel that drives a model from a single long-lived worker thread running a *continuous*
 //! generation loop.
 //!
-//! Unlike [`MutexChannel`](crate::channels::mutex::MutexChannel), which locks the server for the
-//! whole of every call, `BatchingChannel` hands exclusive ownership of the server to one worker
-//! thread and communicates with it over a command queue. Callers block only on the reply to their
-//! own command.
+//! Unlike `MutexChannel`, which locks the server for the whole of every call, `BatchingChannel`
+//! hands exclusive ownership of the server to one worker thread and communicates with it over a
+//! command queue. Callers block only on the reply to their own command.
 //!
 //! The worker owns the whole continuous-batching loop: an inbound queue of submitted jobs plus an
 //! active set of in-flight sequences. All per-sequence engine state (decoder slot number, token
 //! buffer, position, emitter, completion sender, detok cursor, generated count, finished flag)
-//! lives HERE in the framework — the model only exposes
-//! [`prefill`](crate::batching::BatchedDecoder::prefill)/
-//! [`decode`](crate::batching::BatchedDecoder::decode)/
-//! [`release`](crate::batching::BatchedDecoder::release) (with its caches kept inside the
-//! decoder, behind the engine-assigned slot numbers), tokenizer primitives and capacity (see
-//! [`BatchedInferenceServer`]).
+//! lives here in the framework. The model only exposes `prefill`/`decode`/`release` (with its
+//! caches kept inside the decoder, behind the engine-assigned slot numbers), tokenizer primitives,
+//! and capacity (see `BatchedInferenceServer`).
 //!
-//! Each round advances every decoding sequence through ONE fused
-//! [`decode`](crate::batching::BatchedDecoder::decode) call carrying all their rows (at most one
-//! prompt prefills per round alongside it). The streams still interleave, but the GPU does the
-//! whole round's decode in a single forward.
+//! Each round advances every decoding sequence through one fused `decode` call carrying all their
+//! rows, with at most one prompt prefilling per round alongside it. The streams still interleave,
+//! but the GPU does the whole round's decode in a single forward.
 //!
-//! BACKPRESSURE: the job queue is bounded ([`DEFAULT_MAX_QUEUE_DEPTH`], settable via
-//! [`with_queue_depth`](BatchingChannel::with_queue_depth)). [`submit`](BatchingChannel::submit)
-//! sheds synchronously with [`InferenceError::Overloaded`] when the bound is reached, so sustained
-//! overload turns into immediate 4xx-class rejections instead of an ever-growing queue of parked
-//! caller threads.
+//! Backpressure: the job queue is bounded (`DEFAULT_MAX_QUEUE_DEPTH`, settable via
+//! `with_queue_depth`). `submit` sheds synchronously with `InferenceError::Overloaded` when the
+//! bound is reached, so sustained overload turns into immediate rejections instead of an
+//! ever-growing queue of parked caller threads.
 //!
-//! FAILURE LADDER: per-sequence faults (forward errors, contract violations) retire just that
-//! sequence; a panic anywhere in a worker iteration is caught, every in-flight and queued job is
-//! answered with [`InferenceError::WorkerDied`] (after flushing its detok cursor), and the worker
-//! thread exits — the next command lazily respawns a FRESH worker around a fresh
-//! `Server::default()`. Callers can never park forever on a dead worker. Caller-visible
-//! consequence: the fresh server starts UNLOADED, so a previously observed `load()` success does
-//! not survive a panic — jobs still work because admission lazy-loads through
-//! [`decoder`](BatchedInferenceServer::decoder), the first post-panic job just
-//! pays the load again.
+//! Failure handling has two levels. A per-sequence fault (a forward error or contract violation)
+//! retires just that sequence. A panic anywhere in a worker iteration is caught, every in-flight
+//! and queued job is answered with `InferenceError::WorkerDied` (after flushing its detok cursor),
+//! and the worker thread exits; the next command lazily respawns a fresh worker around a fresh
+//! `Server::default()`, so a caller can never park forever on a dead worker. The one caller-visible
+//! consequence is that the fresh server starts unloaded, so a previously observed `load()` success
+//! does not survive a panic. Jobs still work because admission lazy-loads through `decoder`; the
+//! first post-panic job just pays the load again.
 //!
-//! Layout: `mod.rs` = caller-side facade and protocol types (`BatchingChannel`, `Command`,
-//! queue/permit/worker structs); `worker.rs` = the engine (spawn, loop, admit, step, retire);
-//! `tests.rs` = the test suite.
+//! Layout: `mod.rs` is the caller-side facade and protocol types (`BatchingChannel`, `Command`,
+//! the queue/permit/worker structs); `worker.rs` is the engine (spawn, loop, admit, step, retire);
+//! `tests` is the test suite.
 
 use std::{
     fmt,
@@ -72,8 +65,8 @@ type DownloaderFn = fn() -> InferenceResult<Option<Stats>>;
 /// Commands sent from channel handles to the worker that owns the server.
 ///
 /// Each variant carries a one-shot reply sender; the calling method blocks on the matching
-/// receiver. `Submit`'s `completion` reply *is* the per-job completion signal, sent by the loop
-/// when the sequence retires (not when the command is received).
+/// receiver. `Submit` is the exception: its `completion` reply is the per-job completion signal,
+/// sent by the loop when the sequence retires, not when the command is received.
 enum Command {
     Downloader(SyncSender<Option<DownloaderFn>>),
     IsDownloaded(SyncSender<bool>),
@@ -89,25 +82,25 @@ enum Command {
 }
 
 /// Default bound on the number of submitted-but-not-yet-admitted jobs (see
-/// [`BatchingChannel::with_queue_depth`]). Beyond it, [`submit`](BatchingChannel::submit) sheds
-/// synchronously with [`InferenceError::Overloaded`].
+/// `BatchingChannel::with_queue_depth`). Beyond it, `submit` sheds synchronously with
+/// `InferenceError::Overloaded`.
 pub const DEFAULT_MAX_QUEUE_DEPTH: usize = 32;
 
-/// Stat name for the time a job spent queued before admission (enqueue → admission). Admission is
-/// the endpoint (rather than completion) because the stat exists to expose QUEUEING delay — the
-/// thing the queue bound trades off — while generation time is already covered by the token-count
-/// and duration stats.
+/// Stat name for the time a job spent queued before admission (enqueue to admission). The endpoint
+/// is admission rather than completion because this stat exists to expose queueing delay, the thing
+/// the queue bound trades off; generation time is already covered by the token-count and duration
+/// stats.
 pub const QUEUE_WAIT_STAT_NAME: &str = "Queue Wait";
 
-/// RAII permit for one job's slot in the queue's budget — issued by the queue's hand-rolled
-/// semaphore (the shared `AtomicUsize` depth counter), in the same shape as tokio's
-/// `OwnedSemaphorePermit`.
+/// An RAII permit for one job's slot in the queue's budget. The budget is a hand-built semaphore:
+/// the shared `AtomicUsize` depth counter, which `submit` increments before sending the job to the
+/// worker.
 ///
-/// The counter is incremented by `submit` BEFORE the job is sent to the worker; this permit rides
-/// with the job and decrements on drop, which happens exactly when the job "leaves the queue" on
-/// ANY path: admitted into the active set, rejected at admission (cancel/tokenize/cache errors),
-/// drained by a worker panic — or dropped wholesale with a dying worker's command channel. Tying
-/// the decrement to `Drop` means no path (present or future) can leak the counter upward.
+/// The permit travels with the job and decrements the counter on drop, which happens exactly when
+/// the job leaves the queue on any path: admitted into the active set, rejected at admission
+/// (cancel, tokenize, or cache errors), drained by a worker panic, or dropped along with a dying
+/// worker's command channel. Tying the decrement to `Drop` means no path, present or future, can
+/// leak the counter upward.
 struct QueuePermit(Arc<AtomicUsize>);
 
 impl Drop for QueuePermit {
@@ -121,9 +114,9 @@ impl Drop for QueuePermit {
 struct QueuedJob {
     job: InferenceJob,
     completion: SyncSender<InferenceResult<Stats>>,
-    /// Queue-wait clock, started at submit and read at admission (see [`QUEUE_WAIT_STAT_NAME`]).
+    /// Queue-wait clock, started at submit and read at admission (see `QUEUE_WAIT_STAT_NAME`).
     enqueued_at: Instant,
-    /// Dropped when the job leaves the queue; see [`QueuePermit`].
+    /// Dropped when the job leaves the queue; see `QueuePermit`.
     permit: QueuePermit,
 }
 
@@ -139,13 +132,14 @@ struct WorkerInner {
 struct Worker {
     inner: Mutex<Option<WorkerInner>>,
     /// Count of submitted-but-not-yet-admitted jobs, shared between submitters (increment) and
-    /// the per-job [`QueuePermit`]s (decrement on drop). The bound this enforces is APPROXIMATE
-    /// by design: the check-and-increment in `submit` is atomic, but a job admitted a microsecond
-    /// after a shed decision means the queue briefly had room — being off by a few under
-    /// contention is acceptable; the point is that overload sheds instead of growing without
-    /// bound. Plain counter, no other data synchronized through it, hence `Relaxed` everywhere.
+    /// the per-job `QueuePermit`s (decrement on drop). The bound this enforces is approximate by
+    /// design: the check-and-increment in `submit` is atomic, but a job admitted just after a shed
+    /// decision means the queue briefly had room, so the count can be off by a few under contention.
+    /// That is acceptable, because the point is only that overload sheds instead of growing without
+    /// bound. It is a plain counter with no other data synchronized through it, so every access uses
+    /// `Relaxed`.
     pending: Arc<AtomicUsize>,
-    /// Backpressure bound on `pending` (see [`DEFAULT_MAX_QUEUE_DEPTH`]).
+    /// Backpressure bound on `pending` (see `DEFAULT_MAX_QUEUE_DEPTH`).
     max_queue_depth: usize,
 }
 
@@ -191,8 +185,8 @@ impl<Server: BatchedInferenceServer + 'static> BatchingChannel<Server> {
         Self::with_queue_depth(DEFAULT_MAX_QUEUE_DEPTH)
     }
 
-    /// Build a channel with a specific backpressure bound (see [`DEFAULT_MAX_QUEUE_DEPTH`]).
-    /// Production uses the default via [`new`](Self::new); tests use small depths to exercise
+    /// Build a channel with a specific backpressure bound (see `DEFAULT_MAX_QUEUE_DEPTH`).
+    /// Production uses the default via `new`; tests use small depths to exercise
     /// shedding deterministically.
     pub fn with_queue_depth(max_queue_depth: usize) -> Self {
         Self {
@@ -207,13 +201,13 @@ impl<Server: BatchedInferenceServer + 'static> BatchingChannel<Server> {
 
     /// Build a channel whose worker is spawned immediately around a specific server instance.
     /// Test-only: lets tests configure capacity and decoder behavior (production uses the lazy
-    /// `Server::default()` path via [`new`](Self::new)).
+    /// `Server::default()` path via `new`).
     #[cfg(test)]
     fn with_server(server: Server) -> Self {
         Self::with_server_and_depth(server, DEFAULT_MAX_QUEUE_DEPTH)
     }
 
-    /// Test-only: a specific server instance AND a specific queue bound.
+    /// Test-only: a specific server instance and a specific queue bound.
     #[cfg(test)]
     fn with_server_and_depth(server: Server, max_queue_depth: usize) -> Self {
         let channel = Self::with_queue_depth(max_queue_depth);
@@ -223,15 +217,15 @@ impl<Server: BatchedInferenceServer + 'static> BatchingChannel<Server> {
     }
 
     /// Number of jobs currently submitted but not yet admitted (observability; approximate under
-    /// contention, see [`Worker::pending`]).
+    /// contention, see `Worker::pending`).
     pub fn queue_depth(&self) -> usize {
         self.worker.pending.load(Ordering::Relaxed)
     }
 
-    /// Return a sender to the worker, spawning it on first use — and RESPAWNING it if the previous
-    /// worker died (panicked iteration). A dead worker is detected by its finished thread handle;
-    /// it is reaped (join is instant on a finished thread) and replaced with a fresh worker around
-    /// a fresh `Server::default()`, so one panic never bricks the channel.
+    /// Return a sender to the worker, spawning it on first use, and respawning it if the previous
+    /// worker died (a panicked iteration). A dead worker is detected by its finished thread handle;
+    /// it is joined (instant on a finished thread) and replaced with a fresh worker around a fresh
+    /// `Server::default()`, so one panic never leaves the channel permanently unusable.
     fn sender(&self) -> InferenceResult<Sender<Command>> {
         let mut guard = self.worker.inner.lock().unwrap();
         if guard
@@ -267,7 +261,7 @@ impl<Server: BatchedInferenceServer + 'static> BatchingChannel<Server> {
     /// Enqueue a job without waiting for it to complete. Returns the completion receiver so the
     /// caller can wait later (or drop it to fire-and-forget). This is the non-blocking entry point.
     ///
-    /// BACKPRESSURE: sheds synchronously with [`InferenceError::Overloaded`] when the queue is at
+    /// Backpressure: sheds synchronously with `InferenceError::Overloaded` when the queue is at
     /// its bound — before spawning or waking anything — so an overloaded channel costs a rejected
     /// caller one atomic increment, not a parked thread.
     pub fn submit(&self, job: InferenceJob) -> InferenceResult<Receiver<InferenceResult<Stats>>> {

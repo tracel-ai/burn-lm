@@ -32,10 +32,11 @@ impl KeyValueCache {
         }
     }
 
-    /// Lane-sliced K/V update: row `j` of `key`/`value` is written into buffer
-    /// lane `lanes[j]` at offset `starts[j]` (the caller's per-lane length).
-    /// Returns the active lanes' K/V up to the longest active lane; the caller
-    /// masks each lane's stale tail.
+    /// Update the key and value caches for one round, one lane per row. Row `j` of `key`/`value` is
+    /// written into buffer lane `lanes[j]` at offset `starts[j]`, the caller's length for that lane.
+    /// Returns the active lanes' keys and values up to the longest active lane; the caller masks each
+    /// lane's stale tail. This is the only thing this cache does — the two underlying buffers carry no
+    /// length state of their own.
     pub fn forward_lanes(
         &mut self,
         lanes: &[usize],

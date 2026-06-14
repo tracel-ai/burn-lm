@@ -37,12 +37,12 @@ impl<T: Tokenizer + 'static> LoadedModel<T> {
         self.inner = Some(model);
     }
 
-    /// Borrow the loaded model, or return [`InferenceError::ModelNotLoaded`].
+    /// Borrow the loaded model, or return `InferenceError::ModelNotLoaded`.
     pub(crate) fn get(&self) -> InferenceResult<&Llama<T>> {
         self.inner.as_ref().ok_or(InferenceError::ModelNotLoaded)
     }
 
-    /// Mutably borrow the loaded model, or return [`InferenceError::ModelNotLoaded`].
+    /// Mutably borrow the loaded model, or return `InferenceError::ModelNotLoaded`.
     pub(crate) fn get_mut(&mut self) -> InferenceResult<&mut Llama<T>> {
         self.inner.as_mut().ok_or(InferenceError::ModelNotLoaded)
     }

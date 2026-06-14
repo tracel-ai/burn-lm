@@ -83,16 +83,15 @@ impl PositionalEncodingState {
     }
 }
 
-/// Apply RoPE rotations for `n` lanes sitting at divergent `starts` positions.
+/// Apply RoPE to `n` lanes that sit at different positions, in one batched pass. Lane `j` starts at
+/// position `starts[j]`, so its row `r` is rotated at absolute position `starts[j] + r`. The
+/// frequency row for each `(lane, row)` is gathered from RoPE's precomputed `freq_complex` table in
+/// a single `select`, and then every lane is rotated with the same tensor ops `RotaryEncoding::apply`
+/// uses for the single-position case — this gather is what lets the batched path rotate ragged lanes
+/// without looping over them.
 ///
-/// Row `r` of lane `j` is rotated at absolute position `starts[j] + r`: the
-/// per-(lane, row) frequency rows are gathered from the precomputed
-/// `freq_complex` table in one `select`, then every lane is rotated with the
-/// same batched ops `RotaryEncoding::apply` uses internally.
-///
-/// Positions are ABSOLUTE table indices: lane mode never shifts the table
-/// (per-lane lengths are bounded by `max_seq_len`, well inside the
-/// precomputed window).
+/// The positions index the table directly. Lane mode never shifts the table, which is safe because
+/// `prepare_lanes` keeps every lane length under `max_seq_len`, well inside the precomputed window.
 ///
 /// # Shapes
 ///
@@ -101,11 +100,11 @@ impl PositionalEncodingState {
 pub(crate) fn apply_rope_lanes(rope: &RotaryEncoding, x: Tensor<4>, starts: &[usize]) -> Tensor<4> {
     let [n, heads, q, head_dim] = x.dims();
     debug_assert_eq!(n, starts.len());
-    // Every gathered index must fall inside the precomputed rotation table. Callers guarantee
-    // this through the per-lane capacity check in `prepare_lanes` (a full lane FINISHES instead
-    // of sliding the window — a slide re-bases the table globally, which cannot coexist with
-    // lanes at different positions). This assert keeps the invariant from silently depending on
-    // every future call site remembering that pairing.
+    // Every gathered position must land inside the precomputed table, or the `select` below reads out
+    // of bounds. The caller guarantees it through the per-lane capacity check in `prepare_lanes`: a
+    // lane that fills up finishes rather than sliding the table, because a slide re-bases positions
+    // globally and that cannot coexist with lanes sitting at different positions. This assert keeps
+    // that guarantee from silently depending on every future caller remembering the pairing.
     let table_rows = rope.freq_complex.dims()[0];
     debug_assert!(
         starts.iter().all(|s| s + q <= table_rows),

@@ -358,10 +358,7 @@ mod tests {
     use super::*;
     use crate::tests::*;
 
-    use burn::{
-        nn::RotaryEncodingConfig,
-        tensor::{TensorData, Tolerance},
-    };
+    use burn::tensor::{TensorData, Tolerance};
 
     #[test]
     fn test_rms_norm() {

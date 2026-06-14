@@ -23,24 +23,6 @@ use crate::{
     LlamaConfig,
 };
 
-/// Deterministic test model: `llama3_2_1b_test` config + seeded reinit, the
-/// same rig as the `generate.rs` tests.
-fn test_llama(device: &Device) -> Llama<ByteTokenizer> {
-    let config = LlamaConfig::llama3_2_1b_test();
-    let mut llama = config.init::<ByteTokenizer>(device).unwrap();
-    llama.decoder.model = Reinitializer::default()
-        .random_float(0, -1.0, 1.0)
-        .apply(llama.decoder.model);
-    llama
-}
-
-fn tokens_tensor(rows: &[Vec<u32>], device: &Device) -> Tensor<2, Int> {
-    let q = rows[0].len();
-    assert!(rows.iter().all(|r| r.len() == q));
-    let data: Vec<i64> = rows.iter().flatten().map(|&t| t as i64).collect();
-    Tensor::from_data(TensorData::new(data, [rows.len(), q]), device)
-}
-
 fn argmax_rows(logits: &Tensor<2>) -> Vec<u32> {
     logits
         .clone()
@@ -106,8 +88,8 @@ fn divergent_prompts() -> Vec<Vec<u32>> {
     vec![x, y]
 }
 
-/// Build the tiny test model with an `n_lanes`-lane slab (slot == lane), seeded identically to
-/// [`test_llama`] so its output is directly comparable to [`reference_run`].
+/// Build the tiny test model with an `n_lanes`-lane slab (slot == lane), seeded with a fixed reinit
+/// so its output is directly comparable to [`reference_run`].
 fn test_llama_lanes(n_lanes: usize, device: &Device) -> Llama<ByteTokenizer> {
     let config = LlamaConfig::llama3_2_1b_test().with_max_batch_size(n_lanes);
     let mut llama = config.init::<ByteTokenizer>(device).unwrap();
@@ -304,7 +286,7 @@ fn lane_reuse_after_release_starts_clean() {
 
     // Sequence A fills (dirties) lane 0 with a LONGER history, decodes a few rounds, then retires.
     let mut last_a = argmax_rows(&llama.decoder.prefill(0, &a, 0).unwrap())[0];
-    for k in 0..3 {
+    for _ in 0..3 {
         let row = DecodeRow {
             slot: 0,
             token: last_a,

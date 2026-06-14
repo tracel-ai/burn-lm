@@ -144,12 +144,14 @@ impl LlamaConfig {
         checkpoint: &str,
         tokenizer_path: &str,
         max_seq_len: usize,
+        max_batch_size: usize,
         device: &Device,
     ) -> Result<inference::Llama<Tiktoken>, String> {
         use burn::record::NamedMpkFileRecorder;
 
         let llama = Self::llama3_2_3b(tokenizer_path)
             .with_max_seq_len(max_seq_len)
+            .with_max_batch_size(max_batch_size)
             .init::<Tiktoken>(device)?;
 
         let recorder = NamedMpkFileRecorder::<HalfPrecisionSettings>::new();
@@ -190,12 +192,14 @@ impl LlamaConfig {
         checkpoint: &str,
         tokenizer_path: &str,
         max_seq_len: usize,
+        max_batch_size: usize,
         device: &Device,
     ) -> Result<inference::Llama<Tiktoken>, String> {
         use burn::record::NamedMpkFileRecorder;
 
         let llama = Self::llama3_1_8b(tokenizer_path)
             .with_max_seq_len(max_seq_len)
+            .with_max_batch_size(max_batch_size)
             .init::<Tiktoken>(device)?;
 
         let recorder = NamedMpkFileRecorder::<HalfPrecisionSettings>::new();
@@ -212,12 +216,14 @@ impl LlamaConfig {
         checkpoint: &str,
         tokenizer_path: &str,
         max_seq_len: usize,
+        max_batch_size: usize,
         device: &Device,
     ) -> Result<inference::Llama<Tiktoken>, String> {
         use burn::record::NamedMpkFileRecorder;
 
         let llama = Self::llama3_8b(tokenizer_path)
             .with_max_seq_len(max_seq_len)
+            .with_max_batch_size(max_batch_size)
             .init::<Tiktoken>(device)?;
 
         let recorder = NamedMpkFileRecorder::<HalfPrecisionSettings>::new();

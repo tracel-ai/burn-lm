@@ -28,13 +28,12 @@ pub struct Llama3ServerConfig {
     /// The seed to use when generating random samples. If it is 0 then a random seed is used for each inference.
     #[config(default = 0)]
     pub seed: u64,
-    /// Maximum number of sequences the batched decoder runs concurrently. For the batched
-    /// `Llama321bInstructServer` (the only `BatchedInferenceServer`) this single knob both sizes the
+    /// Maximum number of sequences the batched decoder runs concurrently. For a batched
+    /// `BatchedInferenceServer` (the 1b, 3b, and both real 8b Llamas) this single knob both sizes the
     /// shared KV slab (one lane per slot) and is what the engine reads as
-    /// `batch_capacity().max_slots`, so the two can never disagree. Single-shot servers (the Q4 1b,
-    /// the 3b) ignore it and keep a one-lane slab. The default is tuned to fit comfortably on a
-    /// Mac/Metal box; raise it on larger GPUs (modal/H100). KV memory grows linearly with this
-    /// times `max_seq_len`.
+    /// `batch_capacity().max_slots`, so the two can never disagree. The Q4 1b ignores it and keeps a
+    /// one-lane slab. Operators set the right value per deployment; the slab is sized at load, so a
+    /// raised value takes effect on the next reload.
     #[config(default = 4)]
     pub max_slots: usize,
 }
@@ -282,72 +281,74 @@ impl InferenceServer for Llama321bInstructServer {
     }
 }
 
-impl BatchedInferenceServer for Llama321bInstructServer {
-    type Decoder = LlamaDecoder;
+/// Generates the `BatchedInferenceServer` impl for a Llama server. The impl is identical pure
+/// delegation for all four real Llama servers, since they are the same `{ config, server }` pair.
+/// It is a macro rather than a blanket `impl<T> BatchedInferenceServer for T` because the trait is
+/// foreign — it lives in `burn-lm-inference` — so Rust's orphan rule forbids the blanket impl. That
+/// leaves duplicating the impl per server or generating it once; this generates it once.
+macro_rules! impl_batched_llama_server {
+    ($server:ty) => {
+        impl BatchedInferenceServer for $server {
+            type Decoder = LlamaDecoder;
 
-    fn decoder(&mut self) -> InferenceResult<&mut LlamaDecoder> {
-        self.server.decoder(&self.config)
-    }
+            fn decoder(&mut self) -> InferenceResult<&mut LlamaDecoder> {
+                self.server.decoder(&self.config)
+            }
 
-    fn batch_capacity(&self) -> BatchCapacity {
-        // The single `config.max_slots` knob drives both the engine's concurrent-sequence budget
-        // here and the decoder's shared KV slab lane count (see the `decoder()` loaders), so the
-        // slab always has exactly one lane per slot the engine can admit. A whole round of active
-        // sequences advances through one fused lane-aware forward.
-        //
-        // The slab is sized once at load, but `config` can be mutated between rounds (by
-        // `parse_cli_config`/`parse_json_config`). Once loaded we cap the reported budget at the
-        // slab's actual `lane_count`, so a raised `max_slots` cannot make admission hand out a slot
-        // past the slab — that would index a fixed-length lane vector out of bounds and panic the
-        // worker. Raising `max_slots` therefore takes effect only after a reload, since the slab
-        // cannot grow live. Before load we report `config`, which is the size the slab will be.
-        let max_slots = match self.server.loaded_lane_count() {
-            Some(lanes) => self.config.max_slots.min(lanes),
-            None => self.config.max_slots,
-        };
-        BatchCapacity { max_slots }
-    }
+            fn batch_capacity(&self) -> BatchCapacity {
+                // Cap the reported budget at the loaded lane count so a `max_slots` raised between
+                // rounds cannot hand admission a slot past the fixed-size slab, which would index a
+                // lane vector out of bounds and panic the worker. The slab only grows on reload.
+                let max_slots = match self.server.loaded_lane_count() {
+                    Some(lanes) => self.config.max_slots.min(lanes),
+                    None => self.config.max_slots,
+                };
+                BatchCapacity { max_slots }
+            }
 
-    fn tokenize(&self, task: &InferenceTask) -> InferenceResult<Vec<u32>> {
-        let prompt = match task {
-            InferenceTask::Message(message) => self.server.prompt(vec![message.clone()])?,
-            InferenceTask::Context(messages) => self.server.prompt(messages.clone())?,
-            InferenceTask::Prompt(prompt) => prompt.clone(),
-        };
-        self.server.encode(&prompt)
-    }
+            fn tokenize(&self, task: &InferenceTask) -> InferenceResult<Vec<u32>> {
+                let prompt = match task {
+                    InferenceTask::Message(message) => self.server.prompt(vec![message.clone()])?,
+                    InferenceTask::Context(messages) => self.server.prompt(messages.clone())?,
+                    InferenceTask::Prompt(prompt) => prompt.clone(),
+                };
+                self.server.encode(&prompt)
+            }
 
-    fn detokenize(&self, tokens: &[u32]) -> String {
-        self.server.decode(tokens)
-    }
+            fn detokenize(&self, tokens: &[u32]) -> String {
+                self.server.decode(tokens)
+            }
 
-    fn detokenize_bytes(&self, tokens: &[u32]) -> Vec<u8> {
-        self.server.decode_bytes(tokens)
-    }
+            fn detokenize_bytes(&self, tokens: &[u32]) -> Vec<u8> {
+                self.server.decode_bytes(tokens)
+            }
 
-    fn stop_ids(&self) -> Vec<u32> {
-        self.server.stop_ids()
-    }
+            fn stop_ids(&self) -> Vec<u32> {
+                self.server.stop_ids()
+            }
 
-    fn max_gen_tokens(&self) -> usize {
-        self.config.sample_len
-    }
+            fn max_gen_tokens(&self) -> usize {
+                self.config.sample_len
+            }
 
-    fn next_token_sampler(&self, params: &GenerationParams) -> Box<dyn NextTokenSampler + Send> {
-        // Same semantics as the single-request path in `Llama3BaseServer::complete`: the engine
-        // calls this once per admitted request and keeps the sampler for that request's whole
-        // generation, so the seeded RNG advances across its tokens. The request's params are
-        // merged over the server config (see `SamplingSettings`) rather than by mutating shared
-        // config, so concurrent requests with different settings cannot clobber each other.
-        // Temperature scaling then top-p with the resolved seed (0 draws a fresh random seed per
-        // request), and `temperature == 0.0` stays plain argmax/greedy.
-        let settings = SamplingSettings::resolve(self.config.sampling_defaults(), params);
-        Box::new(TemperatureSampler {
-            sampler: settings.sampler(),
-            temperature: settings.temperature,
-        })
-    }
+            fn next_token_sampler(
+                &self,
+                params: &GenerationParams,
+            ) -> Box<dyn NextTokenSampler + Send> {
+                let settings = SamplingSettings::resolve(self.config.sampling_defaults(), params);
+                Box::new(TemperatureSampler {
+                    sampler: settings.sampler(),
+                    temperature: settings.temperature,
+                })
+            }
+        }
+    };
 }
+
+impl_batched_llama_server!(Llama321bInstructServer);
+impl_batched_llama_server!(Llama323bInstructServer);
+impl_batched_llama_server!(Llama3InstructServer);
+impl_batched_llama_server!(Llama31InstructServer);
 
 #[derive(InferenceServer, Debug)]
 #[inference_server(
@@ -628,18 +629,24 @@ impl Llama3BaseServer {
         if !self.is_loaded() {
             let now = std::time::Instant::now();
             let model = match self.version {
-                LlamaVersion::Llama3Instruct => {
-                    LlamaConfig::llama3_8b_pretrained(config.max_seq_len, &*INFERENCE_DEVICE)
-                        .unwrap()
-                }
-                LlamaVersion::Llama31Instruct => {
-                    LlamaConfig::llama3_1_8b_pretrained(config.max_seq_len, &*INFERENCE_DEVICE)
-                        .unwrap()
-                }
-                LlamaVersion::Llama323bInstruct => {
-                    LlamaConfig::llama3_2_3b_pretrained(config.max_seq_len, &*INFERENCE_DEVICE)
-                        .unwrap()
-                }
+                LlamaVersion::Llama3Instruct => LlamaConfig::llama3_8b_pretrained(
+                    config.max_seq_len,
+                    config.max_slots,
+                    &*INFERENCE_DEVICE,
+                )
+                .unwrap(),
+                LlamaVersion::Llama31Instruct => LlamaConfig::llama3_1_8b_pretrained(
+                    config.max_seq_len,
+                    config.max_slots,
+                    &*INFERENCE_DEVICE,
+                )
+                .unwrap(),
+                LlamaVersion::Llama323bInstruct => LlamaConfig::llama3_2_3b_pretrained(
+                    config.max_seq_len,
+                    config.max_slots,
+                    &*INFERENCE_DEVICE,
+                )
+                .unwrap(),
                 LlamaVersion::Llama321bInstruct => LlamaConfig::llama3_2_1b_pretrained(
                     config.max_seq_len,
                     config.max_slots,

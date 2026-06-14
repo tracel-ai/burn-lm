@@ -12,16 +12,19 @@ pub type DynClients = HashMap<&'static str, Box<dyn InferencePlugin>>;
 
 // Register model crates
 #[inference_server_registry(
+    // Every real (non-quantized) Llama is wired through the continuous-batching channel: the 1b, 3b,
+    // and both 8b servers implement `BatchedInferenceServer`. The Q4 1b and the non-Llama models
+    // stay on the default `MutexChannel`.
     server(
         crate_namespace = "burn_lm_llama::server::llama3",
         server_type = "Llama3InstructServer",
+        channel_type = "BatchingChannel",
     ),
     server(
         crate_namespace = "burn_lm_llama::server::llama3",
         server_type = "Llama31InstructServer",
+        channel_type = "BatchingChannel",
     ),
-    // The only model wired through the continuous-batching channel. It implements
-    // `BatchedInferenceServer`; every other model stays on the default `MutexChannel`.
     server(
         crate_namespace = "burn_lm_llama::server::llama3",
         server_type = "Llama321bInstructServer",
@@ -30,6 +33,7 @@ pub type DynClients = HashMap<&'static str, Box<dyn InferencePlugin>>;
     server(
         crate_namespace = "burn_lm_llama::server::llama3",
         server_type = "Llama323bInstructServer",
+        channel_type = "BatchingChannel",
     ),
     server(
         crate_namespace = "burn_lm_llama::server::llama3",

@@ -1,296 +1,27 @@
-//! Phase-2 S4 gate: batched-decode equivalence characterization harness.
+//! Production-path equivalence + throughput tests for the fused lane decoder.
 //!
-//! Standing acceptance test for the fused data plane: per-lane divergent
-//! positions — lane-sliced `slice_assign` KV writes into a shared slab,
-//! per-lane RoPE (gather primary, per-lane-loop fallback), per-lane padding
-//! masks — must be numerically equivalent to independent batch-1 runs through
-//! the production forward path (`LlamaDecoder::forward`).
+//! The fused multi-row `LlamaDecoder::decode` (lane-sliced KV writes into a shared slab, gather RoPE
+//! at per-lane positions, per-lane padding masks) must be numerically identical to independent
+//! batch-1 runs through the single-sequence forward path. These tests drive the REAL production seam
+//! (`prefill`/`decode`/`release`):
+//! - byte-exact argmax + tight-tolerance logits at 2 and 3 lanes at divergent positions;
+//! - a non-contiguous lane subset after a mid-batch release;
+//! - lane reuse after release starts clean.
 //!
-//! Gates:
-//! - Correctness: byte-exact argmax token streams + tight-tolerance logits,
-//!   batch=2 (lanes at divergent positions: X at 37, Y at 5) vs 2x batch=1.
-//! - Throughput (Tier 1, Metal): >= 1.2x aggregate tok/s at batch 4 vs batch 1
-//!   via the `#[ignore]`d benchmark below (batch 1/2/4/8). The authoritative
-//!   Tier-2 gate (>= 1.5x on server CUDA) runs later via modal-rust.
-//!
+//! Plus an `#[ignore]`d throughput benchmark (batch 1/2/4/8) over the real decoder. Tier-1 gate
+//! (this machine, Metal): >= 1.2x aggregate tok/s at batch 4 vs batch 1; the authoritative Tier-2
+//! gate (>= 1.5x on server CUDA) runs later via modal-rust.
 
-use burn::{
-    nn::RotaryEncoding,
-    prelude::*,
-    tensor::{activation::softmax, Tolerance},
-};
+use burn::{prelude::*, tensor::Tolerance};
 
 use burn_lm_inference::batching::{BatchedDecoder, DecodeRow};
 
 use crate::{
-    inference::Llama, nn::transformer::Transformer, tests::Reinitializer,
-    tokenizer::byte::ByteTokenizer, LlamaConfig,
+    inference::{Llama, LlamaDecoder},
+    tests::Reinitializer,
+    tokenizer::byte::ByteTokenizer,
+    LlamaConfig,
 };
-
-/// How per-lane RoPE rotations are applied in the batched path.
-#[derive(Clone, Copy, Debug)]
-enum RopeMode {
-    /// Primary: gather rows of the precomputed `freq_complex` table by each
-    /// lane's position and rotate all lanes in one batched tensor op.
-    Gather,
-    /// Correctness-floor fallback: loop `rope.apply(x_lane, pos_lane)` over
-    /// per-lane slices and `cat`.
-    PerLaneLoop,
-}
-
-/// Per-layer KV slab: `[n_lanes, n_kv_heads, max_seq_len, head_dim]`.
-struct LaneSlab {
-    k: Tensor<4>,
-    v: Tensor<4>,
-}
-
-/// Hand-rolled multi-lane decoder over the production weights.
-///
-/// Each lane owns a slice of the KV slab and its own position; lanes are
-/// written with lane-sliced `slice_assign` and read back with a per-lane
-/// padding+causal mask. This is the tensor recipe the fused data plane
-/// productionizes; this harness is its acceptance bar.
-struct BatchedHarness {
-    model: Transformer,
-    rope: RotaryEncoding,
-    slabs: Vec<LaneSlab>,
-    lens: Vec<usize>,
-    n_heads: usize,
-    n_kv_heads: usize,
-    head_dim: usize,
-    vocab: usize,
-    mode: RopeMode,
-}
-
-impl BatchedHarness {
-    fn new(
-        model: Transformer,
-        rope: RotaryEncoding,
-        config: &LlamaConfig,
-        n_lanes: usize,
-        mode: RopeMode,
-        device: &Device,
-    ) -> Self {
-        let n_kv_heads = config.num_key_value_heads.unwrap();
-        let head_dim = config.d_model / config.num_attention_heads;
-        let slabs = (0..config.num_hidden_layers)
-            .map(|_| LaneSlab {
-                k: Tensor::zeros([n_lanes, n_kv_heads, config.max_seq_len, head_dim], device),
-                v: Tensor::zeros([n_lanes, n_kv_heads, config.max_seq_len, head_dim], device),
-            })
-            .collect();
-
-        Self {
-            model,
-            rope,
-            slabs,
-            lens: vec![0; n_lanes],
-            n_heads: config.num_attention_heads,
-            n_kv_heads,
-            head_dim,
-            vocab: config.vocab_size,
-            mode,
-        }
-    }
-
-    /// One forward for the given lanes (all with the same input length `q`).
-    /// Prefill = single lane with `q == prompt_len`; fused decode = all active
-    /// lanes with `q == 1`. Returns the last-position logits, one row per lane.
-    fn forward(&mut self, lanes: &[usize], x: Tensor<2, Int>) -> Tensor<2> {
-        let [n, q] = x.dims();
-        assert_eq!(n, lanes.len());
-        let device = x.device();
-
-        let starts: Vec<usize> = lanes.iter().map(|&l| self.lens[l]).collect();
-        let l_max = starts.iter().map(|s| s + q).max().unwrap();
-
-        // Per-lane causal + padding mask over the shared slab columns:
-        // `true` = masked. Query row `r` of lane `j` may attend to columns
-        // `0..=starts[j] + r`; everything beyond (other lanes' tail garbage,
-        // future positions) is masked.
-        let mut mask_data = Vec::with_capacity(n * q * l_max);
-        for s in starts.iter() {
-            for r in 0..q {
-                for c in 0..l_max {
-                    mask_data.push(c > s + r);
-                }
-            }
-        }
-        let mask =
-            Tensor::<4, Bool>::from_data(TensorData::new(mask_data, [n, 1, q, l_max]), &device)
-                .expand([n, self.n_heads, q, l_max]);
-
-        let mut h = self.model.tok_embeddings.forward(x);
-
-        for (layer, slab) in self.model.layers.iter().zip(self.slabs.iter_mut()) {
-            let attn = &layer.attention;
-            let x_norm = layer.attention_norm.forward(h.clone());
-
-            let q_proj = attn
-                .wq
-                .forward(x_norm.clone())
-                .reshape([n, q, self.n_heads, self.head_dim])
-                .swap_dims(1, 2);
-            let k_proj = attn
-                .wk
-                .forward(x_norm.clone())
-                .reshape([n, q, self.n_kv_heads, self.head_dim])
-                .swap_dims(1, 2);
-            let v_proj = attn
-                .wv
-                .forward(x_norm)
-                .reshape([n, q, self.n_kv_heads, self.head_dim])
-                .swap_dims(1, 2);
-
-            // Per-lane RoPE at divergent positions.
-            let q_rot = apply_rope_lanes(&self.rope, q_proj, &starts, self.mode);
-            let k_rot = apply_rope_lanes(&self.rope, k_proj, &starts, self.mode);
-
-            // Lane-sliced KV writes into the shared slab.
-            for (j, (&lane, &start)) in lanes.iter().zip(starts.iter()).enumerate() {
-                let k_lane =
-                    k_rot
-                        .clone()
-                        .slice([j..j + 1, 0..self.n_kv_heads, 0..q, 0..self.head_dim]);
-                let v_lane =
-                    v_proj
-                        .clone()
-                        .slice([j..j + 1, 0..self.n_kv_heads, 0..q, 0..self.head_dim]);
-                slab.k = slab.k.clone().slice_assign(
-                    [
-                        lane..lane + 1,
-                        0..self.n_kv_heads,
-                        start..start + q,
-                        0..self.head_dim,
-                    ],
-                    k_lane,
-                );
-                slab.v = slab.v.clone().slice_assign(
-                    [
-                        lane..lane + 1,
-                        0..self.n_kv_heads,
-                        start..start + q,
-                        0..self.head_dim,
-                    ],
-                    v_lane,
-                );
-            }
-
-            // Read the active lanes back (ragged tails handled by the mask).
-            let k_full = Tensor::cat(
-                lanes
-                    .iter()
-                    .map(|&lane| {
-                        slab.k.clone().slice([
-                            lane..lane + 1,
-                            0..self.n_kv_heads,
-                            0..l_max,
-                            0..self.head_dim,
-                        ])
-                    })
-                    .collect::<Vec<_>>(),
-                0,
-            );
-            let v_full = Tensor::cat(
-                lanes
-                    .iter()
-                    .map(|&lane| {
-                        slab.v.clone().slice([
-                            lane..lane + 1,
-                            0..self.n_kv_heads,
-                            0..l_max,
-                            0..self.head_dim,
-                        ])
-                    })
-                    .collect::<Vec<_>>(),
-                0,
-            );
-            let k_full = attn.repeat_kv(k_full);
-            let v_full = attn.repeat_kv(v_full);
-
-            let scores = q_rot
-                .matmul(k_full.swap_dims(2, 3))
-                .div_scalar((self.head_dim as f32).sqrt());
-            let scores = scores.mask_fill(mask.clone(), f32::NEG_INFINITY);
-            let scores = softmax(scores, 3);
-
-            let ctx =
-                scores
-                    .matmul(v_full)
-                    .swap_dims(1, 2)
-                    .reshape([n, q, self.n_heads * self.head_dim]);
-
-            h = h + attn.wo.forward(ctx);
-            h = h.clone() + layer.feed_forward.forward(layer.ffn_norm.forward(h));
-        }
-
-        for &lane in lanes {
-            self.lens[lane] += q;
-        }
-
-        let h = self.model.norm.forward(h);
-        let logits = self.model.output.forward(h);
-        logits
-            .slice([0..n, q - 1..q, 0..self.vocab])
-            .reshape([n, self.vocab])
-    }
-}
-
-/// Apply RoPE rotations for `n` lanes sitting at divergent `starts` positions.
-fn apply_rope_lanes(
-    rope: &RotaryEncoding,
-    x: Tensor<4>,
-    starts: &[usize],
-    mode: RopeMode,
-) -> Tensor<4> {
-    let [n, heads, q, head_dim] = x.dims();
-    let device = x.device();
-
-    match mode {
-        RopeMode::PerLaneLoop => {
-            let lanes = (0..n)
-                .map(|j| {
-                    rope.apply(
-                        x.clone().slice([j..j + 1, 0..heads, 0..q, 0..head_dim]),
-                        starts[j],
-                    )
-                })
-                .collect::<Vec<_>>();
-            Tensor::cat(lanes, 0)
-        }
-        RopeMode::Gather => {
-            // Gather the per-(lane, row) frequency rows in one `select`, then
-            // rotate everything with the same batched ops `RotaryEncoding::apply`
-            // uses internally.
-            let mut idx = Vec::with_capacity(n * q);
-            for s in starts.iter() {
-                for r in 0..q {
-                    idx.push((s + r) as i64);
-                }
-            }
-            let idx = Tensor::<1, Int>::from_data(TensorData::new(idx, [n * q]), &device);
-            let freqs = rope
-                .freq_complex
-                .clone()
-                .select(0, idx) // [n * q, head_dim, 2]
-                .reshape([n, 1, q, head_dim, 2])
-                .expand([n, heads, q, head_dim, 2])
-                .reshape([n * heads, q, head_dim, 2]);
-
-            // 2D rotation matrix [[cos, -sin], [sin, cos]] expansion.
-            let sign =
-                Tensor::<2>::from_floats([[1.0, 0.0, 0.0, 1.0], [0.0, -1.0, 1.0, 0.0]], &device);
-
-            let out = x
-                .reshape([n * heads, q, head_dim / 2, 2])
-                .matmul(sign.unsqueeze::<4>())
-                .reshape([n * heads, q, head_dim, 2])
-                * freqs;
-
-            out.sum_dim(3).reshape([n, heads, q, head_dim])
-        }
-    }
-}
 
 /// Deterministic test model: `llama3_2_1b_test` config + seeded reinit, the
 /// same rig as the `generate.rs` tests.
@@ -354,56 +85,6 @@ fn reference_run(prompt: &[u32], steps: usize, device: &Device) -> (Vec<u32>, Ve
     (tokens, logits_steps)
 }
 
-/// Multi-lane greedy run through the hand-rolled batched path: per-lane
-/// unpadded prefill (staggered admits), then fused `[n, 1]` decode steps.
-fn batched_run(
-    prompts: &[Vec<u32>],
-    steps: usize,
-    mode: RopeMode,
-    device: &Device,
-) -> Vec<(Vec<u32>, Vec<Vec<f32>>)> {
-    let n_lanes = prompts.len();
-    let llama = test_llama(device);
-    let mut harness = BatchedHarness::new(
-        llama.decoder.model,
-        llama.decoder.pos_encoding.rope,
-        &LlamaConfig::llama3_2_1b_test(),
-        n_lanes,
-        mode,
-        device,
-    );
-    let vocab = harness.vocab;
-
-    let mut tokens: Vec<Vec<u32>> = vec![Vec::new(); n_lanes];
-    let mut logits: Vec<Vec<Vec<f32>>> = vec![Vec::new(); n_lanes];
-    let mut last: Vec<u32> = vec![0; n_lanes];
-
-    // Per-lane unpadded prefill: lane 1 is admitted while lane 0 already holds
-    // its prompt in the slab (divergent positions from the very first step).
-    for (lane, prompt) in prompts.iter().enumerate() {
-        let out = harness.forward(&[lane], tokens_tensor(&[prompt.clone()], device));
-        let next = argmax_rows(&out)[0];
-        tokens[lane].push(next);
-        logits[lane].push(logits_row(&out, 0, vocab));
-        last[lane] = next;
-    }
-
-    // Fused decode: one [n_lanes, 1] forward per step.
-    let all_lanes: Vec<usize> = (0..n_lanes).collect();
-    for _ in 1..steps {
-        let rows: Vec<Vec<u32>> = last.iter().map(|&t| vec![t]).collect();
-        let out = harness.forward(&all_lanes, tokens_tensor(&rows, device));
-        let next = argmax_rows(&out);
-        for lane in 0..n_lanes {
-            tokens[lane].push(next[lane]);
-            logits[lane].push(logits_row(&out, lane, vocab));
-            last[lane] = next[lane];
-        }
-    }
-
-    tokens.into_iter().zip(logits).collect()
-}
-
 /// Lane X sits at position 37, lane Y at position 5 when fused decode starts.
 fn divergent_prompts() -> Vec<Vec<u32>> {
     let x: Vec<u32> = "This is a long prompt for lane X in the gate"
@@ -415,43 +96,6 @@ fn divergent_prompts() -> Vec<Vec<u32>> {
     assert_eq!(x.len(), 37);
     assert_eq!(y.len(), 5);
     vec![x, y]
-}
-
-fn assert_equivalent(mode: RopeMode) {
-    let device: Device = Default::default();
-    let steps = 24;
-    let prompts = divergent_prompts();
-
-    let batched = batched_run(&prompts, steps, mode, &device);
-
-    let tolerance = Tolerance::<f32>::rel_abs(1e-4, 1e-5);
-    for (lane, prompt) in prompts.iter().enumerate() {
-        let (ref_tokens, ref_logits) = reference_run(prompt, steps, &device);
-        let (lane_tokens, lane_logits) = &batched[lane];
-
-        // Byte-exact argmax token stream.
-        assert_eq!(
-            lane_tokens, &ref_tokens,
-            "lane {lane} ({mode:?}): batched argmax stream diverged from batch-1 run"
-        );
-
-        // Tight-tolerance per-step logits.
-        for (got, expected) in lane_logits.iter().zip(ref_logits.iter()) {
-            let got = TensorData::new(got.clone(), [got.len()]);
-            let expected = TensorData::new(expected.clone(), [expected.len()]);
-            got.assert_approx_eq::<f32>(&expected, tolerance);
-        }
-    }
-}
-
-#[test]
-fn batch2_gather_rope_equivalent_to_two_batch1_runs() {
-    assert_equivalent(RopeMode::Gather);
-}
-
-#[test]
-fn batch2_per_lane_loop_rope_equivalent_to_two_batch1_runs() {
-    assert_equivalent(RopeMode::PerLaneLoop);
 }
 
 /// Build the tiny test model with an `n_lanes`-lane slab (slot == lane), seeded identically to
@@ -540,9 +184,8 @@ fn prompt_bytes(s: &str, take: usize) -> Vec<u32> {
 
 /// S7a production-path equivalence: prefill + fused `[n, 1]` decode rounds through the REAL
 /// [`LlamaDecoder`] (`prepare_lanes` → `forward_lanes`, slot == lane) must match independent
-/// batch-1 runs through the single-sequence forward path. Unlike the `BatchedHarness` tests above,
-/// this drives the actual production seam (`prefill`/`decode`/`release`) — the standing guard the
-/// hand-rolled harness becomes when it is deleted in S7c. Two lanes at divergent positions (37, 5).
+/// batch-1 runs through the single-sequence forward path, driving the actual production seam
+/// (`prefill`/`decode`/`release`). Two lanes at divergent positions (37, 5). Two lanes at divergent positions (37, 5).
 #[test]
 fn fused_decode_through_real_decoder_matches_batch1() {
     let device: Device = Default::default();
@@ -682,60 +325,44 @@ fn lane_reuse_after_release_starts_clean() {
     );
 }
 
-/// Both RoPE implementations must agree with each other token-for-token.
-#[test]
-fn gather_and_per_lane_loop_rope_agree() {
-    let device: Device = Default::default();
-    let prompts = divergent_prompts();
-    let gather = batched_run(&prompts, 16, RopeMode::Gather, &device);
-    let looped = batched_run(&prompts, 16, RopeMode::PerLaneLoop, &device);
-    for lane in 0..prompts.len() {
-        assert_eq!(
-            gather[lane].0, looped[lane].0,
-            "lane {lane}: token streams diverged"
-        );
-    }
-}
-
-/// Shared benchmark loop: hand-rolled lane decode at batch 1/2/4/8 over
-/// whatever weights `make_model` produces. Prefill and a few warmup decode
-/// steps (shader compile / autotune) are untimed.
-fn run_bench(
-    config: &LlamaConfig,
-    prompt: &[u32],
-    steps: usize,
-    mut make_model: impl FnMut() -> (Transformer, RotaryEncoding),
-) {
+/// Shared benchmark: drive the REAL `LlamaDecoder` at batch 1/2/4/8 over a slab sized to the max
+/// batch (reset between runs, using lanes `0..batch`). Prefill plus a few warmup decode steps
+/// (shader compile / autotune) are untimed. This times the SHIPPED fused decode path
+/// (`prefill`/`decode`), not a stand-in re-implementation.
+fn run_bench(prompt: &[u32], steps: usize, decoder: &mut LlamaDecoder) {
     use std::time::Instant;
 
-    let device: Device = Default::default();
-    println!("bench device: {device:?}");
+    println!("bench device: {:?}", decoder.device);
     let warmup = 3;
-
     let mut baseline: Option<f64> = None;
-    for batch in [1usize, 2, 4, 8] {
-        let prompts: Vec<Vec<u32>> = (0..batch).map(|_| prompt.to_vec()).collect();
-        let (model, rope) = make_model();
-        let mut harness =
-            BatchedHarness::new(model, rope, config, batch, RopeMode::Gather, &device);
 
-        // Prefill all lanes (not timed).
+    for batch in [1usize, 2, 4, 8] {
+        decoder.reset(); // fresh slab; use lanes 0..batch of the max-batch slab
+        let lanes: Vec<usize> = (0..batch).collect();
+
+        // Prefill every lane (not timed).
         let mut last: Vec<u32> = Vec::with_capacity(batch);
-        for (lane, p) in prompts.iter().enumerate() {
-            let out = harness.forward(&[lane], tokens_tensor(&[p.clone()], &device));
+        for &lane in &lanes {
+            let out = decoder.prefill(lane, prompt, 0).unwrap();
             last.push(argmax_rows(&out)[0]);
         }
 
-        let all_lanes: Vec<usize> = (0..batch).collect();
         let mut start = Instant::now();
         for step in 0..steps + warmup {
             if step == warmup {
-                // Untimed warmup absorbs first-shape shader compilation and
-                // autotune for the fused [batch, 1] decode.
+                // Untimed warmup absorbs first-shape shader compilation and autotune for the fused
+                // [batch, 1] decode.
                 start = Instant::now();
             }
-            let rows: Vec<Vec<u32>> = last.iter().map(|&t| vec![t]).collect();
-            let out = harness.forward(&all_lanes, tokens_tensor(&rows, &device));
+            let rows: Vec<DecodeRow> = lanes
+                .iter()
+                .map(|&lane| DecodeRow {
+                    slot: lane,
+                    token: last[lane],
+                    position: prompt.len() + step,
+                })
+                .collect();
+            let out = decoder.decode(&rows).unwrap();
             last = argmax_rows(&out);
         }
         let elapsed = start.elapsed();
@@ -749,14 +376,18 @@ fn run_bench(
         println!(
             "batch {batch}: {step_ms:.3} ms/step, {toks_per_s:.1} tok/s aggregate, {speedup:.2}x vs batch 1"
         );
+
+        for &lane in &lanes {
+            decoder.release(lane);
+        }
     }
 }
 
-/// Step latency / aggregate throughput at batch 1/2/4/8 on the tiny
-/// reinitialized test model.
+/// Step latency / aggregate throughput at batch 1/2/4/8 on the tiny reinitialized test model,
+/// through the real `LlamaDecoder`.
 ///
-/// Tier-1 gate (this machine, Metal): >= 1.2x aggregate tok/s at batch 4 vs
-/// batch 1. CPU (ndarray) numbers are informational only. Run with e.g.:
+/// Tier-1 gate (this machine, Metal): >= 1.2x aggregate tok/s at batch 4 vs batch 1. CPU (ndarray)
+/// numbers are informational only. Run with e.g.:
 /// `cargo test -p burn-lm-llama --release --features test-wgpu \
 ///    batched_equivalence::bench -- --ignored --nocapture`
 #[test]
@@ -764,16 +395,13 @@ fn run_bench(
 fn bench_batched_decode_throughput() {
     let device: Device = Default::default();
     let prompt: Vec<u32> = "benchmark prompt".bytes().map(|b| b as u32).collect();
-    run_bench(&LlamaConfig::llama3_2_1b_test(), &prompt, 50, || {
-        let llama = test_llama(&device);
-        (llama.decoder.model, llama.decoder.pos_encoding.rope)
-    });
+    let mut llama = test_llama_lanes(8, &device);
+    run_bench(&prompt, 50, &mut llama.decoder);
 }
 
-/// Same benchmark over the real downloaded Llama-3.2-1B-Instruct weights —
-/// the meaningful Tier-1 number (the tiny test model overstates per-launch
-/// overhead and understates bandwidth effects). Requires the weights to be
-/// in `~/.cache/llama` already and the `llama3` + `pretrained` features:
+/// Same benchmark over the real downloaded Llama-3.2-1B-Instruct weights — the meaningful Tier-1
+/// number (the tiny test model overstates per-launch overhead and understates bandwidth effects).
+/// Requires the weights in `~/.cache/llama` already and the `llama3` + `pretrained` features:
 /// `cargo test -p burn-lm-llama --release --features test-wgpu,llama3 \
 ///    batched_equivalence::bench_real -- --ignored --nocapture`
 #[cfg(all(feature = "llama3", feature = "pretrained"))]
@@ -782,17 +410,10 @@ fn bench_batched_decode_throughput() {
 fn bench_real_weights_batched_decode_throughput() {
     let device: Device = Default::default();
     let max_seq_len = 128;
-
-    // Load the real weights once; each batch config gets a cheap handle clone.
-    // max_batch_size is irrelevant here: `run_bench` drives its own `BatchedHarness` slabs and
-    // only borrows this model's weights + RoPE table.
-    let llama = LlamaConfig::llama3_2_1b_pretrained(max_seq_len, 1, &device)
+    // An 8-lane slab so run_bench can drive batch 1..8 against the real fused decode.
+    let mut llama = LlamaConfig::llama3_2_1b_pretrained(max_seq_len, 8, &device)
         .expect("Llama-3.2-1B-Instruct weights must already be downloaded");
-    let model = llama.decoder.model;
-    let rope = llama.decoder.pos_encoding.rope;
-
-    let config = LlamaConfig::llama3_2_1b("unused").with_max_seq_len(max_seq_len);
-    // Arbitrary in-vocab prompt tokens; argmax decode only needs ids.
+    // Arbitrary in-vocab prompt token ids; argmax decode only needs ids.
     let prompt: Vec<u32> = (0..16).map(|i| 1000 + i * 13).collect();
-    run_bench(&config, &prompt, 50, || (model.clone(), rope.clone()));
+    run_bench(&prompt, 50, &mut llama.decoder);
 }

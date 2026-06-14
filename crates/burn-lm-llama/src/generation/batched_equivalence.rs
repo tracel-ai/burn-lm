@@ -549,6 +549,75 @@ fn fused_decode_through_real_decoder_matches_batch1() {
     assert_real_decoder_equivalent(divergent_prompts(), 24, &device);
 }
 
+/// A lane retires mid-batch and the survivors continue as a NON-CONTIGUOUS subset. The worker does
+/// this whenever one request finishes before its batchmates (`decode(&rows)` over lanes `[0, 2]`
+/// after lane 1 was released), but the other equivalence tests run every lane to the same length, so
+/// the ragged-subset masking / RoPE / KV-slice keying off the explicit `lanes` slice (not a dense
+/// `0..n`) had no real-weights coverage. Here lane 1 is released after a few rounds and lanes 0 and 2
+/// must keep matching their solo runs.
+#[test]
+fn fused_decode_with_a_released_middle_lane_matches_batch1() {
+    let device: Device = Default::default();
+    let total_steps = 16;
+    let drop_after = 5; // lane 1 retires before this decode round
+    let prompts = vec![
+        prompt_bytes("This is a long prompt for lane X in the gate", 37),
+        prompt_bytes("Hello", 5),
+        prompt_bytes("A medium length lane Y goes here now", 19),
+    ];
+    let n = prompts.len();
+
+    // Solo references: lanes 0 and 2 run the full length; lane 1 only until it is dropped.
+    let ref0 = reference_run(&prompts[0], total_steps, &device).0;
+    let ref1_prefix = reference_run(&prompts[1], drop_after, &device).0;
+    let ref2 = reference_run(&prompts[2], total_steps, &device).0;
+
+    let mut llama = test_llama_lanes(n, &device);
+    let mut tokens: Vec<Vec<u32>> = vec![Vec::new(); n];
+    let mut last = vec![0u32; n];
+
+    for (lane, prompt) in prompts.iter().enumerate() {
+        let out = llama.decoder.prefill(lane, prompt, 0).unwrap();
+        tokens[lane].push(argmax_rows(&out)[0]);
+        last[lane] = tokens[lane][0];
+    }
+
+    let mut live: Vec<usize> = (0..n).collect();
+    for round in 1..total_steps {
+        if round == drop_after {
+            llama.decoder.release(1);
+            live = vec![0, 2]; // non-contiguous subset from here on
+        }
+        let rows: Vec<DecodeRow> = live
+            .iter()
+            .map(|&lane| DecodeRow {
+                slot: lane,
+                token: last[lane],
+                position: prompts[lane].len() + tokens[lane].len() - 1,
+            })
+            .collect();
+        let out = llama.decoder.decode(&rows).unwrap();
+        let next = argmax_rows(&out);
+        for (row, &lane) in live.iter().enumerate() {
+            tokens[lane].push(next[row]);
+            last[lane] = next[row];
+        }
+    }
+
+    assert_eq!(
+        tokens[0], ref0,
+        "lane 0 (survivor) diverged after the middle lane was released"
+    );
+    assert_eq!(
+        tokens[2], ref2,
+        "lane 2 (survivor) diverged after the middle lane was released — its KV/RoPE must key off the explicit lane index, not a dense range"
+    );
+    assert_eq!(
+        tokens[1], ref1_prefix,
+        "lane 1 diverged before it was released"
+    );
+}
+
 /// Three lanes at three distinct positions. n=2 cannot distinguish a correct per-lane mapping from
 /// a row-vs-lane index swap in the mask build or the RoPE gather (both symmetric at 2), so this is
 /// the test that actually pins the lane indexing at n >= 3.

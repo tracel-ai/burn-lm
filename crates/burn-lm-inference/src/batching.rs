@@ -32,9 +32,6 @@ pub struct BatchCapacity {
     /// Maximum number of sequences the decoder can run concurrently. The engine admits while
     /// `active.len() < max_slots`, so the actual free slots are `max_slots - active.len()`.
     pub max_slots: usize,
-    /// Maximum number of KV-cache tokens across all slots. Declared but NOT yet enforced by
-    /// admission — enforcement arrives together with real KV management.
-    pub max_kv_tokens: usize,
 }
 
 /// One decoding sequence's next input: the token to feed a slot. Plain host data — the decoder
@@ -112,8 +109,8 @@ pub trait BatchedInferenceServer: InferenceServer {
     /// [`decode`](BatchedDecoder::decode)/[`release`](BatchedDecoder::release) are `0..max_slots`.
     ///
     /// DECISION: capacity stays here on the server rather than becoming a `max_slots` method on
-    /// [`BatchedDecoder`] — it sits next to the other operator-facing limits (`max_kv_tokens`,
-    /// [`max_gen_tokens`](Self::max_gen_tokens)), it keeps the decoder trait pure data plane, and
+    /// [`BatchedDecoder`] — it sits next to the other operator-facing limits
+    /// ([`max_gen_tokens`](Self::max_gen_tokens)), it keeps the decoder trait pure data plane, and
     /// admission can ask for it without borrowing (and so lazily loading) the model.
     fn batch_capacity(&self) -> BatchCapacity;
 

@@ -290,7 +290,6 @@ impl BatchedInferenceServer for FakeServer {
         self.capacity_calls.fetch_add(1, Ordering::Relaxed);
         BatchCapacity {
             max_slots: self.slots,
-            max_kv_tokens: 1024,
         }
     }
 
@@ -489,10 +488,7 @@ impl BatchedInferenceServer for ByteServer {
     }
 
     fn batch_capacity(&self) -> BatchCapacity {
-        BatchCapacity {
-            max_slots: 1,
-            max_kv_tokens: 1024,
-        }
+        BatchCapacity { max_slots: 1 }
     }
 
     fn tokenize(&self, task: &InferenceTask) -> InferenceResult<Vec<u32>> {

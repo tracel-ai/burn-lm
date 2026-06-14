@@ -305,14 +305,7 @@ impl BatchedInferenceServer for Llama321bInstructServer {
             Some(lanes) => self.config.max_slots.min(lanes),
             None => self.config.max_slots,
         };
-        BatchCapacity {
-            max_slots,
-            // In lane mode each lane independently holds up to `max_seq_len` tokens (no shared
-            // eviction), so the aggregate KV budget is `lanes * max_seq_len`. The field is
-            // declared-but-not-yet-enforced; reporting the true slab capacity keeps it correct for
-            // when KV-based admission lands.
-            max_kv_tokens: max_slots * self.config.max_seq_len,
-        }
+        BatchCapacity { max_slots }
     }
 
     fn tokenize(&self, task: &InferenceTask) -> InferenceResult<Vec<u32>> {

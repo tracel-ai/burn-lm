@@ -206,8 +206,14 @@ impl<W: Write + Send + 'static> InferenceJobListener for WriteListener<W> {
     type CompletedItem = W;
 
     fn on_text(&mut self, text: String) {
-        write!(self.writer, "{text}").unwrap();
-        self.writer.flush().unwrap();
+        // The writer may be a client stream that has gone away (e.g. the HTTP client
+        // dropped the SSE connection -> BrokenPipe). A failed write here must NOT panic:
+        // this runs on the listener thread, and a panic kills it, which both bricks the
+        // batch for every OTHER concurrent client and makes `join()` panic on the now-
+        // closed channel. Swallow the error — the generation finishes normally and the
+        // already-hardened `completed()` (closed-channel -> latch `done`) stops delivery.
+        let _ = write!(self.writer, "{text}");
+        let _ = self.writer.flush();
     }
 
     fn on_finished(self) -> Self::CompletedItem {

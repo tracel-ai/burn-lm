@@ -105,7 +105,9 @@ impl App {
 
     /// Create and start the application HTTP server
     pub async fn serve(self) -> Result<(), Box<dyn std::error::Error>> {
-        let addr = SocketAddr::from(([127, 0, 0, 1], self.port));
+        // Bind 0.0.0.0 (not 127.0.0.1) so the server is reachable from outside the
+        // container — required by Modal's @web_server proxy (and harmless locally).
+        let addr = SocketAddr::from(([0, 0, 0, 0], self.port));
         let banner = r#"
 
   ██████╗ ██╗   ██╗██████╗ ███╗   ██╗    ██╗     ███╗   ███╗

@@ -296,13 +296,6 @@ impl<Server: BatchedInferenceServer + 'static> BatchingChannel<Server> {
     }
 }
 
-/// The error every caller of a dead (or unspawnable) worker observes: the command channel or the
-/// completion channel disconnected. A dedicated variant — not a repurposed `LoadError` — so HTTP
-/// and CLI callers can tell "the worker died, retry" apart from a genuine model-loading failure.
-fn worker_gone() -> InferenceError {
-    InferenceError::WorkerDied
-}
-
 impl<Server: BatchedInferenceServer + 'static> InferenceChannel<Server>
     for BatchingChannel<Server>
 {
@@ -328,7 +321,8 @@ impl<Server: BatchedInferenceServer + 'static> InferenceChannel<Server>
     }
 
     fn load(&self) -> InferenceResult<Option<Stats>> {
-        self.request(Command::Load).map_err(|_| worker_gone())?
+        self.request(Command::Load)
+            .map_err(|_| InferenceError::WorkerDied)?
     }
 
     fn is_loaded(&self) -> bool {
@@ -340,7 +334,8 @@ impl<Server: BatchedInferenceServer + 'static> InferenceChannel<Server>
     }
 
     fn unload(&self) -> InferenceResult<Option<Stats>> {
-        self.request(Command::Unload).map_err(|_| worker_gone())?
+        self.request(Command::Unload)
+            .map_err(|_| InferenceError::WorkerDied)?
     }
 
     /// Blocking job entry point preserved for the `InferenceChannel`/`InferencePlugin` contract:
@@ -348,12 +343,12 @@ impl<Server: BatchedInferenceServer + 'static> InferenceChannel<Server>
     /// bound) propagates synchronously from `submit`, before this blocks.
     fn run_job(&self, job: InferenceJob) -> InferenceResult<Stats> {
         let rx = self.submit(job)?;
-        rx.recv().map_err(|_| worker_gone())?
+        rx.recv().map_err(|_| InferenceError::WorkerDied)?
     }
 
     fn clear_state(&self) -> InferenceResult<()> {
         self.request(Command::ClearState)
-            .map_err(|_| worker_gone())?
+            .map_err(|_| InferenceError::WorkerDied)?
     }
 
     /// Advisory: whether a submit right now would shed with `Overloaded`. Used by HTTP streaming

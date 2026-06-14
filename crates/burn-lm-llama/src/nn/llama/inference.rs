@@ -145,11 +145,6 @@ impl BatchedDecoder for LlamaDecoder {
     fn decode(&mut self, rows: &[DecodeRow]) -> InferenceResult<Tensor<2>> {
         let lanes: Vec<usize> = rows.iter().map(|row| row.slot).collect();
         let ids: Vec<i32> = rows.iter().map(|row| row.token as i32).collect();
-        debug_assert!(
-            rows.iter()
-                .all(|row| row.position == self.cache.lane_len(row.slot)),
-            "each decode row's position must equal its lane's current length"
-        );
         let input =
             Tensor::<2, Int>::from_data(TensorData::new(ids, [rows.len(), 1]), &self.device);
         self.forward_lanes(&lanes, input)

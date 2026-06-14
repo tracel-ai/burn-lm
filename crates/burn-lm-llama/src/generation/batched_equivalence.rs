@@ -135,7 +135,6 @@ fn real_decoder_batched_run(
             .map(|lane| DecodeRow {
                 slot: lane,
                 token: last[lane],
-                position: prompts[lane].len() + tokens[lane].len() - 1,
             })
             .collect();
         let out = llama.decoder.decode(&rows).unwrap();
@@ -236,7 +235,6 @@ fn fused_decode_with_a_released_middle_lane_matches_batch1() {
             .map(|&lane| DecodeRow {
                 slot: lane,
                 token: last[lane],
-                position: prompts[lane].len() + tokens[lane].len() - 1,
             })
             .collect();
         let out = llama.decoder.decode(&rows).unwrap();
@@ -302,7 +300,6 @@ fn lane_reuse_after_release_starts_clean() {
         let row = DecodeRow {
             slot: 0,
             token: last_a,
-            position: a.len() + k,
         };
         last_a = argmax_rows(&llama.decoder.decode(&[row]).unwrap())[0];
     }
@@ -314,7 +311,6 @@ fn lane_reuse_after_release_starts_clean() {
         let row = DecodeRow {
             slot: 0,
             token: *tokens_b.last().unwrap(),
-            position: b.len() + tokens_b.len() - 1,
         };
         tokens_b.push(argmax_rows(&llama.decoder.decode(&[row]).unwrap())[0]);
     }
@@ -359,7 +355,6 @@ fn run_bench(prompt: &[u32], steps: usize, decoder: &mut LlamaDecoder) {
                 .map(|&lane| DecodeRow {
                     slot: lane,
                     token: last[lane],
-                    position: prompt.len() + step,
                 })
                 .collect();
             let out = decoder.decode(&rows).unwrap();

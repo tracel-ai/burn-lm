@@ -37,16 +37,14 @@ pub struct BatchCapacity {
     pub max_kv_tokens: usize,
 }
 
-/// One decoding sequence's next input: the token to feed a slot and the absolute position it
-/// sits at. Plain host data — the decoder builds whatever tensors it needs from this.
+/// One decoding sequence's next input: the token to feed a slot. Plain host data — the decoder
+/// builds whatever tensors it needs from this.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DecodeRow {
     /// The slot whose sequence this token advances.
     pub slot: usize,
     /// The token id to feed (the one sampled last round).
     pub token: u32,
-    /// Absolute position of this token in its sequence (== tokens already in the slot).
-    pub position: usize,
 }
 
 /// A reusable, batch-capable decoder primitive.
@@ -318,7 +316,6 @@ pub fn step_round<D: BatchedDecoder, X>(
                 DecodeRow {
                     slot: seq.slot,
                     token: seq.tokens[seq.processed],
-                    position: seq.processed,
                 },
             ));
         }

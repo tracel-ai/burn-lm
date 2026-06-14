@@ -4,7 +4,7 @@ use super::Sampler;
 use crate::{inference::Llama, tokenizer::Tokenizer};
 use burn::{prelude::*, tensor::activation::softmax};
 use burn_lm_inference::{
-    batching::{step_round, ActiveSeq, BatchedDecoder, PrefillBudget, StepOutcome},
+    batching::{sample_token, step_round, ActiveSeq, BatchedDecoder, PrefillBudget, StepOutcome},
     sampler::NextTokenSampler,
     GeneratedItemEmitter, InferenceResult,
 };
@@ -92,14 +92,13 @@ impl<T: Tokenizer + 'static> Llama<T> {
             .expect("one prompt in yields exactly one output"))
     }
 
-    /// Generate for a batch of prompts, advancing them round-robin one token at a time.
+    /// Generate for a batch of prompts, advancing all of them one token per round.
     ///
     /// This is a thin batch driver that exercises the [`BatchedDecoder`] seam exactly the way the
     /// framework's continuous engine does: each sequence is assigned a decoder slot up front
-    /// (this driver owns the slot list, `0..prompts.len()`), prompts prefill into their slots,
-    /// each round decodes one token per sequence, and every slot is released before returning.
-    /// The round-robin sweep makes the sequences' output streams interleave. This is **not**
-    /// fused batching — the per-row decode becomes a single multi-row call next.
+    /// (this driver owns the slot list, `0..prompts.len()`), prompts prefill into their slots, and
+    /// each round advances every decoding sequence through ONE fused `decode` call before releasing
+    /// every slot on return. The sequences' output streams interleave round by round.
     pub fn generate_batch(
         &mut self,
         prompts: Vec<&str>,
@@ -162,21 +161,32 @@ impl<T: Tokenizer + 'static> Llama<T> {
 
         let now = Instant::now();
         // Run the shared generic decode core to completion: one round advances every still-active
-        // sequence by a token (round-robin, so their streams interleave). `step_round` does the
-        // forward → sample → SYNCHRONOUS stop-check; the driver-side work left here is streaming
+        // sequence by a token (one fused decode call, so their streams interleave). `step_round`
+        // does the forward → sample → SYNCHRONOUS stop-check; the driver-side work left is streaming
         // each new (non-stop) token through its `GenerationContext`. A stop id retires its
         // sequence in the same round it is produced, so no token is generated past it.
         let mut failure = None;
         'rounds: while active.iter().any(|seq| !seq.finished) {
-            // A fresh prefill budget per round over the whole batch. All prompts start at
-            // position 0, so round 1 has nothing decoding and they prefill freely.
+            // A fresh prefill budget per round over the whole batch.
             let mut budget = PrefillBudget::for_round(&active);
+            // The library path uses ONE shared sampler for every sequence, so the per-row sampling
+            // closure ignores the row index (the serving worker is what gives each request its own).
+            //
+            // NOTE on sampling order: `step_round` samples all prefill rows before all decode rows.
+            // With a STATELESS sampler (argmax, temperature 0) the order is irrelevant. With a
+            // stateful shared sampler (top-p RNG), the per-round draw order is prefills-then-decodes
+            // — which already differs from a solo run because one RNG is shared across the batch, so
+            // batched stochastic output is inherently not solo-identical regardless of order. (A
+            // batch mixing a 1-token prompt — a decode row in round 1 — with longer prompts is the
+            // case where this round is "mixed".) Giving `generate_batch` per-sequence samplers, like
+            // the serving worker, would make order irrelevant; that is part of the open D4 sampling
+            // re-evaluation.
             let outcomes = step_round(
                 &mut self.decoder,
                 &mut active,
-                &mut sampler,
                 &stop_ids,
                 &mut budget,
+                |_index, logits| sample_token(logits, &mut sampler),
             );
             for (seq, outcome) in active.iter_mut().zip(outcomes) {
                 match outcome {
@@ -252,7 +262,7 @@ mod tests {
     }
 
     /// Two requests driven through `generate_batch` must interleave their output streams, proving
-    /// the engine advances them round-robin rather than one fully then the other.
+    /// the engine advances them a token each per round rather than one fully then the other.
     #[test]
     fn generate_batch_interleaves_two_sequences() {
         let device: Device = Default::default();

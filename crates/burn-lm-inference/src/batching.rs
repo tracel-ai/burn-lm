@@ -221,11 +221,8 @@ pub enum StepOutcome {
 ///
 /// While any sequence is mid-decode, at most ONE prompt may prefill per round, so a long prompt
 /// cannot stall the decoders for more than one round; with no decoders to stall, prompts run
-/// freely. The budget is a separate value (rather than state `step_round` derives from its input
-/// slice) because a driver may step its sequences through several `step_round` calls in one round
-/// — the serving worker calls once per sequence, each with that sequence's own sampler — and the
-/// budget must be shared across all of them: derived per call, a single-sequence slice never sees
-/// the other sequences decoding and the budget silently stops existing.
+/// freely. The budget is computed once over the full active set and passed into the single
+/// [`step_round`] call for the round, which honours it across its prefill pass.
 pub struct PrefillBudget {
     /// Whether any live sequence's unprocessed tail is exactly one token this round (i.e. it is
     /// decoding, and a long prefill would stall it).
@@ -277,94 +274,146 @@ impl PrefillBudget {
 ///
 /// A sequence whose unprocessed tail is more than one token is prompt work and prefills, subject
 /// to the caller-supplied [`PrefillBudget`] (at most one prompt per round while others decode); a
-/// deferred prompt yields [`StepOutcome::Skipped`] and stays prompt work for the next round. A
-/// sequence with exactly one new token decodes — still one [`decode`](BatchedDecoder::decode)
-/// call per row for now; fusing the rows into a single call comes next.
+/// deferred prompt yields [`StepOutcome::Skipped`] and stays prompt work for the next round. Every
+/// sequence with exactly one new token decodes through a SINGLE fused [`decode`](BatchedDecoder::decode)
+/// call for the whole round (`[n, vocab]`), and each returned row is sampled by its own sampler via
+/// the `sample_row` closure.
+///
+/// `sample_row(i, logits)` samples the next token for active sequence `i` from its last-position
+/// logits (`[1, vocab]`). The closure — not a single shared sampler — is what lets the serving
+/// worker give each in-flight request its own (possibly seeded) sampler while the library driver
+/// passes one shared sampler that ignores the index. Keeping the samplers OUTSIDE `active` (the
+/// driver owns them) is what lets this borrow `active` mutably and still sample per row.
 ///
 /// Stop detection is **synchronous**: a sampled token that is in `stop_ids` finishes its sequence
 /// in the same round it is produced, so no extra token is generated past a stop id. The `max_gen`
 /// cap is likewise checked in-round.
-pub fn step_round<D: BatchedDecoder, X, S: NextTokenSampler>(
+pub fn step_round<D: BatchedDecoder, X>(
     decoder: &mut D,
     active: &mut [ActiveSeq<X>],
-    sampler: &mut S,
     stop_ids: &[u32],
     budget: &mut PrefillBudget,
+    mut sample_row: impl FnMut(usize, Tensor<2>) -> InferenceResult<u32>,
 ) -> Vec<StepOutcome> {
-    let mut outcomes = Vec::with_capacity(active.len());
+    let mut outcomes: Vec<StepOutcome> = (0..active.len()).map(|_| StepOutcome::Skipped).collect();
 
-    for seq in active.iter_mut() {
+    // CLASSIFY: retire the no-ops (already finished, `max_gen` reached, empty prompt) and split the
+    // rest into prefill candidates and decode rows. `max_gen` is checked before prefill so a
+    // zero-token request is a true no-op instead of prefilling and producing one token.
+    let mut prefills: Vec<usize> = Vec::new();
+    let mut decode_rows: Vec<(usize, DecodeRow)> = Vec::new();
+    for (i, seq) in active.iter_mut().enumerate() {
         if seq.finished {
-            outcomes.push(StepOutcome::Skipped);
             continue;
         }
-
-        // No generation budget left (notably `max_gen == 0`): finish without touching the model.
-        // The cap bounds *generated* tokens, so enforcing it before prefill keeps a zero-token
-        // request a true no-op instead of prefilling and producing one token.
-        if seq.generated >= seq.max_gen {
+        if seq.generated >= seq.max_gen || seq.processed >= seq.tokens.len() {
             seq.finished = true;
-            outcomes.push(StepOutcome::Skipped);
             continue;
         }
-
-        // The unprocessed tail: on the first step this is the whole prompt; afterwards a single
-        // token. An empty prompt cannot generate, so retire it immediately.
-        if seq.processed >= seq.tokens.len() {
-            seq.finished = true;
-            outcomes.push(StepOutcome::Skipped);
-            continue;
-        }
-
-        let position = seq.processed;
-        let result = if seq.tokens.len() - position > 1 {
-            // Prompt work. Honor the one-prompt-per-round budget: a deferred prompt just waits
-            // for the next round (its tail is untouched, so it stays prompt work).
-            if !budget.admit_prefill() {
-                outcomes.push(StepOutcome::Skipped);
-                continue;
-            }
-            decoder
-                .prefill(seq.slot, &seq.tokens[position..], position)
-                .and_then(|logits| expect_rows(logits, 1))
+        if seq.tokens.len() - seq.processed > 1 {
+            prefills.push(i);
         } else {
-            let rows = [DecodeRow {
-                slot: seq.slot,
-                token: seq.tokens[position],
-                position,
-            }];
-            decoder
-                .decode(&rows)
-                .and_then(|logits| expect_rows(logits, rows.len()))
-        };
-
-        let next_token = match result.and_then(|logits| sample_token(logits, sampler)) {
-            Ok(token) => token,
-            Err(err) => {
-                seq.finished = true;
-                outcomes.push(StepOutcome::Failed(err));
-                continue;
-            }
-        };
-
-        // Everything up to here is now processed; the next step consumes only the new token.
-        seq.processed = seq.tokens.len();
-        seq.tokens.push(next_token);
-        seq.generated += 1;
-
-        let is_stop = stop_ids.contains(&next_token);
-        if is_stop || seq.generated >= seq.max_gen {
-            seq.finished = true;
+            decode_rows.push((
+                i,
+                DecodeRow {
+                    slot: seq.slot,
+                    token: seq.tokens[seq.processed],
+                    position: seq.processed,
+                },
+            ));
         }
+    }
 
-        outcomes.push(StepOutcome::Stepped {
-            token: next_token,
-            is_stop,
-            finished: seq.finished,
-        });
+    // PREFILL pass: at most one prompt per round while anything decodes (budget). Prompts are
+    // ragged, so each is its own call; a deferred prompt stays Skipped and remains prompt work.
+    for i in prefills {
+        if !budget.admit_prefill() {
+            continue;
+        }
+        let position = active[i].processed;
+        let sampled = decoder
+            .prefill(active[i].slot, &active[i].tokens[position..], position)
+            .and_then(|logits| expect_rows(logits, 1))
+            .and_then(|logits| sample_row(i, logits));
+        outcomes[i] = advance_or_fail(&mut active[i], sampled, stop_ids);
+    }
+
+    // DECODE pass: ONE fused call advances every decode-ready row, then each row is sampled by its
+    // own sampler. A fused decode is all-or-nothing — it cannot fail for one row and succeed for
+    // another — so a decode error retires every decode row this round (the `expect_rows` contract
+    // still guards against a silently misaligned row count).
+    if !decode_rows.is_empty() {
+        let rows: Vec<DecodeRow> = decode_rows.iter().map(|(_, row)| *row).collect();
+        match decoder
+            .decode(&rows)
+            .and_then(|logits| expect_rows(logits, rows.len()))
+        {
+            Ok(logits) => {
+                let [_, vocab] = logits.dims();
+                // Per-row sampling: each row goes to ITS OWN sampler, so concurrent requests can use
+                // different params. This samples one row at a time, and `sample_token` reads each
+                // chosen id back to the host — so a round of N decoders costs N device→host syncs.
+                //
+                // FUTURE (D4 — batched sampler): collapse this into one pass over the whole
+                // `[n, vocab]` that applies per-row params (a temperature vector, a fused top-p) and
+                // returns all `n` ids in a single readback. That removes the per-row sync, the main
+                // sampling cost at higher batch. It needs a richer seam than `sample_row(i, logits)`
+                // (the per-request params must cross as batched data). NOTE: `logits.clone()` below
+                // is a cheap handle/refcount bump that shares the buffer — NOT a `[n, vocab]` copy —
+                // so the clone is not the cost; the per-row host readback is.
+                for (row_index, (seq_index, _)) in decode_rows.iter().enumerate() {
+                    let row_logits = logits.clone().slice([row_index..row_index + 1, 0..vocab]);
+                    let sampled = sample_row(*seq_index, row_logits);
+                    outcomes[*seq_index] =
+                        advance_or_fail(&mut active[*seq_index], sampled, stop_ids);
+                }
+            }
+            Err(err) => {
+                // Route every decode row through the shared fail path so the retire semantics live
+                // in one place (`advance_or_fail` on `Err` marks the sequence finished and yields
+                // `Failed`).
+                for (seq_index, _) in &decode_rows {
+                    outcomes[*seq_index] =
+                        advance_or_fail(&mut active[*seq_index], Err(err.clone()), stop_ids);
+                }
+            }
+        }
     }
 
     outcomes
+}
+
+/// Apply a sampled-token result to one sequence: on success advance its cursor/counters and run the
+/// synchronous stop / `max_gen` check; on error mark it finished. Returns the per-sequence outcome.
+/// Shared by the prefill and decode passes so both advance identically.
+fn advance_or_fail<X>(
+    seq: &mut ActiveSeq<X>,
+    sampled: InferenceResult<u32>,
+    stop_ids: &[u32],
+) -> StepOutcome {
+    let next_token = match sampled {
+        Ok(token) => token,
+        Err(err) => {
+            seq.finished = true;
+            return StepOutcome::Failed(err);
+        }
+    };
+
+    // Everything up to here is now processed; the next step consumes only the new token.
+    seq.processed = seq.tokens.len();
+    seq.tokens.push(next_token);
+    seq.generated += 1;
+
+    let is_stop = stop_ids.contains(&next_token);
+    if is_stop || seq.generated >= seq.max_gen {
+        seq.finished = true;
+    }
+
+    StepOutcome::Stepped {
+        token: next_token,
+        is_stop,
+        finished: seq.finished,
+    }
 }
 
 /// The framework's rows-in==rows-out check, applied at every
@@ -385,8 +434,10 @@ fn expect_rows(logits: Tensor<2>, in_rows: usize) -> InferenceResult<Tensor<2>> 
 }
 
 /// Framework-samples the next token id from a single sequence's last-position logits
-/// (`[1, vocab]`).
-fn sample_token<S: NextTokenSampler>(logits: Tensor<2>, sampler: &mut S) -> InferenceResult<u32> {
+/// (`[1, vocab]`). Takes the sampler as a trait object so a driver can pass either one shared
+/// sampler (the library path) or a per-sequence boxed sampler (the serving worker) from inside its
+/// [`step_round`] `sample_row` closure.
+pub fn sample_token(logits: Tensor<2>, sampler: &mut dyn NextTokenSampler) -> InferenceResult<u32> {
     let token = sampler.sample_next(logits);
     let ids = token
         .into_data()

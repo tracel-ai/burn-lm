@@ -9,7 +9,8 @@ use std::{
 
 use crate::{
     batching::{
-        step_round, ActiveSeq, BatchedDecoder, BatchedInferenceServer, PrefillBudget, StepOutcome,
+        sample_token, step_round, ActiveSeq, BatchedDecoder, BatchedInferenceServer, PrefillBudget,
+        StepOutcome,
     },
     errors::{InferenceError, InferenceResult},
     job::CancelSignal,
@@ -173,8 +174,8 @@ fn worker_iteration<S: BatchedInferenceServer>(
     // that does not fit stays at the front of the queue for a later iteration.
     admit(server, queue, active);
 
-    // STEP (round-robin stub): advance every active sequence by one token, then retire
-    // any that finished. Retiring frees a slot so the next iteration admits more.
+    // STEP: advance the round — ≤1 prefill plus one fused decode over every decoding sequence —
+    // then retire any that finished. Retiring frees a slot so the next iteration admits more.
     step(server, active);
 
     Flow::Continue
@@ -367,8 +368,8 @@ fn admit<S: BatchedInferenceServer>(
     }
 }
 
-/// Advance every active sequence by one token (round-robin) via the generic [`step_round`] core,
-/// stream the new tokens to their job emitters, then retire finished sequences.
+/// Advance the round (one fused decode over all decoding sequences, plus ≤1 prefill) via the generic
+/// [`step_round`] core, stream the new tokens to their job emitters, then retire finished sequences.
 ///
 /// This is the serving driver's thin wrapper around the shared decode core: `step_round` owns the
 /// forward → contract-check → sample → stop-check dance; the framework-specific work that stays
@@ -399,31 +400,26 @@ fn step<S: BatchedInferenceServer>(server: &mut S, active: &mut Vec<JobSeq>) {
     // sequence with that error rather than panicking the worker.
     let outcomes = match server.decoder() {
         Ok(decoder) => {
-            // ONE prefill budget for the whole round, computed over the FULL active set: each
-            // sequence is stepped through its own `step_round` call below (it needs its own
-            // sampler), and per-call budgets would never see the other sequences decoding — every
-            // queued prompt would prefill every round, stalling all in-flight decoders.
+            // ONE prefill budget for the whole round, computed over the FULL active set, so a long
+            // prompt cannot stall the in-flight decoders for more than one round.
             let mut budget = PrefillBudget::for_round(active);
-            // Advance each sequence with ITS OWN sampler, taken out of `extra` for the duration of
-            // the call (`step_round` borrows the sequence and the sampler separately).
-            let mut outcomes = Vec::with_capacity(active.len());
-            for index in 0..active.len() {
-                let mut sampler = active[index]
-                    .extra
-                    .sampler
-                    .take()
-                    .expect("sampler is only taken for the duration of a step");
-                let outcome = step_round(
-                    decoder,
-                    &mut active[index..index + 1],
-                    &mut sampler,
-                    &stop_ids,
-                    &mut budget,
-                )
-                .pop()
-                .expect("one sequence in yields exactly one outcome");
-                active[index].extra.sampler = Some(sampler);
-                outcomes.push(outcome);
+            // Each in-flight request has its OWN sampler (a seeded RNG persists across its tokens).
+            // Take them all out of `extra` into a parallel Vec so the per-row sampling closure can
+            // index them while `step_round` holds `active` borrowed; restore them after the round.
+            let mut samplers: Vec<Box<dyn NextTokenSampler + Send>> = active
+                .iter_mut()
+                .map(|seq| {
+                    seq.extra
+                        .sampler
+                        .take()
+                        .expect("sampler is only taken for the duration of a round")
+                })
+                .collect();
+            let outcomes = step_round(decoder, active, &stop_ids, &mut budget, |index, logits| {
+                sample_token(logits, samplers[index].as_mut())
+            });
+            for (seq, sampler) in active.iter_mut().zip(samplers) {
+                seq.extra.sampler = Some(sampler);
             }
             outcomes
         }

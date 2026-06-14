@@ -525,7 +525,8 @@ impl Llama3BaseServer {
         // resolve to exactly the config, keeping config-driven callers (CLI) unchanged.
         let settings = SamplingSettings::resolve(config.sampling_defaults(), params);
         let mut sampler = settings.sampler();
-        // Drive the single request through the batched path (batch size 1 for now).
+        // Drive the single request through the batched path (a lone request is the batch-of-one
+        // degenerate case of the same plumbing).
         let generated = {
             let model = self.model.get_mut()?;
             let mut outputs = model.generate_batch(

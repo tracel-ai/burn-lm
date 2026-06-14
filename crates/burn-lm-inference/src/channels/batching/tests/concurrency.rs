@@ -1,7 +1,7 @@
 use super::super::*;
 use super::fakes::*;
 use crate::{
-    batching::{step_round, ActiveSeq, PrefillBudget, StepOutcome},
+    batching::{sample_token, step_round, ActiveSeq, PrefillBudget, StepOutcome},
     job::{GenerationParams, InferenceJob, InferenceTask},
     sampler::Sampler,
     TextGenerationListener,
@@ -80,9 +80,9 @@ fn a_retired_sequences_slot_is_reused_with_no_residue() {
 
 /// PREFILL BUDGET: while another sequence is mid-decode, at most ONE prompt prefills per round;
 /// the deferred prompt's tail is untouched and it prefills the next round. This drives
-/// `step_round` exactly like the serving worker does — one call per sequence, all sharing the
-/// round's single [`PrefillBudget`] — so a per-call budget regression (where a single-sequence
-/// slice never sees the others decoding) fails here.
+/// `step_round` exactly like the serving worker does — one fused call for the whole round, sharing
+/// the round's single [`PrefillBudget`] — so a budget regression (a prompt prefilling while another
+/// sequence is decoding) fails here.
 #[test]
 fn at_most_one_prompt_prefills_per_round_while_another_sequence_decodes() {
     fn seq(slot: usize, tokens: Vec<u32>) -> ActiveSeq<()> {
@@ -111,21 +111,16 @@ fn at_most_one_prompt_prefills_per_round_while_another_sequence_decodes() {
     mid_decode.generated = 1;
     let mut active = vec![mid_decode, seq(1, vec![11, 11]), seq(2, vec![12, 12])];
 
-    // Round 1: one budget for the round, one `step_round` call per sequence (the worker's shape).
+    // Round 1: one fused `step_round` call for the whole round (the worker's shape). The shared
+    // sampler closure ignores the row index here.
     let mut budget = PrefillBudget::for_round(&active);
-    let outcomes: Vec<StepOutcome> = (0..active.len())
-        .map(|i| {
-            step_round(
-                &mut decoder,
-                &mut active[i..i + 1],
-                &mut sampler,
-                &stop_ids,
-                &mut budget,
-            )
-            .pop()
-            .expect("one sequence in yields exactly one outcome")
-        })
-        .collect();
+    let outcomes = step_round(
+        &mut decoder,
+        &mut active,
+        &stop_ids,
+        &mut budget,
+        |_i, logits| sample_token(logits, &mut sampler),
+    );
 
     assert!(
         matches!(outcomes[0], StepOutcome::Stepped { .. }),
@@ -149,9 +144,9 @@ fn at_most_one_prompt_prefills_per_round_while_another_sequence_decodes() {
     let outcome = step_round(
         &mut decoder,
         &mut active[2..3],
-        &mut sampler,
         &stop_ids,
         &mut budget,
+        |_i, logits| sample_token(logits, &mut sampler),
     )
     .pop()
     .expect("one sequence in yields exactly one outcome");
@@ -159,6 +154,176 @@ fn at_most_one_prompt_prefills_per_round_while_another_sequence_decodes() {
         matches!(outcome, StepOutcome::Stepped { .. }),
         "the deferred prompt prefills on the next round"
     );
+}
+
+/// FUSION (the S7b throughput win): a round with several decoding sequences must issue ONE `decode`
+/// call carrying every row — not one single-row call per sequence. A regression to per-row decode
+/// would make `decode_calls` `[1, 1, 1]` instead of `[3]`.
+#[test]
+fn decoding_sequences_share_one_fused_decode_call() {
+    // Mid-decode: prompt already processed, owes exactly one new token (a decode row, not prefill).
+    fn decoding(slot: usize, last: u32) -> ActiveSeq<()> {
+        ActiveSeq {
+            slot,
+            tokens: vec![last, last],
+            processed: 1,
+            generated: 1,
+            max_gen: 8,
+            finished: false,
+            extra: (),
+        }
+    }
+
+    let mut decoder = FakeDecoder::new(Arc::new(Mutex::new(Vec::new())), 100);
+    let mut sampler = Sampler::default();
+    let stop_ids = [0u32];
+    let mut active = vec![decoding(0, 10), decoding(1, 11), decoding(2, 12)];
+
+    let mut budget = PrefillBudget::for_round(&active);
+    let outcomes = step_round(
+        &mut decoder,
+        &mut active,
+        &stop_ids,
+        &mut budget,
+        |_i, logits| sample_token(logits, &mut sampler),
+    );
+
+    assert!(
+        outcomes
+            .iter()
+            .all(|o| matches!(o, StepOutcome::Stepped { .. })),
+        "every decoding sequence advances this round"
+    );
+    assert_eq!(
+        decoder.decode_calls,
+        vec![3],
+        "the round must fuse all decode rows into a single decode call, got {:?}",
+        decoder.decode_calls
+    );
+}
+
+/// FUSION FAILURE SEMANTICS: a fused decode is all-or-nothing, so a single decode error retires
+/// EVERY decode row that round — a per-row regression that retired only one would not turn this red.
+/// A prompt admitted the same round prefills BEFORE the decode call, so it survives: prefill errors
+/// stay per-sequence, decode errors are batch-wide.
+#[test]
+fn a_fused_decode_error_retires_every_decode_row_but_not_a_concurrent_prefill() {
+    fn decoding(slot: usize, last: u32) -> ActiveSeq<()> {
+        ActiveSeq {
+            slot,
+            tokens: vec![last, last],
+            processed: 1,
+            generated: 1,
+            max_gen: 8,
+            finished: false,
+            extra: (),
+        }
+    }
+    fn prompt(slot: usize) -> ActiveSeq<()> {
+        ActiveSeq {
+            slot,
+            tokens: vec![20, 20],
+            processed: 0,
+            generated: 0,
+            max_gen: 8,
+            finished: false,
+            extra: (),
+        }
+    }
+
+    let mut decoder = FakeDecoder::new(Arc::new(Mutex::new(Vec::new())), 100);
+    decoder.fail_decodes = 1;
+    let mut sampler = Sampler::default();
+    let stop_ids = [0u32];
+    // Three decode rows + one fresh prompt (admitted because the others are decoding).
+    let mut active = vec![decoding(0, 10), decoding(1, 11), decoding(2, 12), prompt(3)];
+
+    let mut budget = PrefillBudget::for_round(&active);
+    let outcomes = step_round(
+        &mut decoder,
+        &mut active,
+        &stop_ids,
+        &mut budget,
+        |_i, logits| sample_token(logits, &mut sampler),
+    );
+
+    for i in 0..3 {
+        assert!(
+            matches!(outcomes[i], StepOutcome::Failed(_)),
+            "decode row {i} must be retired with the error"
+        );
+        assert!(active[i].finished, "decode row {i} must be marked finished");
+    }
+    assert!(
+        matches!(outcomes[3], StepOutcome::Stepped { .. }),
+        "the prompt prefilled before the decode and survives the decode failure"
+    );
+    assert!(
+        !active[3].finished,
+        "the prefilled sequence is not retired by the decode failure"
+    );
+}
+
+/// MIXED-ROUND ALIGNMENT: a round where one prefill row AND the fused decode rows all STEP must put
+/// each sampled token on the RIGHT sequence. The sampler closure returns a token keyed to the row's
+/// active index, so a prefill/decode index mixup (e.g. using the fused row index instead of the
+/// sequence index) would land the wrong token on the wrong sequence. No existing test has a prefill
+/// AND a decode both stepping in one call.
+#[test]
+fn a_mixed_round_aligns_each_sampled_token_to_its_sequence() {
+    fn decoding(slot: usize, last: u32) -> ActiveSeq<()> {
+        ActiveSeq {
+            slot,
+            tokens: vec![last, last],
+            processed: 1,
+            generated: 1,
+            max_gen: 8,
+            finished: false,
+            extra: (),
+        }
+    }
+    fn prompt(slot: usize) -> ActiveSeq<()> {
+        ActiveSeq {
+            slot,
+            tokens: vec![30, 30],
+            processed: 0,
+            generated: 0,
+            max_gen: 8,
+            finished: false,
+            extra: (),
+        }
+    }
+
+    let mut decoder = FakeDecoder::new(Arc::new(Mutex::new(Vec::new())), 100);
+    let stop_ids = [0u32];
+    // seq1 is a fresh prompt (a prefill row); seq0 and seq2 are mid-decode (fused decode rows).
+    let mut active = vec![decoding(0, 10), prompt(1), decoding(2, 12)];
+
+    let mut budget = PrefillBudget::for_round(&active);
+    // The sampler returns a token keyed to the ACTIVE INDEX, ignoring the logits.
+    let outcomes = step_round(
+        &mut decoder,
+        &mut active,
+        &stop_ids,
+        &mut budget,
+        |i, _logits| Ok(100 + i as u32),
+    );
+
+    // Each sequence's newly appended token must equal 100 + its own active index — the prefill row
+    // (1) and the two fused-decode rows (0, 2) each landed their own sampler's token.
+    assert_eq!(*active[0].tokens.last().unwrap(), 100, "decode row 0 token");
+    assert_eq!(
+        *active[1].tokens.last().unwrap(),
+        101,
+        "prefill row 1 token"
+    );
+    assert_eq!(*active[2].tokens.last().unwrap(), 102, "decode row 2 token");
+    for i in 0..3 {
+        assert!(
+            matches!(outcomes[i], StepOutcome::Stepped { token, .. } if token == 100 + i as u32),
+            "outcome {i} must carry its own sequence's token"
+        );
+    }
 }
 
 /// Two CONCURRENT jobs with different per-request params must sample with independently

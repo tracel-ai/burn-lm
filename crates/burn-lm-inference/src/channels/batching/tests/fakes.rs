@@ -42,8 +42,15 @@ pub(super) struct FakeDecoder {
     /// How many upcoming `prefill` calls fail (e.g. a prompt past the context window). Per the
     /// [`BatchedDecoder::prefill`] contract the failing call leaves the slot untouched.
     pub(super) fail_prefills: usize,
+    /// How many upcoming `decode` calls fail — a fused decode is all-or-nothing, so this lets a test
+    /// prove a single decode error retires every row of the round.
+    pub(super) fail_decodes: usize,
     /// Per-slot step counters: the decoder-owned stand-in for a real per-slot KV cache.
     pub(super) steps: HashMap<usize, usize>,
+    /// Row count of each `decode` call, in order. Lets a test prove the round FUSES — one call with
+    /// N rows, not N calls with one. (Only read by direct `step_round` tests that own the decoder;
+    /// the worker moves it onto its own thread.)
+    pub(super) decode_calls: Vec<usize>,
 }
 
 pub(super) const VOCAB: usize = 64;
@@ -57,7 +64,9 @@ impl FakeDecoder {
             step_delay_ms: 0,
             panic_at_step: None,
             fail_prefills: 0,
+            fail_decodes: 0,
             steps: HashMap::new(),
+            decode_calls: Vec::new(),
         }
     }
 
@@ -116,6 +125,11 @@ impl BatchedDecoder for FakeDecoder {
     }
 
     fn decode(&mut self, rows: &[DecodeRow]) -> InferenceResult<Tensor<2>> {
+        self.decode_calls.push(rows.len());
+        if self.fail_decodes > 0 {
+            self.fail_decodes -= 1;
+            return Err(InferenceError::ContextLengthExceeded(rows.len(), 0));
+        }
         let tokens: Vec<usize> = rows
             .iter()
             .map(|row| self.step_slot(row.slot, row.token))

@@ -16,10 +16,10 @@
 //! decoder, behind the engine-assigned slot numbers), tokenizer primitives and capacity (see
 //! [`BatchedInferenceServer`]).
 //!
-//! The decode step is round-robin — each active sequence gets its own single-row
-//! [`decode`](crate::batching::BatchedDecoder::decode) call against its own slot. This proves the
-//! scheduling/admission/streaming plumbing end to end; fusing the rows into one multi-row GPU
-//! call comes next.
+//! Each round advances every decoding sequence through ONE fused
+//! [`decode`](crate::batching::BatchedDecoder::decode) call carrying all their rows (at most one
+//! prompt prefills per round alongside it). The streams still interleave, but the GPU does the
+//! whole round's decode in a single forward.
 //!
 //! BACKPRESSURE: the job queue is bounded ([`DEFAULT_MAX_QUEUE_DEPTH`], settable via
 //! [`with_queue_depth`](BatchingChannel::with_queue_depth)). [`submit`](BatchingChannel::submit)

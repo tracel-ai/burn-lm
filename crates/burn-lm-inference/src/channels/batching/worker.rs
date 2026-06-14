@@ -191,10 +191,7 @@ fn worker_iteration<S: BatchedInferenceServer>(
 /// and the respawned worker starts with a fresh server.
 fn fail_everything(queue: &mut VecDeque<QueuedJob>, active: &mut Vec<JobSeq>) {
     for seq in active.iter_mut() {
-        flush_detok(&mut seq.extra);
-        if let Some(completion) = seq.extra.completion.take() {
-            let _ = completion.send(Err(InferenceError::WorkerDied));
-        }
+        retire(&mut seq.extra, Err(InferenceError::WorkerDied));
     }
     active.clear();
     for queued in queue.drain(..) {
@@ -428,10 +425,7 @@ fn step<S: BatchedInferenceServer>(server: &mut S, active: &mut Vec<JobSeq>) {
             // `release` slots into — the caches live inside the decoder, and a later fresh load
             // starts with every slot empty. Clearing `active` is what frees the slots here.
             for seq in active.iter_mut() {
-                flush_detok(&mut seq.extra);
-                if let Some(completion) = seq.extra.completion.take() {
-                    let _ = completion.send(Err(err.clone()));
-                }
+                retire(&mut seq.extra, Err(err.clone()));
             }
             active.clear();
             return;
@@ -456,10 +450,7 @@ fn step<S: BatchedInferenceServer>(server: &mut S, active: &mut Vec<JobSeq>) {
                 // Flush held-back bytes BEFORE the completion fires (mirrors the
                 // `decoder()`-error path above), so the RETIRE invariant — trailing text always
                 // reaches the emitter before completion — holds on this path too.
-                flush_detok(&mut seq.extra);
-                if let Some(completion) = seq.extra.completion.take() {
-                    let _ = completion.send(Err(err));
-                }
+                retire(&mut seq.extra, Err(err));
             }
             StepOutcome::Skipped => {}
         }
@@ -484,32 +475,29 @@ fn step<S: BatchedInferenceServer>(server: &mut S, active: &mut Vec<JobSeq>) {
     active.retain_mut(|seq| {
         if seq.finished {
             freed_slots.push(seq.slot);
-            flush_detok(&mut seq.extra);
-            if let Some(completion) = seq.extra.completion.take() {
-                let mut stats = Stats::new();
-                stats
-                    .entries
-                    .insert(crate::stats::StatEntry::TokensCount(seq.generated));
-                // Queue-wait observability: how long this job sat queued before admission.
-                // Rendered as fixed seconds to match every other duration stat (see
-                // `Stats::display_stats`); a `Named` entry rather than a new `StatEntry` variant
-                // because nothing needs the raw `Duration` back out.
+            let mut stats = Stats::new();
+            stats
+                .entries
+                .insert(crate::stats::StatEntry::TokensCount(seq.generated));
+            // Queue-wait observability: how long this job sat queued before admission.
+            // Rendered as fixed seconds to match every other duration stat (see
+            // `Stats::display_stats`); a `Named` entry rather than a new `StatEntry` variant
+            // because nothing needs the raw `Duration` back out.
+            stats.entries.insert(crate::StatEntry::Named(
+                super::QUEUE_WAIT_STAT_NAME.to_string(),
+                format!("{:.2}s", seq.extra.queue_wait.as_secs_f64()),
+            ));
+            // An in-flight cancel still replies `Ok`: the caller already received real tokens,
+            // and the finish-reason stat says why the stream stopped short. (Only the
+            // cancelled path carries a finish reason today, so normally-finished sequences
+            // keep their existing, byte-identical stats output.)
+            if seq.extra.cancelled {
                 stats.entries.insert(crate::StatEntry::Named(
-                    super::QUEUE_WAIT_STAT_NAME.to_string(),
-                    format!("{:.2}s", seq.extra.queue_wait.as_secs_f64()),
+                    FINISH_REASON_STAT_NAME.to_string(),
+                    "Cancelled".to_string(),
                 ));
-                // An in-flight cancel still replies `Ok`: the caller already received real tokens,
-                // and the finish-reason stat says why the stream stopped short. (Only the
-                // cancelled path carries a finish reason today, so normally-finished sequences
-                // keep their existing, byte-identical stats output.)
-                if seq.extra.cancelled {
-                    stats.entries.insert(crate::StatEntry::Named(
-                        FINISH_REASON_STAT_NAME.to_string(),
-                        "Cancelled".to_string(),
-                    ));
-                }
-                let _ = completion.send(Ok(stats));
             }
+            retire(&mut seq.extra, Ok(stats));
             false
         } else {
             true
@@ -536,5 +524,17 @@ fn step<S: BatchedInferenceServer>(server: &mut S, active: &mut Vec<JobSeq>) {
 fn flush_detok(meta: &mut JobMeta) {
     if let Some(text) = meta.detok.finish() {
         meta.emitter.completed(GeneratedItem::Text(text));
+    }
+}
+
+/// Retire a single sequence: flush its detok cursor into the emitter, then fire its completion
+/// reply exactly once. The flush happens BEFORE the send so trailing held-back bytes always reach
+/// the emitter before completion, and the `.take()` keeps the bounded one-shot reply send-once (a
+/// second send would block the worker). Used on every retire path; the success site builds its
+/// `Stats` first and passes `Ok(stats)`.
+fn retire(meta: &mut JobMeta, reply: InferenceResult<Stats>) {
+    flush_detok(meta);
+    if let Some(completion) = meta.completion.take() {
+        let _ = completion.send(reply);
     }
 }

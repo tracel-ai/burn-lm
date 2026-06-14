@@ -42,30 +42,15 @@ pub struct LlamaDecoder {
     /// Llama decoder-only transformer.
     pub model: Transformer,
     /// Shared, lane-indexed KV cache (one lane per engine slot). Writes/reads are lane-sliced and
-    /// [`release`](BatchedDecoder::release) resets a lane. The single-sequence
-    /// [`forward`](Self::forward) path uses lane 0's whole-cache view; the two paths are never
-    /// mixed on one instance.
+    /// [`release`](BatchedDecoder::release) resets a lane.
     pub cache: TransformerCache,
     /// Rotary positional encoding (RoPE). Lane decode reads `rope` directly at each lane's absolute
-    /// position (no table shift); the single-sequence path uses the stateful counters.
+    /// position (no table shift).
     pub pos_encoding: PositionalEncodingState,
     pub device: Device,
 }
 
 impl LlamaDecoder {
-    /// Forward one prompt/decode chunk through the decoder, updating cache and RoPE state.
-    pub fn forward(&mut self, input: Tensor<2, Int>) -> Result<Tensor<3>, GenerationError> {
-        let [_, seq_len] = input.dims();
-
-        // Prepare cache and RoPE for current sequence length and position.
-        let mask = self.cache.prepare(seq_len)?;
-        self.pos_encoding.prepare(seq_len);
-
-        Ok(self
-            .model
-            .forward(input, &mut self.cache, &self.pos_encoding, mask))
-    }
-
     /// Reset decoder state between independent generations.
     pub fn reset(&mut self) {
         self.cache.reset();

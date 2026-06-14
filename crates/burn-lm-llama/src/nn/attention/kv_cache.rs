@@ -32,17 +32,10 @@ impl KeyValueCache {
         }
     }
 
-    /// Computes the complete keys and values.
-    pub fn forward(&mut self, key: Tensor<4>, value: Tensor<4>) -> (Tensor<4>, Tensor<4>) {
-        let k = self.key.append(key);
-        let v = self.value.append(value);
-        (k, v)
-    }
-
-    /// Lane-sliced variant of [`Self::forward`]: row `j` of `key`/`value` is
-    /// written into buffer lane `lanes[j]` at that lane's own position.
-    /// Returns the active lanes' K/V up to the longest active lane; the
-    /// caller masks each lane's stale tail.
+    /// Lane-sliced K/V update: row `j` of `key`/`value` is written into buffer
+    /// lane `lanes[j]` at that lane's own position. Returns the active lanes'
+    /// K/V up to the longest active lane; the caller masks each lane's stale
+    /// tail.
     pub fn forward_lanes(
         &mut self,
         lanes: &[usize],
@@ -60,29 +53,9 @@ impl KeyValueCache {
         self.value.reset_lane(lane);
     }
 
-    /// Returns the cached sequence length.
-    #[allow(clippy::len_without_is_empty)]
-    pub fn len(&self) -> usize {
-        // We can assume key and value have the same length
-        self.key.len()
-    }
-
     /// Returns the cached sequence length of one lane.
     pub fn lane_len(&self, lane: usize) -> usize {
         // We can assume key and value have the same length
         self.key.lane_len(lane)
-    }
-
-    pub fn prepare(&mut self, num_tokens: usize) {
-        self.key.prepare(num_tokens);
-        self.value.prepare(num_tokens);
-    }
-
-    /// Reset key-value cache.
-    /// Use between different contexts (i.e., for each new prompt).
-    #[allow(dead_code)]
-    pub fn reset(&mut self) {
-        self.key.reset();
-        self.value.reset();
     }
 }

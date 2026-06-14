@@ -1,41 +1,18 @@
 use burn::tensor::{Device, Tensor};
 
-/// Strategy for managing the autoregressive cache when its capacity is exceeded.
-#[derive(Debug, Clone, Default)]
-pub(crate) enum CacheStrategy {
-    /// Shrinks the cache by copying the remaining tokens into a new buffer,
-    /// removing the oldest tokens beyond the context limit.
-    #[allow(dead_code)]
-    Shrink,
-
-    /// Shifts the remaining tokens to the start of the existing buffer in-place,
-    /// overwriting the oldest tokens.
-    #[default]
-    Shift,
-}
-
 #[derive(Debug, Clone)]
 /// Cache that keeps track of a tensor state in an autoregressive decoding process.
 ///
 /// Bookkeeping is per lane: dimension 0 is the lane (batch row of the shared
-/// buffer) and `lens[lane]` tracks how many positions that lane holds. The
-/// whole-cache API (`append`/`prepare`/`len`/`reset`) delegates to lane 0,
-/// which is exactly the previous single-sequence behavior.
+/// buffer) and `lens[lane]` tracks how many positions that lane holds.
 pub(crate) struct AutoregressiveCache<const D: usize> {
     cache: Tensor<D>,
     seq_dim: usize,
     /// Per-lane sequence lengths.
     ///
-    /// The lane path (`append_lanes`/`reset_lane`) is the PRODUCTION decode path: each entry is one
-    /// live, independent lane's length. The whole-cache methods (`append`/`len`/`reset`) operate on
-    /// `lens[0]` and are now used only by the test-only single-sequence reference forward.
-    ///
-    /// A given cache INSTANCE is driven by exactly one family — never mix `append` and
-    /// `append_lanes` on the same instance (their offset semantics differ: `append` writes every
-    /// batch row at `lens[0]`; `append_lanes` writes lane `j` at `lens[lane]`). The production
-    /// decoder and the test reference build separate instances, so they never alias.
+    /// The lane path (`append_lanes`/`reset_lane`) is the production decode path: each entry is one
+    /// live, independent lane's length. `append_lanes` writes lane `j` at `lens[lane]`.
     lens: Vec<usize>,
-    strategy: CacheStrategy,
 }
 
 impl<const D: usize> AutoregressiveCache<D> {
@@ -48,61 +25,12 @@ impl<const D: usize> AutoregressiveCache<D> {
             cache: Tensor::empty(shape, device),
             seq_dim,
             lens: vec![0; n_lanes],
-            strategy: CacheStrategy::default(),
         }
-    }
-
-    #[allow(dead_code)]
-    /// Sets the cache management strategy.
-    pub fn with_strategy(mut self, strategy: CacheStrategy) -> Self {
-        self.strategy = strategy;
-        self
-    }
-
-    /// Reset the cache state (all lanes).
-    pub fn reset(&mut self) {
-        // Note: we don't need to clear the tensor since we track the current seq length
-        self.lens.iter_mut().for_each(|len| *len = 0);
     }
 
     /// Reset a single lane; its buffer row is overwritten on the next append.
     pub fn reset_lane(&mut self, lane: usize) {
         self.lens[lane] = 0;
-    }
-
-    /// Add the new tokens to the current cache and returns all tokens decoded since the beginning.
-    ///
-    /// Whole-cache path: every batch row is written at the same (lane-0)
-    /// offset — single-sequence / lockstep semantics.
-    ///
-    /// # Shapes
-    ///
-    /// - input:  `[batch_size, num_heads, seq_len_input, d_model]`
-    /// - output: `[batch_size, num_heads, seq_len_previous + seq_len_input, d_model]`
-    pub fn append(&mut self, tokens: Tensor<D>) -> Tensor<D> {
-        let shape = tokens.shape();
-        let seq_len_input = shape[self.seq_dim];
-
-        let new_seq_len = self.lens[0] + seq_len_input;
-
-        let mut indices_added_tokens = Vec::with_capacity(shape.len());
-        let mut indices_output = Vec::with_capacity(shape.len());
-
-        for (i, shape) in shape.iter().enumerate() {
-            if i == self.seq_dim {
-                indices_added_tokens.push(self.lens[0]..new_seq_len);
-                indices_output.push(0..new_seq_len);
-            } else {
-                indices_added_tokens.push(0..*shape);
-                indices_output.push(0..*shape);
-            }
-        }
-        self.cache
-            .inplace(|cache| cache.slice_assign(indices_added_tokens.as_slice(), tokens));
-
-        self.lens[0] = new_seq_len;
-
-        self.cache.clone().slice(indices_output.as_slice())
     }
 
     /// Lane-sliced append: write row `j` of `tokens` into buffer row
@@ -167,88 +95,9 @@ impl<const D: usize> AutoregressiveCache<D> {
         Tensor::cat(rows, 0)
     }
 
-    /// Prepare the cache by applying the configured strategy to make room for new tokens.
-    ///
-    /// `num_tokens` is the number of past tokens to discard or shift, depending on the strategy.
-    pub fn prepare(&mut self, num_tokens: usize) {
-        match self.strategy {
-            CacheStrategy::Shrink => self.shrink(num_tokens),
-            CacheStrategy::Shift => self.shift(num_tokens),
-        }
-    }
-
-    /// Shrink the cache to fit in `max_seq_len` while making place for the new tokens being
-    /// decoded.
-    fn shrink(&mut self, num_removed: usize) {
-        let old_cur_seq_len = self.lens[0];
-        self.lens[0] -= num_removed;
-
-        let shape = self.cache.shape();
-        let device = self.cache.device();
-
-        let mut slices_prev = Vec::with_capacity(shape.len());
-        let mut slices_curr = Vec::with_capacity(shape.len());
-
-        for (i, shape) in shape.iter().enumerate() {
-            if i == self.seq_dim {
-                slices_prev.push(num_removed..old_cur_seq_len);
-                slices_curr.push(0..self.lens[0]);
-            } else {
-                slices_prev.push(0..*shape);
-                slices_curr.push(0..*shape);
-            }
-        }
-
-        self.cache.inplace(|cache| {
-            let prev_slice = cache.slice(slices_prev.as_slice());
-            let new_cache = Tensor::empty(shape, &device);
-
-            new_cache.slice_assign(slices_curr.as_slice(), prev_slice)
-        });
-    }
-
-    /// Shift the cache to fit in `max_seq_len` while making place for the new tokens being
-    /// decoded.
-    fn shift(&mut self, num_shifted: usize) {
-        let old_cur_seq_len = self.lens[0];
-        self.lens[0] -= num_shifted;
-
-        let shape = self.cache.shape();
-
-        let mut slices_prev = Vec::with_capacity(shape.len());
-        let mut slices_curr = Vec::with_capacity(shape.len());
-
-        for (i, shape) in shape.iter().enumerate() {
-            if i == self.seq_dim {
-                slices_prev.push(num_shifted..old_cur_seq_len);
-                slices_curr.push(0..self.lens[0]);
-            } else {
-                slices_prev.push(0..*shape);
-                slices_curr.push(0..*shape);
-            }
-        }
-
-        // Shift tail -> head
-        self.cache.inplace(|cache| {
-            let prev_slice = cache.clone().slice(slices_prev.as_slice());
-
-            cache.slice_assign(slices_curr.as_slice(), prev_slice)
-        });
-    }
-
-    /// Returns the cached sequence length (lane 0 / whole-cache path).
-    pub fn len(&self) -> usize {
-        self.lens[0]
-    }
-
     /// Returns the cached sequence length of one lane.
     pub fn lane_len(&self, lane: usize) -> usize {
         self.lens[lane]
-    }
-
-    #[allow(dead_code)]
-    pub fn device(&self) -> Device {
-        self.cache.device()
     }
 }
 
@@ -256,64 +105,6 @@ impl<const D: usize> AutoregressiveCache<D> {
 mod tests {
     use super::*;
     use burn::tensor::TensorData;
-
-    fn test_autoregressive_cache(mut cache: AutoregressiveCache<2>) {
-        let device = cache.device();
-        let tokens_1 = Tensor::<2>::full([4, 8], 1.0, &device);
-        let tokens_2 = Tensor::<2>::full([4, 8], 2.0, &device);
-
-        let received_1 = cache.append(tokens_1.clone());
-        assert_eq!(cache.len(), 4);
-        let received_2 = cache.append(tokens_2.clone());
-        assert_eq!(cache.len(), 8);
-
-        received_1.to_data().assert_eq(&tokens_1.to_data(), true);
-        received_2
-            .clone()
-            .slice(0..4)
-            .to_data()
-            .assert_eq(&tokens_1.to_data(), true);
-        received_2
-            .slice(4..8)
-            .to_data()
-            .assert_eq(&tokens_2.to_data(), true);
-
-        cache.prepare(2);
-        assert_eq!(cache.len(), 6);
-
-        let tokens_3 = Tensor::<2>::full([2, 8], 3.0, &device);
-        let received_3 = cache.append(tokens_3.clone());
-        assert_eq!(cache.len(), 8);
-
-        received_3
-            .clone()
-            .slice(0..2)
-            .to_data()
-            .assert_eq(&tokens_1.slice(2..4).into_data(), true);
-        received_3
-            .clone()
-            .slice(2..6)
-            .to_data()
-            .assert_eq(&tokens_2.to_data(), true);
-        received_3
-            .slice(6..8)
-            .to_data()
-            .assert_eq(&tokens_3.to_data(), true);
-    }
-
-    #[test]
-    fn test_autoregressive_cache_shrink() {
-        let cache = AutoregressiveCache::<2>::new([8, 8], 0, &Default::default())
-            .with_strategy(CacheStrategy::Shrink);
-        test_autoregressive_cache(cache);
-    }
-
-    #[test]
-    fn test_autoregressive_cache_shift() {
-        let cache = AutoregressiveCache::<2>::new([8, 8], 0, &Default::default())
-            .with_strategy(CacheStrategy::Shift);
-        test_autoregressive_cache(cache);
-    }
 
     /// Lanes at divergent positions: ragged writes land at each lane's own
     /// offset, the read-back covers the longest active lane, and `reset_lane`

@@ -138,7 +138,12 @@ impl GeneratedItemEmitter {
             done: done.clone(),
         };
 
-        // TODO: We could use a threadpool for inference jobs.
+        // One listener thread per job, deliberately not a thread pool. This thread blocks in
+        // `on_text` on the client's socket, so a bounded pool would let a few slow clients hold every
+        // pool thread hostage and starve the rest — reintroducing the head-of-line stall the
+        // unbounded channel above removes. Per-job threads isolate clients (a slow one ties up only
+        // its own thread) at the cost of an unbounded thread count; the real fix for that is an async
+        // drain with no blocking thread at all, not a pool. A connection timeout bounds it meanwhile.
         std::thread::spawn(move || {
             for msg in receiver {
                 match msg {

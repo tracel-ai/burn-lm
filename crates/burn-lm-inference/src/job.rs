@@ -4,7 +4,7 @@ use std::{
     marker::PhantomData,
     sync::{
         atomic::{AtomicBool, Ordering},
-        mpsc::SyncSender,
+        mpsc::{Sender, SyncSender},
         Arc,
     },
 };
@@ -65,7 +65,7 @@ pub struct InferenceJob {
 /// An emitter is responsible to send [generated items](GeneratedItem) to the [inference job](InferenceJob)
 /// channel.
 pub struct GeneratedItemEmitter {
-    sender: SyncSender<Msg>,
+    sender: Sender<Msg>,
     done: Arc<AtomicBool>,
 }
 
@@ -119,7 +119,13 @@ impl InferenceJob {
 
 impl GeneratedItemEmitter {
     pub fn init<L: InferenceJobListener>(mut listener: L) -> (Self, JobHandle<L>) {
-        let (sender, receiver) = std::sync::mpsc::sync_channel::<Msg>(1);
+        // Unbounded on purpose. The batching worker streams every sequence's tokens inline on its
+        // single thread, so a bounded channel here lets one slow consumer — a backpressured SSE
+        // socket whose `on_text` write blocks — fill the buffer and wedge the worker's next `send`,
+        // head-of-line blocking every other in-flight request. An unbounded channel makes `send`
+        // never block; each job's output is capped by `max_gen_tokens`, so the buffer can't grow
+        // without bound. Regression: `a_blocking_listener_must_not_stall_other_jobs`.
+        let (sender, receiver) = std::sync::mpsc::channel::<Msg>();
 
         let handle = JobHandle {
             sender: sender.clone(),
@@ -269,7 +275,7 @@ impl InferenceJobListener for StdOutListener {
 /// This handle should be used to indicate when a job is finished using the
 /// [join method](JobHandle::join).
 pub struct JobHandle<C: InferenceJobListener> {
-    sender: SyncSender<Msg>,
+    sender: Sender<Msg>,
     cancel: CancelSignal,
     _c: PhantomData<C>,
 }

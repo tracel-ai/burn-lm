@@ -7,6 +7,7 @@
 
 mod fakes;
 
+mod backpressure;
 mod cancellation;
 mod concurrency;
 mod failure;

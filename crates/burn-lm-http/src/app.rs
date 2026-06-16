@@ -1,4 +1,7 @@
-use std::{net::SocketAddr, time::Duration};
+use std::{
+    net::{IpAddr, Ipv4Addr, SocketAddr},
+    time::Duration,
+};
 
 use axum::{
     http::{HeaderName, Request},
@@ -29,20 +32,24 @@ lazy_static! {
 /// Application
 #[derive(Debug)]
 pub struct App {
+    host: IpAddr,
     port: u16,
 }
 
 impl Default for App {
     fn default() -> Self {
-        Self { port: 3000 }
+        Self {
+            host: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
+            port: 3000,
+        }
     }
 }
 
 impl App {
-    pub fn new(port: u16) -> Self {
+    pub fn new(host: IpAddr, port: u16) -> Self {
         dotenvy::from_filename(".env").ok();
         trace::init();
-        Self { port }
+        Self { host, port }
     }
 }
 
@@ -105,9 +112,10 @@ impl App {
 
     /// Create and start the application HTTP server
     pub async fn serve(self) -> Result<(), Box<dyn std::error::Error>> {
-        // Bind 0.0.0.0 (not 127.0.0.1) so the server is reachable from outside the
-        // container — required by Modal's @web_server proxy (and harmless locally).
-        let addr = SocketAddr::from(([0, 0, 0, 0], self.port));
+        // Bind address is operator-configured (see the `--host` flag); it defaults to 0.0.0.0 (all
+        // interfaces) so the server is reachable from outside the container — required by Modal's
+        // @web_server proxy — and can be set to 127.0.0.1 to keep it local-only.
+        let addr = SocketAddr::from((self.host, self.port));
         let banner = r#"
 
   ██████╗ ██╗   ██╗██████╗ ███╗   ██╗    ██╗     ███╗   ███╗
@@ -125,7 +133,7 @@ impl App {
        ╚══════╝╚══════╝╚═╝  ╚═╝  ╚═══╝  ╚══════╝╚═╝  ╚═╝
 "#;
         info!("{banner}");
-        info!("Starting server on port '{addr}'...");
+        info!("Starting server on '{addr}'...");
         let listener = TcpListener::bind(addr)
             .await
             .expect("Server should bind to address successfully");

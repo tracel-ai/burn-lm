@@ -25,6 +25,39 @@ use crate::{
 
 pub const REPLY_MARKER: &str = "##### Model Reply";
 
+/// An SSE keepalive: a comment line — clients ignore anything starting with `:` — sent on the stream
+/// while it would otherwise be silent, so a reverse proxy (e.g. Modal's `@web_server`) doesn't time
+/// the idle connection out. The trailing blank line terminates the SSE event.
+const SSE_HEARTBEAT: &str = ": heartbeat\n\n";
+
+/// How often to emit `SSE_HEARTBEAT` while a blocking step is in flight — the model load, or a
+/// generation with a long gap between tokens. A few seconds stays well under a typical proxy idle
+/// timeout without adding meaningful traffic.
+const HEARTBEAT_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Await a blocking task while keeping the SSE stream warm. Until the task finishes, emit an
+/// `SSE_HEARTBEAT` on `tx` every `interval`, so the connection is never silent long enough for a
+/// proxy to drop it. This is what covers a slow model load and any long inter-token gap — both run
+/// on a blocking thread that produces no stream output while it works. If the client has gone (the
+/// heartbeat send fails because the receiver was dropped) we stop emitting but keep awaiting the
+/// task, so the spawned blocking work is driven to completion rather than leaked.
+async fn await_with_heartbeat<T>(
+    mut task: tokio::task::JoinHandle<T>,
+    tx: &mpsc::Sender<String>,
+    interval: std::time::Duration,
+) -> Result<T, tokio::task::JoinError> {
+    loop {
+        tokio::select! {
+            result = &mut task => return result,
+            _ = tokio::time::sleep(interval) => {
+                if tx.send(SSE_HEARTBEAT.to_string()).await.is_err() {
+                    return (&mut task).await;
+                }
+            }
+        }
+    }
+}
+
 /// Per-request generation parameters derived from the payload, carried on the job itself —
 /// immune to the shared-config mutation race the old per-request `parse_json_config` had once
 /// requests ran concurrently.
@@ -192,16 +225,19 @@ async fn handle_streaming_response(
                     .await
                     .expect("should send loading model chunk");
                 tracing::debug!("Loading model '{}'", plugin.model_name());
-                let loading_stats = tokio::task::spawn_blocking({
+                let load_task = tokio::task::spawn_blocking({
                     let plugin = plugin.clone();
                     move || {
                         plugin.load().unwrap_or_else(|_| {
                             panic!("model '{}' should load", plugin.model_name())
                         })
                     }
-                })
-                .await
-                .expect("should complete model loading");
+                });
+                // Loading weights blocks for seconds with nothing to stream; heartbeat across it so
+                // the proxy doesn't drop the connection before the first token arrives.
+                let loading_stats = await_with_heartbeat(load_task, &tx, HEARTBEAT_INTERVAL)
+                    .await
+                    .expect("should complete model loading");
                 tracing::debug!("Model loaded '{}'", plugin.model_name());
                 let loading_duration = match loading_stats {
                     Some(stats) => {
@@ -256,7 +292,7 @@ async fn handle_streaming_response(
                 InferenceJob::create(task, generation_params(&payload.params), listener);
             // Client disconnect -> job cancellation (observed by the worker's cancel sweep).
             let disconnect_watcher = wire_disconnect_cancel(&tx, job.cancel.clone());
-            let join_result = tokio::task::spawn_blocking({
+            let gen_task = tokio::task::spawn_blocking({
                 let plugin = plugin.clone();
                 move || {
                     let result = plugin.run_job(job);
@@ -265,8 +301,10 @@ async fn handle_streaming_response(
                     handle.join();
                     result
                 }
-            })
-            .await;
+            });
+            // Tokens stream out through the listener, but a slow forward can leave a long gap
+            // between them; heartbeat across generation so an idle gap can't trip the proxy either.
+            let join_result = await_with_heartbeat(gen_task, &tx, HEARTBEAT_INTERVAL).await;
             // The watcher holds a sender clone; abort it on EVERY path (including the panic
             // arm below) so the SSE channel can close — otherwise the stream never ends.
             disconnect_watcher.abort();
@@ -439,6 +477,63 @@ mod tests {
             .expect("write listener should stream emitted text without waiting to finish")
             .expect("stream should still be open");
         assert_eq!(first, "first");
+    }
+
+    /// A blocking step that takes longer than the heartbeat interval must keep the stream warm:
+    /// while it runs, `: heartbeat\n\n` comments flow so a proxy never sees a silent connection.
+    /// This is the load gap and the slow-inter-token gap reproduced without a model.
+    #[tokio::test]
+    async fn heartbeat_keeps_a_slow_blocking_step_from_going_silent() {
+        let (tx, mut rx) = mpsc::channel::<String>(8);
+        let task = tokio::task::spawn_blocking(|| {
+            std::thread::sleep(Duration::from_millis(150));
+            "done"
+        });
+
+        // Drain the stream concurrently, like the response body would, counting heartbeats — so the
+        // channel never backs up and the heartbeat sends never block waiting on an undrained rx.
+        let drain = tokio::spawn(async move {
+            let mut heartbeats = 0;
+            while let Some(msg) = rx.recv().await {
+                if msg == SSE_HEARTBEAT {
+                    heartbeats += 1;
+                }
+            }
+            heartbeats
+        });
+
+        let result = await_with_heartbeat(task, &tx, Duration::from_millis(20))
+            .await
+            .expect("the blocking task should complete");
+        assert_eq!(result, "done");
+        drop(tx); // close the stream so the drain task finishes
+
+        let heartbeats = drain.await.unwrap();
+        assert!(
+            heartbeats >= 3,
+            "expected several heartbeats across a 150ms block at 20ms cadence, got {heartbeats}"
+        );
+    }
+
+    /// If the client is already gone, the heartbeat send fails — but the helper must still drive the
+    /// blocking task to completion rather than hang or leak it.
+    #[tokio::test]
+    async fn heartbeat_stops_on_disconnect_but_still_awaits_the_task() {
+        let (tx, rx) = mpsc::channel::<String>(1);
+        drop(rx); // client already disconnected: every send will fail
+        let task = tokio::task::spawn_blocking(|| {
+            std::thread::sleep(Duration::from_millis(60));
+            "done"
+        });
+
+        let result = tokio::time::timeout(
+            Duration::from_secs(5),
+            await_with_heartbeat(task, &tx, Duration::from_millis(10)),
+        )
+        .await
+        .expect("helper must not hang after a disconnect")
+        .expect("the blocking task should still complete");
+        assert_eq!(result, "done");
     }
 
     #[tokio::test]

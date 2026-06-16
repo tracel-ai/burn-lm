@@ -324,6 +324,17 @@ pub fn step_round<D: BatchedDecoder, X>(
         }
     }
 
+    // Announce only when the fused-decode width CHANGES to more than one row — the signal that we're
+    // parallelizing sequences — instead of a line every round. The width is a coarse process-global
+    // gauge (a function-local static), enough for an "are we actually batching?" sanity check.
+    static LAST_DECODE_WIDTH: std::sync::atomic::AtomicUsize =
+        std::sync::atomic::AtomicUsize::new(0);
+    let decode_width = decode_rows.len();
+    let prev_width = LAST_DECODE_WIDTH.swap(decode_width, std::sync::atomic::Ordering::Relaxed);
+    if decode_width > 1 && decode_width != prev_width {
+        tracing::info!(decode_width, "fused decode parallelizing across sequences");
+    }
+
     // Prefill pass: the budget allows at most one prompt per round while anything decodes. Prompts
     // have different lengths, so each is its own call; a deferred prompt stays Skipped and remains
     // prompt work for a later round.

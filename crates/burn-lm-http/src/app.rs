@@ -95,9 +95,14 @@ impl App {
             .merge(chat_routers::public_router(model_store.clone()))
             .merge(model_routers::public_router(model_store.clone()));
         let router = Router::new().merge(public_routes);
-        Router::new()
+        let base = Router::new()
             .nest(version_prefix, router)
-            .merge(SwaggerUi::new("/v1/swagger-ui").url("/v1/api-docs/openapi.json", openapi))
+            .merge(SwaggerUi::new("/v1/swagger-ui").url("/v1/api-docs/openapi.json", openapi));
+        // Mount the CPU profiler routes (`/debug/pprof/*`) on the same port when built with
+        // `--features profiling`. They sit ahead of the layers so they get request-id/trace too.
+        #[cfg(feature = "profiling")]
+        let base = base.merge(crate::profiling::router());
+        base
             // Propagate request ID header from requests to responses
             .layer(PropagateRequestIdLayer::new(X_REQUEST_ID.clone()))
             // Log requests

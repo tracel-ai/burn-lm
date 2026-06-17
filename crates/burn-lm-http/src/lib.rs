@@ -6,6 +6,8 @@ pub mod constants;
 pub mod controllers;
 pub mod errors;
 pub mod handlers;
+#[cfg(feature = "profiling")]
+pub mod profiling;
 pub mod routers;
 pub mod schemas;
 pub mod stores;

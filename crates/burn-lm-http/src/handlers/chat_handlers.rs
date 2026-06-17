@@ -60,13 +60,11 @@ async fn await_with_heartbeat<T>(
 
 /// Per-request generation parameters derived from the payload, carried on the job itself —
 /// immune to the shared-config mutation race the old per-request `parse_json_config` had once
-/// requests ran concurrently.
+/// requests ran concurrently. The only per-request knob is the token cap; sampling (temperature,
+/// top-p, seed) is config-driven on the server.
 fn generation_params(params: &ChatCompletionParamsSchema) -> GenerationParams {
     GenerationParams {
         max_tokens: params.max_tokens.map(|v| v as usize),
-        temperature: params.temperature.map(f64::from),
-        top_p: params.top_p.map(f64::from),
-        seed: params.seed,
     }
 }
 

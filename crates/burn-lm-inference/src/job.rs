@@ -13,22 +13,16 @@ use crate::{Message, Prompt};
 
 /// Per-job generation parameters, merged over the server's config defaults.
 ///
-/// `None` means "use the server's configured default". Carrying these on the job (instead of
-/// mutating shared server config before `run_job`) is what makes concurrent requests with
-/// different sampling settings safe: two jobs in flight through the batching channel each sample
-/// with their own merged settings.
+/// `None` means "use the server's configured default". Carrying this on the job (instead of
+/// mutating shared server config before `run_job`) is what makes concurrent requests safe — two
+/// jobs in flight through the batching channel each carry their own cap. Sampling itself is
+/// config-driven now: temperature, top-p, and seed live in the server's sampling config, not on the
+/// per-request params, so the only knob a request carries is its token cap.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct GenerationParams {
     /// Caps the number of generated tokens. Merged over the server's configured cap and can only
     /// LOWER it, never raise it (the server cap stays authoritative).
     pub max_tokens: Option<usize>,
-    /// Overrides the configured sampling temperature.
-    pub temperature: Option<f64>,
-    /// Overrides the configured top-p probability threshold.
-    pub top_p: Option<f64>,
-    /// Per-request seed for reproducible sampling. `Some(0)` (like an unset seed over a `0`
-    /// config default) means "draw a fresh random seed for this job".
-    pub seed: Option<u64>,
 }
 
 /// Fire-once cancellation signal for an [inference job](InferenceJob).

@@ -3,11 +3,11 @@ use crate::{
     batching::{BatchCapacity, BatchedDecoder, DecodeRow},
     errors::InferenceError,
     job::{CancelSignal, GenerationParams, InferenceJob, InferenceTask},
-    sampler::NextTokenSampler,
+    sampler::{Argmax, Sampler, SamplingState},
     server::{InferenceServer, ServerConfigParsing},
-    InferenceServerConfig, Stats, INFERENCE_DEVICE,
+    InferenceResult, InferenceServerConfig, Stats, INFERENCE_DEVICE,
 };
-use burn::tensor::{Int, Tensor, TensorData};
+use burn::tensor::{Tensor, TensorData};
 use std::collections::HashMap;
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
@@ -142,16 +142,25 @@ impl BatchedDecoder for FakeDecoder {
     }
 }
 
-/// A sampler that ignores the logits and always returns the same token id — observably NOT
-/// argmax, so a test can prove the worker uses the server-configured sampler.
+/// A sampler that ignores the logits and always returns the same token id for every row —
+/// observably NOT argmax, so a test can prove the worker uses the server-configured sampler.
 pub(super) struct FixedSampler(pub(super) u32);
 
-impl NextTokenSampler for FixedSampler {
-    fn sample_next(&mut self, _logits: Tensor<2>) -> Tensor<2, Int> {
-        Tensor::from_data(
-            TensorData::new(vec![self.0 as i32], [1, 1]),
-            &*INFERENCE_DEVICE,
-        )
+impl Sampler for FixedSampler {
+    fn fresh_state(&self) -> SamplingState {
+        SamplingState {
+            rng: rand::SeedableRng::seed_from_u64(0),
+        }
+    }
+
+    fn sample(
+        &self,
+        logits: Tensor<2>,
+        _states: &mut [SamplingState],
+    ) -> InferenceResult<Vec<u32>> {
+        // One fixed id per input row, regardless of logits.
+        let rows = logits.dims()[0];
+        Ok(vec![self.0; rows])
     }
 }
 
@@ -162,10 +171,9 @@ pub(super) struct FakeServer {
     pub(super) decoder: FakeDecoder,
     /// Counts `batch_capacity` calls — lets the `max_slots == 0` test detect a busy-spin.
     pub(super) capacity_calls: Arc<AtomicUsize>,
-    /// When set, `next_token_sampler` returns a [`FixedSampler`] for this token instead of the
-    /// default argmax — stands in for a server with non-greedy sampling config. A job whose
-    /// params carry a temperature overrides this with `temperature as u32` (the merge-over-
-    /// config behavior a real server implements), so tests can observe per-request samplers.
+    /// When set, `sampler` returns a [`FixedSampler`] for this token instead of the default
+    /// argmax — stands in for a server with a non-greedy, config-driven sampler. Sampling is
+    /// config-driven, so this comes from the server's own config, never from per-request params.
     pub(super) fixed_token: Option<u32>,
     /// How many tokens `tokenize` produces per prompt (the identity token, repeated). The default
     /// 1 makes a sequence's first step decode work; tests that must exercise the PREFILL path
@@ -219,8 +227,8 @@ impl FakeServer {
         server
     }
 
-    /// A server whose `next_token_sampler` always picks `token`, regardless of logits —
-    /// observably different from the default argmax (which would echo the identity token).
+    /// A server whose `sampler` always picks `token`, regardless of logits — observably different
+    /// from the default argmax (which would echo the identity token).
     pub(super) fn with_fixed_sampler(mut self, token: u32) -> Self {
         self.fixed_token = Some(token);
         self
@@ -315,12 +323,12 @@ impl BatchedInferenceServer for FakeServer {
         16
     }
 
-    fn next_token_sampler(&self, params: &GenerationParams) -> Box<dyn NextTokenSampler + Send> {
-        // Request params merged over server config, like the real servers: a per-job
-        // temperature wins over the server-level `fixed_token`.
-        match params.temperature.map(|t| t as u32).or(self.fixed_token) {
+    fn sampler(&self) -> Box<dyn Sampler> {
+        // Config-driven, like the real servers: the sampler comes from the server's own config
+        // (`fixed_token`), not from per-request params.
+        match self.fixed_token {
             Some(token) => Box::new(FixedSampler(token)),
-            None => Box::new(crate::sampler::Sampler::default()),
+            None => Box::new(Argmax),
         }
     }
 }

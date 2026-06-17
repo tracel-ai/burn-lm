@@ -20,8 +20,8 @@ use burn::tensor::Tensor;
 
 use crate::{
     errors::{InferenceError, InferenceResult},
-    job::{GenerationParams, InferenceTask},
-    sampler::{NextTokenSampler, Sampler},
+    job::InferenceTask,
+    sampler::{Argmax, Sampler},
     server::InferenceServer,
 };
 
@@ -146,19 +146,18 @@ pub trait BatchedInferenceServer: InferenceServer {
     /// generated this many tokens, whichever comes first.
     fn max_gen_tokens(&self) -> usize;
 
-    /// Build a fresh next-token sampler for one admitted sequence, from the request's
-    /// `GenerationParams` merged over the server's current sampling config.
+    /// The sampler this server uses to turn logits into token ids, built from the server's own
+    /// sampling config.
     ///
-    /// The engine asks for a new sampler per admitted sequence and keeps it for that sequence's
-    /// whole generation, so a seeded RNG advances across the sequence's tokens just as it does on
-    /// the single-request path. Building it from the job's params, rather than from mutated shared
-    /// config, is what keeps two concurrent requests with different temperatures from clobbering
-    /// each other. The default is the framework's deterministic argmax `Sampler`, which ignores
-    /// params, so a model with no sampling config needs nothing extra; a server with sampling
-    /// config (temperature, top-p, seed) overrides this to merge request over config.
-    fn next_token_sampler(&self, params: &GenerationParams) -> Box<dyn NextTokenSampler + Send> {
-        let _ = params;
-        Box::new(Sampler::default())
+    /// Sampling is config-driven: one sampler serves every in-flight sequence (it carries the
+    /// config — temperature, top-p), and the per-sequence variation is only the RNG, which the
+    /// engine takes from each sequence's `SamplingState`. The worker grabs this as an owned
+    /// `Box<dyn Sampler>` before it borrows the decoder, so the owned box — which does not borrow
+    /// the server — cannot collide with the `&mut` decoder borrow. The default is the framework's
+    /// deterministic argmax, so a model with no sampling config needs nothing extra; a server with
+    /// sampling config overrides this with its own sampler.
+    fn sampler(&self) -> Box<dyn Sampler> {
+        Box::new(Argmax)
     }
 }
 
@@ -278,13 +277,16 @@ impl PrefillBudget {
 /// the caller-supplied `PrefillBudget` (at most one prompt per round while others decode); a
 /// deferred prompt yields `Skipped` and stays prompt work for the next round. Every sequence with
 /// exactly one new token decodes through a single fused `decode` call for the whole round
-/// (`[n, vocab]`), and each returned row is sampled by its own sampler via the `sample_row` closure.
+/// (`[n, vocab]`), and the whole round's rows are sampled in one batched `sample` call.
 ///
-/// `sample_row(i, logits)` samples the next token for active sequence `i` from its last-position
-/// logits (`[1, vocab]`). Passing a closure rather than one shared sampler is what lets the serving
-/// worker give each in-flight request its own (possibly seeded) sampler, while the library driver
-/// passes one shared sampler that ignores the index. The driver keeps the samplers outside `active`,
-/// which is what lets this function borrow `active` mutably and still sample per row.
+/// `sample(logits, indices)` samples the next token for a batch of rows at once: `logits` is
+/// `[indices.len(), vocab]`, `indices[r]` is the active-set index of row `r`, and the returned `Vec`
+/// has one token id per row, in row order. A prefill samples a single row (`&[i]`); the whole decode
+/// pass samples all its rows in one call, passing the rows' active indices so the driver can reach
+/// each sequence's per-sequence state by index. Passing the active indices, rather than one shared
+/// sampler, is what lets the serving worker hand each row its own per-sequence RNG while the library
+/// driver ignores them — and the driver keeps that per-sequence state outside `active`, which is
+/// what lets this function borrow `active` mutably and still sample.
 ///
 /// Stop detection is synchronous: a sampled token that is in `stop_ids` finishes its sequence in
 /// the same round it is produced, so no extra token is generated past a stop id. The `max_gen` cap
@@ -294,7 +296,7 @@ pub fn step_round<D: BatchedDecoder, X>(
     active: &mut [ActiveSeq<X>],
     stop_ids: &[u32],
     budget: &mut PrefillBudget,
-    mut sample_row: impl FnMut(usize, Tensor<2>) -> InferenceResult<u32>,
+    mut sample: impl FnMut(Tensor<2>, &[usize]) -> InferenceResult<Vec<u32>>,
 ) -> Vec<StepOutcome> {
     let mut outcomes: Vec<StepOutcome> = (0..active.len()).map(|_| StepOutcome::Skipped).collect();
 
@@ -343,37 +345,58 @@ pub fn step_round<D: BatchedDecoder, X>(
             continue;
         }
         let position = active[i].processed;
+        // A prefill produces a single `[1, vocab]` row, so it samples one row: `sample(logits, &[i])`
+        // returns a one-element `Vec`, and we take its single id.
         let sampled = decoder
             .prefill(active[i].slot, &active[i].tokens[position..], position)
             .and_then(|logits| expect_rows(logits, 1))
-            .and_then(|logits| sample_row(i, logits));
+            .and_then(|logits| sample(logits, &[i]))
+            .and_then(|ids| {
+                ids.into_iter().next().ok_or_else(|| {
+                    InferenceError::BatchContractViolation(
+                        "sampler produced no token for the prefill row".to_string(),
+                    )
+                })
+            });
         outcomes[i] = advance_or_fail(&mut active[i], sampled, stop_ids);
     }
 
-    // Decode pass: one fused call advances every decode-ready row, then each row is sampled by its
-    // own sampler. A fused decode is all-or-nothing — it cannot fail for one row and succeed for
-    // another — so a decode error retires every decode row this round. The `expect_rows` contract
-    // still guards against a silently misaligned row count.
+    // Decode pass: one fused call advances every decode-ready row, then the whole round's rows are
+    // sampled in one batched `sample` call. A fused decode is all-or-nothing — it cannot fail for one
+    // row and succeed for another — so a decode error retires every decode row this round. The
+    // `expect_rows` contract still guards against a silently misaligned row count.
     if !decode_rows.is_empty() {
         let rows: Vec<DecodeRow> = decode_rows.iter().map(|(_, row)| *row).collect();
-        match decoder
+        // The active-set index of each decode row, in row order — what the closure samples over so a
+        // batched sampler can reach each row's per-sequence state by index.
+        let row_indices: Vec<usize> = decode_rows
+            .iter()
+            .map(|(seq_index, _)| *seq_index)
+            .collect();
+        let sampled = decoder
             .decode(&rows)
             .and_then(|logits| expect_rows(logits, rows.len()))
-        {
-            Ok(logits) => {
-                let [_, vocab] = logits.dims();
-                // Per-row sampling: each row goes to its own sampler, so concurrent requests can use
-                // different params. We sample one row at a time, and `sample_token` reads each chosen
-                // id back to the host, so a round of N decoders costs N device-to-host syncs. (The
-                // `logits.clone()` below is a cheap refcount bump that shares the buffer, not an
-                // `[n, vocab]` copy — the readback is the cost, not the clone.) A future batched
-                // sampler could apply per-row params over the whole `[n, vocab]` at once and remove
-                // the per-row sync.
-                for (row_index, (seq_index, _)) in decode_rows.iter().enumerate() {
-                    let row_logits = logits.clone().slice([row_index..row_index + 1, 0..vocab]);
-                    let sampled = sample_row(*seq_index, row_logits);
+            .and_then(|logits| sample(logits, &row_indices));
+        match sampled {
+            Ok(ids) if ids.len() == decode_rows.len() => {
+                // Fan each sampled id back to its sequence, in row order, through the shared advance
+                // path so prefill and decode advance identically.
+                for ((seq_index, _), id) in decode_rows.iter().zip(ids) {
                     outcomes[*seq_index] =
-                        advance_or_fail(&mut active[*seq_index], sampled, stop_ids);
+                        advance_or_fail(&mut active[*seq_index], Ok(id), stop_ids);
+                }
+            }
+            Ok(_) => {
+                // The sampler returned the wrong number of ids for the round's rows — a batch
+                // contract violation. Retire every decode row with it, same all-or-nothing semantics
+                // as a decode error.
+                let err = InferenceError::BatchContractViolation(format!(
+                    "sampler returned a different number of ids than the {} decode row(s) sampled",
+                    decode_rows.len()
+                ));
+                for (seq_index, _) in &decode_rows {
+                    outcomes[*seq_index] =
+                        advance_or_fail(&mut active[*seq_index], Err(err.clone()), stop_ids);
                 }
             }
             Err(err) => {
@@ -438,24 +461,4 @@ fn expect_rows(logits: Tensor<2>, in_rows: usize) -> InferenceResult<Tensor<2>> 
         )));
     }
     Ok(logits)
-}
-
-/// Sample the next token id from a single sequence's last-position logits (`[1, vocab]`). It takes
-/// the sampler as a trait object so a driver can pass either one shared sampler (the library path)
-/// or a per-sequence boxed sampler (the serving worker) from inside its `sample_row` closure.
-pub fn sample_token(logits: Tensor<2>, sampler: &mut dyn NextTokenSampler) -> InferenceResult<u32> {
-    let token = sampler.sample_next(logits);
-    let ids = token
-        .into_data()
-        .convert::<u32>()
-        .into_vec::<u32>()
-        .map_err(|_| {
-            InferenceError::BatchContractViolation(
-                "sampled token tensor did not convert to u32".to_string(),
-            )
-        })?;
-    let id = *ids.first().ok_or_else(|| {
-        InferenceError::BatchContractViolation("sampler produced no token".to_string())
-    })?;
-    Ok(id)
 }

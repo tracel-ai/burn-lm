@@ -1,5 +1,6 @@
 use crate::{
-    pretrained::ModelMeta, tokenizer::SentencePieceTokenizer, LlamaConfig, TinyLlamaVersion,
+    generation::LlamaSampler, pretrained::ModelMeta, tokenizer::SentencePieceTokenizer,
+    LlamaConfig, TinyLlamaVersion,
 };
 use burn_lm_inference::{InferenceJob, *};
 use serde::Deserialize;
@@ -56,16 +57,11 @@ impl TinyLlamaServer {
             },
             params,
         );
-        let mut sampler = settings.sampler();
+        let sample_len = settings.sample_len;
+        let sampler = LlamaSampler::new(settings);
         let generated = {
             let model = self.model.get_mut()?;
-            model.generate(
-                &prompt,
-                settings.sample_len,
-                settings.temperature,
-                &mut sampler,
-                emitter,
-            )?
+            model.generate(&prompt, sample_len, &sampler, emitter)?
         };
         let mut stats = Stats::default();
         let mut total_duration = generated.time;

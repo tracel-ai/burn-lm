@@ -1,47 +1,12 @@
 use std::time::Instant;
 
-use super::Sampler;
 use crate::{inference::Llama, tokenizer::Tokenizer};
-use burn::{prelude::*, tensor::activation::softmax};
 use burn_lm_inference::{
-    batching::{sample_token, step_round, ActiveSeq, BatchedDecoder, PrefillBudget, StepOutcome},
-    sampler::NextTokenSampler,
-    GeneratedItemEmitter, InferenceResult,
+    batching::{step_round, ActiveSeq, BatchedDecoder, PrefillBudget, StepOutcome},
+    GeneratedItemEmitter, InferenceResult, Sampler, SamplingState,
 };
 
 use super::GenerationContext;
-
-pub(crate) fn temperature_scaled_softmax(logits: Tensor<2>, temperature: f64) -> Tensor<2> {
-    softmax(logits / temperature, 1)
-}
-
-/// Adapts the library's `Sampler` (argmax or top-p) to the framework's `NextTokenSampler` seam,
-/// applying the request's temperature scaling first.
-///
-/// The generic decode core (`step_round`) slices the last-position logits and asks this for the
-/// next token. To keep request-parameterized sampling (temperature, top-p) working exactly as the
-/// old bespoke loop did, the scaling that used to sit inline in `generate_batch` lives here: when
-/// `temperature > 0.0` the logits are softmaxed by `1/temperature` before sampling. Argmax with
-/// `temperature == 0.0` is unchanged, so greedy decoding stays byte-identical.
-///
-/// Generic over how it holds the `Sampler` so one adapter serves both drivers: `generate_batch`
-/// borrows the caller's sampler (`&mut Sampler`), while the server's `next_token_sampler` config
-/// primitive returns it boxed and so owns its `Sampler`.
-pub(crate) struct TemperatureSampler<S> {
-    pub(crate) sampler: S,
-    pub(crate) temperature: f64,
-}
-
-impl<S: std::borrow::BorrowMut<Sampler>> NextTokenSampler for TemperatureSampler<S> {
-    fn sample_next(&mut self, logits: Tensor<2>) -> Tensor<2, Int> {
-        let logits = if self.temperature > 0.0 {
-            temperature_scaled_softmax(logits, self.temperature)
-        } else {
-            logits
-        };
-        self.sampler.borrow_mut().sample(logits)
-    }
-}
 
 /// Generated text sample output.
 pub struct GenerationOutput {
@@ -62,9 +27,9 @@ impl<T: Tokenizer + 'static> Llama<T> {
     /// # Arguments
     /// - `prompt`: The prompt string to use for generating the samples.
     /// - `sample_len`: The number of new tokens to generate (i.e., the number of generation steps to take).
-    /// - `temperature`: Temperature value for controlling randomness in sampling (scales logits by `1 / temperature`).
-    ///   High values result in more random sampling.
-    /// - `sampler`: The sampling strategy to use when selecting the next token based on the predicted probabilities.
+    /// - `sampler`: The sampling strategy to use when selecting the next token based on the predicted
+    ///   logits. It carries its own config (temperature, top-p): temperature scaling now lives inside
+    ///   the sampler, not as a separate argument.
     ///
     /// # Returns
     /// The generated text along with some other metadata (see [GenerationOutput]).
@@ -76,17 +41,10 @@ impl<T: Tokenizer + 'static> Llama<T> {
         &mut self,
         prompt: &str,
         sample_len: usize,
-        temperature: f64,
-        sampler: &mut Sampler,
+        sampler: &dyn Sampler,
         emitter: GeneratedItemEmitter,
     ) -> InferenceResult<GenerationOutput> {
-        let mut outputs = self.generate_batch(
-            vec![prompt],
-            sample_len,
-            temperature,
-            sampler,
-            vec![emitter],
-        )?;
+        let mut outputs = self.generate_batch(vec![prompt], sample_len, sampler, vec![emitter])?;
         Ok(outputs
             .pop()
             .expect("one prompt in yields exactly one output"))
@@ -103,8 +61,7 @@ impl<T: Tokenizer + 'static> Llama<T> {
         &mut self,
         prompts: Vec<&str>,
         sample_len: usize,
-        temperature: f64,
-        sampler: &mut Sampler,
+        sampler: &dyn Sampler,
         emitters: Vec<GeneratedItemEmitter>,
     ) -> InferenceResult<Vec<GenerationOutput>> {
         assert_eq!(
@@ -154,10 +111,10 @@ impl<T: Tokenizer + 'static> Llama<T> {
             .collect();
 
         let stop_ids = self.tokenizer.stop_ids();
-        let mut sampler = TemperatureSampler {
-            sampler,
-            temperature,
-        };
+        // One per-sequence sampling state per active sequence, kept in a parallel vec alongside
+        // `active` (not inside it) so the closure can reach a row's state by index while `step_round`
+        // holds `active` borrowed. The shared `sampler` carries the config; only the RNG varies here.
+        let mut states: Vec<SamplingState> = active.iter().map(|_| sampler.fresh_state()).collect();
 
         let now = Instant::now();
         // Run the shared generic decode core to completion: one round advances every still-active
@@ -169,24 +126,30 @@ impl<T: Tokenizer + 'static> Llama<T> {
         'rounds: while active.iter().any(|seq| !seq.finished) {
             // A fresh prefill budget per round over the whole batch.
             let mut budget = PrefillBudget::for_round(&active);
-            // The library path uses one shared sampler for every sequence, so the per-row sampling
-            // closure ignores the row index (the serving worker is what gives each request its own).
-            //
-            // Sampling order: `step_round` samples all prefill rows before all decode rows. With a
-            // stateless sampler (argmax, temperature 0) the order is irrelevant. With a stateful
-            // shared sampler (top-p RNG), the per-round draw order is prefills then decodes — which
-            // already differs from a solo run because one RNG is shared across the batch, so batched
-            // stochastic output is inherently not solo-identical regardless of order. (A batch mixing
-            // a 1-token prompt, which is a decode row in round 1, with longer prompts is the case
-            // where this round is mixed.) Giving `generate_batch` per-sequence samplers, like the
-            // serving worker, would make order irrelevant; that is part of the open D4 sampling
-            // re-evaluation.
+            // The closure gathers the sampled rows' per-sequence states into a contiguous slice (in
+            // row order), samples them all through the one shared `sampler`, and returns each state
+            // to its slot — the same shape the serving worker uses. Each sequence now has its OWN RNG
+            // (in `states`), so a stochastic batch is no longer at the mercy of one shared stream;
+            // greedy (argmax, temperature 0) ignores the RNGs and stays byte-identical to a solo run.
             let outcomes = step_round(
                 &mut self.decoder,
                 &mut active,
                 &stop_ids,
                 &mut budget,
-                |_index, logits| sample_token(logits, &mut sampler),
+                |logits, indices| {
+                    let placeholder = || SamplingState {
+                        rng: rand::SeedableRng::seed_from_u64(0),
+                    };
+                    let mut gathered: Vec<SamplingState> = indices
+                        .iter()
+                        .map(|&index| std::mem::replace(&mut states[index], placeholder()))
+                        .collect();
+                    let result = sampler.sample(logits, &mut gathered);
+                    for (&index, state) in indices.iter().zip(gathered) {
+                        states[index] = state;
+                    }
+                    result
+                },
             );
             for (seq, outcome) in active.iter_mut().zip(outcomes) {
                 match outcome {
@@ -237,11 +200,13 @@ impl<T: Tokenizer + 'static> Llama<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::generation::sampling::temperature_scaled_softmax;
     use crate::{tests::*, tokenizer::byte::ByteTokenizer, LlamaConfig};
 
     use crate::tests::Reinitializer;
+    use burn::prelude::*;
     use burn::tensor::{TensorData, Tolerance};
-    use burn_lm_inference::{GeneratedItemEmitter, TextGenerationListener, WriteListener};
+    use burn_lm_inference::{Argmax, GeneratedItemEmitter, TextGenerationListener, WriteListener};
     use std::io::Write;
     use std::sync::{Arc, Mutex};
 
@@ -287,8 +252,7 @@ mod tests {
             .generate_batch(
                 vec!["First request", "Second request"],
                 16,
-                0.0,
-                &mut Sampler::Argmax,
+                &Argmax,
                 vec![emitter_a, emitter_b],
             )
             .unwrap();
@@ -327,7 +291,7 @@ mod tests {
                 .map(|_| GeneratedItemEmitter::init(TextGenerationListener::default()))
                 .unzip();
             llama
-                .generate_batch(prompts, 16, 0.0, &mut Sampler::Argmax, emitters)
+                .generate_batch(prompts, 16, &Argmax, emitters)
                 .unwrap();
             handles.into_iter().map(|h| h.join()).collect()
         }
@@ -389,7 +353,7 @@ mod tests {
 
         let (emitter, handle) = GeneratedItemEmitter::init(TextGenerationListener::default());
         llama
-            .generate("This is a test", 64, 0.0, &mut Sampler::Argmax, emitter)
+            .generate("This is a test", 64, &Argmax, emitter)
             .unwrap();
 
         let result = handle.join();
@@ -410,9 +374,7 @@ mod tests {
             // This observes streamed text, which can race with the decoder thread.
             // Give the decoder a short grace period before finishing the listener;
             // the emitter lifecycle should be fixed separately from this cache test.
-            llama
-                .generate(prompt, 48, 0.0, &mut Sampler::Argmax, emitter)
-                .unwrap();
+            llama.generate(prompt, 48, &Argmax, emitter).unwrap();
 
             // Note: I hate this, but fixing it properly would require intrusive changes to generate or even deeper.
             // See comment above for more details.

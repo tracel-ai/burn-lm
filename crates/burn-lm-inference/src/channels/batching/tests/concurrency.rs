@@ -1,12 +1,21 @@
 use super::super::*;
 use super::fakes::*;
 use crate::{
-    batching::{sample_token, step_round, ActiveSeq, PrefillBudget, StepOutcome},
+    batching::{step_round, ActiveSeq, PrefillBudget, StepOutcome},
     job::{GenerationParams, InferenceJob, InferenceTask},
-    sampler::Sampler,
+    sampler::{Argmax, Sampler},
     TextGenerationListener,
 };
 use std::sync::{Arc, Mutex};
+
+/// Argmax over each row of `[n, vocab]` logits, returning one id per row — the batched-closure
+/// shape `step_round` expects. The direct `step_round` tests below use this as their `sample`
+/// closure, standing in for the worker's gather-sample-scatter over the shared `Argmax` sampler.
+fn argmax_rows(logits: burn::tensor::Tensor<2>, indices: &[usize]) -> InferenceResult<Vec<u32>> {
+    let mut states: Vec<crate::sampler::SamplingState> =
+        indices.iter().map(|_| Argmax.fresh_state()).collect();
+    Argmax.sample(logits, &mut states)
+}
 
 /// Capacity >= 2: both jobs are admitted concurrently and their emission streams INTERLEAVE.
 /// Each sequence's first emission precedes the other's last (structural overlap).
@@ -99,7 +108,6 @@ fn at_most_one_prompt_prefills_per_round_while_another_sequence_decodes() {
 
     // `emit` is high so nothing stops mid-test.
     let mut decoder = FakeDecoder::new(Arc::new(Mutex::new(Vec::new())), 100);
-    let mut sampler = Sampler::default();
     let stop_ids = [0u32];
 
     // Slot 0 is GENUINELY mid-decode: its prompt was already prefilled (`processed > 0`) and it
@@ -119,7 +127,7 @@ fn at_most_one_prompt_prefills_per_round_while_another_sequence_decodes() {
         &mut active,
         &stop_ids,
         &mut budget,
-        |_i, logits| sample_token(logits, &mut sampler),
+        argmax_rows,
     );
 
     assert!(
@@ -146,7 +154,7 @@ fn at_most_one_prompt_prefills_per_round_while_another_sequence_decodes() {
         &mut active[2..3],
         &stop_ids,
         &mut budget,
-        |_i, logits| sample_token(logits, &mut sampler),
+        argmax_rows,
     )
     .pop()
     .expect("one sequence in yields exactly one outcome");
@@ -175,7 +183,6 @@ fn decoding_sequences_share_one_fused_decode_call() {
     }
 
     let mut decoder = FakeDecoder::new(Arc::new(Mutex::new(Vec::new())), 100);
-    let mut sampler = Sampler::default();
     let stop_ids = [0u32];
     let mut active = vec![decoding(0, 10), decoding(1, 11), decoding(2, 12)];
 
@@ -185,7 +192,7 @@ fn decoding_sequences_share_one_fused_decode_call() {
         &mut active,
         &stop_ids,
         &mut budget,
-        |_i, logits| sample_token(logits, &mut sampler),
+        argmax_rows,
     );
 
     assert!(
@@ -233,7 +240,6 @@ fn a_fused_decode_error_retires_every_decode_row_but_not_a_concurrent_prefill() 
 
     let mut decoder = FakeDecoder::new(Arc::new(Mutex::new(Vec::new())), 100);
     decoder.fail_decodes = 1;
-    let mut sampler = Sampler::default();
     let stop_ids = [0u32];
     // Three decode rows + one fresh prompt (admitted because the others are decoding).
     let mut active = vec![decoding(0, 10), decoding(1, 11), decoding(2, 12), prompt(3)];
@@ -244,7 +250,7 @@ fn a_fused_decode_error_retires_every_decode_row_but_not_a_concurrent_prefill() 
         &mut active,
         &stop_ids,
         &mut budget,
-        |_i, logits| sample_token(logits, &mut sampler),
+        argmax_rows,
     );
 
     for i in 0..3 {
@@ -300,13 +306,14 @@ fn a_mixed_round_aligns_each_sampled_token_to_its_sequence() {
     let mut active = vec![decoding(0, 10), prompt(1), decoding(2, 12)];
 
     let mut budget = PrefillBudget::for_round(&active);
-    // The sampler returns a token keyed to the ACTIVE INDEX, ignoring the logits.
+    // The sampler returns, for each sampled row, a token keyed to that row's ACTIVE INDEX, ignoring
+    // the logits — so a prefill/decode index mixup would land the wrong token on the wrong sequence.
     let outcomes = step_round(
         &mut decoder,
         &mut active,
         &stop_ids,
         &mut budget,
-        |i, _logits| Ok(100 + i as u32),
+        |_logits, indices| Ok(indices.iter().map(|&i| 100 + i as u32).collect()),
     );
 
     // Each sequence's newly appended token must equal 100 + its own active index — the prefill row
@@ -324,47 +331,6 @@ fn a_mixed_round_aligns_each_sampled_token_to_its_sequence() {
             "outcome {i} must carry its own sequence's token"
         );
     }
-}
-
-/// Two CONCURRENT jobs with different per-request params must sample with independently
-/// configured samplers — the request params merged over config at admission, not a shared
-/// mutated server config (which would make one request clobber the other's temperature).
-#[test]
-fn concurrent_jobs_sample_with_their_own_request_params() {
-    let channel = BatchingChannel::<FakeServer>::with_server(FakeServer::new(
-        2,
-        Arc::new(Mutex::new(Vec::new())),
-    ));
-
-    // The fake's `next_token_sampler` turns a per-job temperature into a fixed token, so each
-    // job's whole output reveals which params built its sampler.
-    let hot = GenerationParams {
-        temperature: Some(7.0),
-        ..Default::default()
-    };
-    let cold = GenerationParams {
-        temperature: Some(9.0),
-        ..Default::default()
-    };
-    let (job_a, ha) = InferenceJob::create(
-        InferenceTask::Prompt("a".into()),
-        hot,
-        TextGenerationListener::default(),
-    );
-    let (job_b, hb) = InferenceJob::create(
-        InferenceTask::Prompt("b".into()),
-        cold,
-        TextGenerationListener::default(),
-    );
-
-    // Both in flight together (capacity 2), interleaving round-robin.
-    let rx_a = channel.submit(job_a).unwrap();
-    let rx_b = channel.submit(job_b).unwrap();
-    rx_a.recv().unwrap().unwrap();
-    rx_b.recv().unwrap().unwrap();
-
-    assert_eq!(ha.join(), "7".repeat(16), "job A must use its own params");
-    assert_eq!(hb.join(), "9".repeat(16), "job B must use its own params");
 }
 
 /// A request's `max_tokens` can LOWER the server's generation cap but never RAISE it: the
@@ -400,11 +366,11 @@ fn request_max_tokens_lowers_but_cannot_raise_the_server_cap() {
     assert_eq!(handle.join(), "7".repeat(16));
 }
 
-/// The worker must sample with the server-configured sampler (the `next_token_sampler`
-/// primitive), not a hard-coded argmax. The fixed sampler always picks token 7 regardless of
-/// logits; argmax over the fake decoder's logits would instead echo the identity token (10)
-/// and then stop. Since 7 is never a stop id, the sequence runs to `max_gen_tokens` (16) and
-/// streams sixteen "7"s — unmistakably the configured sampler's output.
+/// The worker must sample with the server-configured sampler (the `sampler` primitive), not a
+/// hard-coded argmax. The fixed sampler always picks token 7 regardless of logits; argmax over the
+/// fake decoder's logits would instead echo the identity token (10) and then stop. Since 7 is never
+/// a stop id, the sequence runs to `max_gen_tokens` (16) and streams sixteen "7"s — unmistakably the
+/// configured sampler's output.
 #[test]
 fn worker_uses_the_server_configured_sampler() {
     let channel = BatchingChannel::<FakeServer>::with_server(

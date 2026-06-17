@@ -1,18 +1,17 @@
-//! Per-job sampling settings: server config defaults merged with the per-request
-//! `GenerationParams` carried on the job.
+//! Per-job sampling settings: the server's sampling config, with the one per-request knob
+//! (`max_tokens`) applied on top.
 //!
-//! Both generation paths resolve through here — the batching worker (via
-//! `next_token_sampler`/admission) and the single-request `run_job` path — so a request means the
-//! same thing whichever channel serves it, and neither path mutates shared server config.
+//! Both generation paths resolve through here — the batching worker (via `sampler`/admission) and
+//! the single-request `run_job` path — so a request means the same thing whichever channel serves
+//! it, and neither path mutates shared server config. Sampling itself is config-driven: temperature,
+//! top-p, and seed come from the server config; the only thing a request carries is its token cap.
 
 use burn_lm_inference::GenerationParams;
 use rand::RngExt;
 
-use crate::generation::{Sampler, TopP};
-
-/// The effective sampling settings for one job: server config defaults with any per-job overrides
-/// applied. Built fresh per job, never mutating shared server config, so concurrent requests
-/// cannot clobber each other.
+/// The effective sampling settings for one job: the server's sampling config defaults with the
+/// per-job `max_tokens` cap applied. Built fresh per job, never mutating shared server config, so
+/// concurrent requests cannot clobber each other.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SamplingSettings {
     pub top_p: f64,
@@ -23,17 +22,17 @@ pub struct SamplingSettings {
 }
 
 impl SamplingSettings {
-    /// Merge per-job `params` over the server config `defaults`. Job params take precedence, and
-    /// `None` falls back to the default — except `max_tokens`, which can only lower the configured
-    /// `sample_len`, never raise it, so the operator-set cap stays authoritative.
+    /// Apply per-job `params` over the server config `defaults`. Only `max_tokens` is per-request,
+    /// and it can only lower the configured `sample_len`, never raise it, so the operator-set cap
+    /// stays authoritative. Sampling fields (top-p, temperature, seed) always come from the config.
     pub fn resolve(defaults: Self, params: &GenerationParams) -> Self {
         Self {
-            top_p: params.top_p.unwrap_or(defaults.top_p),
-            temperature: params.temperature.unwrap_or(defaults.temperature),
+            top_p: defaults.top_p,
+            temperature: defaults.temperature,
             sample_len: params
                 .max_tokens
                 .map_or(defaults.sample_len, |m| m.min(defaults.sample_len)),
-            seed: params.seed.unwrap_or(defaults.seed),
+            seed: defaults.seed,
         }
     }
 
@@ -42,16 +41,6 @@ impl SamplingSettings {
         match self.seed {
             0 => rand::rng().random::<u64>(),
             s => s,
-        }
-    }
-
-    /// Build this job's sampler. One sampler per job — its RNG state is never shared across jobs,
-    /// and `temperature == 0.0` stays plain argmax/greedy.
-    pub fn sampler(&self) -> Sampler {
-        if self.temperature > 0.0 {
-            Sampler::TopP(TopP::new(self.top_p, self.effective_seed()))
-        } else {
-            Sampler::Argmax
         }
     }
 }
@@ -70,42 +59,9 @@ mod tests {
     }
 
     #[test]
-    fn params_take_precedence_over_config_defaults() {
-        let params = GenerationParams {
-            max_tokens: Some(7),
-            temperature: Some(0.5),
-            top_p: Some(0.42),
-            seed: Some(1234),
-        };
-        let resolved = SamplingSettings::resolve(defaults(), &params);
-        assert_eq!(
-            resolved,
-            SamplingSettings {
-                top_p: 0.42,
-                temperature: 0.5,
-                sample_len: 7,
-                seed: 1234,
-            }
-        );
-    }
-
-    #[test]
     fn unset_params_fall_back_to_config_defaults() {
         let resolved = SamplingSettings::resolve(defaults(), &GenerationParams::default());
         assert_eq!(resolved, defaults());
-    }
-
-    #[test]
-    fn partial_override_merges_field_by_field() {
-        let params = GenerationParams {
-            temperature: Some(0.8),
-            ..Default::default()
-        };
-        let resolved = SamplingSettings::resolve(defaults(), &params);
-        assert_eq!(resolved.temperature, 0.8);
-        assert_eq!(resolved.top_p, 0.9);
-        assert_eq!(resolved.sample_len, 4096);
-        assert_eq!(resolved.seed, 0);
     }
 
     #[test]
@@ -114,7 +70,6 @@ mod tests {
             defaults(),
             &GenerationParams {
                 max_tokens: Some(8),
-                ..Default::default()
             },
         );
         assert_eq!(lowered.sample_len, 8);
@@ -123,7 +78,6 @@ mod tests {
             defaults(),
             &GenerationParams {
                 max_tokens: Some(1_000_000),
-                ..Default::default()
             },
         );
         assert_eq!(
@@ -133,22 +87,18 @@ mod tests {
     }
 
     #[test]
-    fn sampler_kind_follows_per_job_temperature() {
-        // Two jobs with different temperatures over the SAME config get independent sampler
-        // configs (no shared-config mutation).
-        let hot = SamplingSettings::resolve(
+    fn sampling_fields_always_come_from_config_not_the_request() {
+        // The only per-request knob is `max_tokens`; top-p, temperature, and seed are config-driven,
+        // so a request cannot move them off the configured values.
+        let resolved = SamplingSettings::resolve(
             defaults(),
             &GenerationParams {
-                temperature: Some(0.7),
-                seed: Some(1),
-                ..Default::default()
+                max_tokens: Some(8),
             },
         );
-        let cold = SamplingSettings::resolve(defaults(), &GenerationParams::default());
-        assert!(matches!(hot.sampler(), Sampler::TopP(_)));
-        assert!(matches!(cold.sampler(), Sampler::Argmax));
-        // And the defaults themselves were not mutated by the first job.
-        assert_eq!(cold, defaults());
+        assert_eq!(resolved.top_p, 0.9);
+        assert_eq!(resolved.temperature, 0.0);
+        assert_eq!(resolved.seed, 0);
     }
 
     #[test]

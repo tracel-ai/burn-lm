@@ -1,7 +1,7 @@
 use serde::Deserialize;
 
 use crate::{
-    generation::TemperatureSampler,
+    generation::LlamaSampler,
     inference::LlamaDecoder,
     pretrained::ModelMeta,
     tokenizer::{Tiktoken, Tokenizer},
@@ -331,15 +331,8 @@ macro_rules! impl_batched_llama_server {
                 self.config.sample_len
             }
 
-            fn next_token_sampler(
-                &self,
-                params: &GenerationParams,
-            ) -> Box<dyn NextTokenSampler + Send> {
-                let settings = SamplingSettings::resolve(self.config.sampling_defaults(), params);
-                Box::new(TemperatureSampler {
-                    sampler: settings.sampler(),
-                    temperature: settings.temperature,
-                })
+            fn sampler(&self) -> Box<dyn Sampler> {
+                Box::new(LlamaSampler::new(self.config.sampling_defaults()))
             }
         }
     };
@@ -529,18 +522,14 @@ impl Llama3BaseServer {
         // batching path, so a request means the same thing on either channel. Default params
         // resolve to exactly the config, keeping config-driven callers (CLI) unchanged.
         let settings = SamplingSettings::resolve(config.sampling_defaults(), params);
-        let mut sampler = settings.sampler();
+        let sample_len = settings.sample_len;
+        let sampler = LlamaSampler::new(settings);
         // Drive the single request through the batched path (a lone request is the batch-of-one
         // degenerate case of the same plumbing).
         let generated = {
             let model = self.model.get_mut()?;
-            let mut outputs = model.generate_batch(
-                vec![&prompt],
-                settings.sample_len,
-                settings.temperature,
-                &mut sampler,
-                vec![emitter],
-            )?;
+            let mut outputs =
+                model.generate_batch(vec![&prompt], sample_len, &sampler, vec![emitter])?;
             outputs.pop().expect("one sequence in yields one output")
         };
         let mut stats = Stats::default();

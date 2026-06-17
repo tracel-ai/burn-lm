@@ -937,6 +937,7 @@ dependencies = [
  "cfg-if",
  "clap",
  "comfy-table",
+ "rand 0.10.1",
  "rstest 0.24.0",
  "serde",
  "serde_json",

@@ -11,6 +11,21 @@ use burn_lm_inference::{InferenceJob, *};
 
 use super::{loaded_model::LoadedModel, params::SamplingSettings};
 
+/// Resolve a `usize` load-time config field, letting an environment variable override the configured
+/// default. The HTTP harness builds this server from `Default` config with no override hook (see
+/// `burn_lm_http::App::new`, which takes only host and port), and the `#[inference_server_config]`
+/// macro only accepts literal defaults — so for a containerized deployment (e.g. Modal) these env vars
+/// are the one knob that reaches `max_slots` / `max_seq_len` without a code change. Both are inherently
+/// load-time: the KV slab is sized once when the model loads, so a value set here takes effect on the
+/// next load. `BURN_LM_MAX_SLOTS` is the batch cap (slab lane count); `BURN_LM_MAX_SEQ_LEN` the context
+/// window. A missing or unparseable value falls back to the configured default.
+fn config_usize(configured: usize, var: &str) -> usize {
+    std::env::var(var)
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(configured)
+}
+
 #[inference_server_config]
 pub struct Llama3ServerConfig {
     /// Top-p probability threshold.
@@ -298,10 +313,13 @@ macro_rules! impl_batched_llama_server {
             fn batch_capacity(&self) -> BatchCapacity {
                 // Cap the reported budget at the loaded lane count so a `max_slots` raised between
                 // rounds cannot hand admission a slot past the fixed-size slab, which would index a
-                // lane vector out of bounds and panic the worker. The slab only grows on reload.
+                // lane vector out of bounds and panic the worker. The slab only grows on reload. The
+                // configured value honours the same `BURN_LM_MAX_SLOTS` override the slab is sized from
+                // (see `config_usize`), so the reported cap and the actual slab always agree.
+                let configured = config_usize(self.config.max_slots, "BURN_LM_MAX_SLOTS");
                 let max_slots = match self.server.loaded_lane_count() {
-                    Some(lanes) => self.config.max_slots.min(lanes),
-                    None => self.config.max_slots,
+                    Some(lanes) => configured.min(lanes),
+                    None => configured,
                 };
                 BatchCapacity { max_slots }
             }
@@ -625,34 +643,31 @@ impl Llama3BaseServer {
     fn load(&mut self, config: &Llama3ServerConfig) -> InferenceResult<Option<Stats>> {
         if !self.is_loaded() {
             let now = std::time::Instant::now();
+            // The slab is sized here, once, from the configured values — with env overrides applied so
+            // a containerized deployment can raise the batch cap (and shrink the context window to fit
+            // it in memory) without a code change. `batch_capacity` reads the same `BURN_LM_MAX_SLOTS`,
+            // so the reported cap matches the slab it sizes here.
+            let max_seq_len = config_usize(config.max_seq_len, "BURN_LM_MAX_SEQ_LEN");
+            let max_slots = config_usize(config.max_slots, "BURN_LM_MAX_SLOTS");
             let model = match self.version {
-                LlamaVersion::Llama3Instruct => LlamaConfig::llama3_8b_pretrained(
-                    config.max_seq_len,
-                    config.max_slots,
-                    &*INFERENCE_DEVICE,
-                )
-                .unwrap(),
-                LlamaVersion::Llama31Instruct => LlamaConfig::llama3_1_8b_pretrained(
-                    config.max_seq_len,
-                    config.max_slots,
-                    &*INFERENCE_DEVICE,
-                )
-                .unwrap(),
-                LlamaVersion::Llama323bInstruct => LlamaConfig::llama3_2_3b_pretrained(
-                    config.max_seq_len,
-                    config.max_slots,
-                    &*INFERENCE_DEVICE,
-                )
-                .unwrap(),
-                LlamaVersion::Llama321bInstruct => LlamaConfig::llama3_2_1b_pretrained(
-                    config.max_seq_len,
-                    config.max_slots,
-                    &*INFERENCE_DEVICE,
-                )
-                .unwrap(),
-                LlamaVersion::Llama321bInstructQ4FB32 => {
-                    LlamaConfig::llama3_2_1b_pretrained_q4(config.max_seq_len, &*INFERENCE_DEVICE)
+                LlamaVersion::Llama3Instruct => {
+                    LlamaConfig::llama3_8b_pretrained(max_seq_len, max_slots, &*INFERENCE_DEVICE)
                         .unwrap()
+                }
+                LlamaVersion::Llama31Instruct => {
+                    LlamaConfig::llama3_1_8b_pretrained(max_seq_len, max_slots, &*INFERENCE_DEVICE)
+                        .unwrap()
+                }
+                LlamaVersion::Llama323bInstruct => {
+                    LlamaConfig::llama3_2_3b_pretrained(max_seq_len, max_slots, &*INFERENCE_DEVICE)
+                        .unwrap()
+                }
+                LlamaVersion::Llama321bInstruct => {
+                    LlamaConfig::llama3_2_1b_pretrained(max_seq_len, max_slots, &*INFERENCE_DEVICE)
+                        .unwrap()
+                }
+                LlamaVersion::Llama321bInstructQ4FB32 => {
+                    LlamaConfig::llama3_2_1b_pretrained_q4(max_seq_len, &*INFERENCE_DEVICE).unwrap()
                 }
             };
             self.model.store(model);

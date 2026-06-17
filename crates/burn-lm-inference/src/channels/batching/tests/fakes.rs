@@ -51,6 +51,9 @@ pub(super) struct FakeDecoder {
     /// N rows, not N calls with one. (Only read by direct `step_round` tests that own the decoder;
     /// the worker moves it onto its own thread.)
     pub(super) decode_calls: Vec<usize>,
+    /// The per-lane token capacity reported by `max_context_len`. `usize::MAX` means no limit; a test
+    /// lowers it to prove the engine retires an over-long lane before the fused decode.
+    pub(super) context_len: usize,
 }
 
 pub(super) const VOCAB: usize = 64;
@@ -67,6 +70,7 @@ impl FakeDecoder {
             fail_decodes: 0,
             steps: HashMap::new(),
             decode_calls: Vec::new(),
+            context_len: usize::MAX,
         }
     }
 
@@ -139,6 +143,10 @@ impl BatchedDecoder for FakeDecoder {
 
     fn release(&mut self, slot: usize) {
         self.steps.remove(&slot);
+    }
+
+    fn max_context_len(&self) -> usize {
+        self.context_len
     }
 }
 
@@ -405,6 +413,10 @@ impl BatchedDecoder for ScriptedDecoder {
 
     fn release(&mut self, slot: usize) {
         self.steps.remove(&slot);
+    }
+
+    fn max_context_len(&self) -> usize {
+        usize::MAX
     }
 }
 

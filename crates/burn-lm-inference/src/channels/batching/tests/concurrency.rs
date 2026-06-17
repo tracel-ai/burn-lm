@@ -327,6 +327,111 @@ fn a_mixed_round_aligns_each_sampled_token_to_its_sequence() {
     }
 }
 
+/// A lane that would overflow its context window retires ALONE with `ContextLengthExceeded`, in the
+/// classification sweep, before the fused decode — so the lanes batched with it decode normally
+/// instead of being failed too. Lane mode does not evict, so the model's `prepare_lanes` would error
+/// the whole all-or-nothing decode if an over-long lane reached it; the engine retires that one lane
+/// up front so its batch-mates are never poisoned.
+#[test]
+fn a_lane_over_the_context_limit_retires_alone_without_failing_its_batch_mates() {
+    // A decode-ready sequence: one unprocessed token at the tail, so this round forwards exactly one
+    // token and the lane's length becomes `tokens.len()`.
+    fn decoding(slot: usize, tokens: Vec<u32>) -> ActiveSeq<()> {
+        let processed = tokens.len() - 1;
+        ActiveSeq {
+            slot,
+            tokens,
+            processed,
+            generated: 1,
+            max_gen: 100,
+            finished: false,
+            extra: (),
+        }
+    }
+
+    // A lane can hold at most 3 tokens.
+    let mut decoder = FakeDecoder::new(Arc::new(Mutex::new(Vec::new())), 100);
+    decoder.context_len = 3;
+    let stop_ids = [0u32];
+    // seq0 reaches length 4 this round (> 3) — over the limit. seq1 reaches 2 (<= 3) — it fits.
+    let mut active = vec![decoding(0, vec![10, 10, 10, 10]), decoding(1, vec![11, 11])];
+
+    let mut budget = PrefillBudget::for_round(&active);
+    let outcomes = step_round(
+        &mut decoder,
+        &mut active,
+        &stop_ids,
+        &mut budget,
+        argmax_rows,
+    );
+
+    assert!(
+        matches!(
+            outcomes[0],
+            StepOutcome::Failed(crate::InferenceError::ContextLengthExceeded(4, 3))
+        ),
+        "the over-limit lane retires with ContextLengthExceeded(4, 3): {:?}",
+        outcomes[0]
+    );
+    assert!(active[0].finished, "the over-limit lane is finished");
+    assert!(
+        matches!(outcomes[1], StepOutcome::Stepped { .. }),
+        "the in-limit lane decodes normally, not poisoned by its batch-mate: {:?}",
+        outcomes[1]
+    );
+    // Exactly one row entered the fused decode (seq1), proving seq0 was excluded before it — the
+    // over-limit lane never reached the decoder.
+    assert_eq!(
+        decoder.decode_calls,
+        vec![1],
+        "only the in-limit lane should enter the fused decode"
+    );
+}
+
+/// A prompt longer than the context window is rejected in the classification sweep, with
+/// `ContextLengthExceeded`, before any prefill is attempted — so no forward runs for a prompt that
+/// could never fit a (non-evicting) lane.
+#[test]
+fn a_prompt_longer_than_the_context_window_is_rejected_before_prefill() {
+    let mut decoder = FakeDecoder::new(Arc::new(Mutex::new(Vec::new())), 100);
+    decoder.context_len = 3;
+    let stop_ids = [0u32];
+    // A five-token prompt cannot fit a three-token window.
+    let mut active = vec![ActiveSeq {
+        slot: 0,
+        tokens: vec![7, 7, 7, 7, 7],
+        processed: 0,
+        generated: 0,
+        max_gen: 8,
+        finished: false,
+        extra: (),
+    }];
+
+    let mut budget = PrefillBudget::for_round(&active);
+    let outcomes = step_round(
+        &mut decoder,
+        &mut active,
+        &stop_ids,
+        &mut budget,
+        argmax_rows,
+    );
+
+    assert!(
+        matches!(
+            outcomes[0],
+            StepOutcome::Failed(crate::InferenceError::ContextLengthExceeded(5, 3))
+        ),
+        "the over-long prompt is rejected with ContextLengthExceeded(5, 3): {:?}",
+        outcomes[0]
+    );
+    assert!(active[0].finished, "the rejected prompt is finished");
+    // The prefill never ran: the decoder's per-slot step counter for slot 0 was never touched.
+    assert!(
+        !decoder.steps.contains_key(&0),
+        "no prefill forward should run for a prompt that cannot fit the window"
+    );
+}
+
 /// A request's `max_tokens` can LOWER the server's generation cap but never RAISE it: the
 /// operator-set server cap stays authoritative.
 #[test]

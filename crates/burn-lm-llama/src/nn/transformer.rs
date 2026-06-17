@@ -187,14 +187,22 @@ impl TransformerCache {
         self.lens[lane]
     }
 
+    /// The hard per-lane token capacity (the context window). Lane mode does not evict, so no lane
+    /// can hold more than this; the engine reads it to retire a sequence before its next forward
+    /// would overflow.
+    pub fn max_seq_len(&self) -> usize {
+        self.max_seq_len
+    }
+
     /// Plan one forward of `seq_len` new tokens over the given lanes, and commit it. It checks each
     /// lane has room, snapshots the lanes' start positions, builds the per-lane mask, advances the
     /// lane lengths, and returns the resulting `LanePlan`. A prefill calls this with a single lane;
     /// a decode round calls it with all the active lanes at once.
     ///
     /// Lane mode does not evict: a lane that would pass `max_seq_len` is an error rather than having
-    /// its oldest tokens dropped. The runtime retires a lane when it hits its token budget, so a live
-    /// lane never reaches that limit here.
+    /// its oldest tokens dropped. The engine retires a sequence with `ContextLengthExceeded` before
+    /// its next forward would push a lane past `max_seq_len` (see `step_round`'s classification), so
+    /// a live lane never reaches the check below — it stays here as the model-side guard.
     pub fn prepare_lanes(
         &mut self,
         lanes: &[usize],

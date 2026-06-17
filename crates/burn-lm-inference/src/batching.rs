@@ -87,6 +87,14 @@ pub trait BatchedDecoder {
     /// no-op on a free slot. So as long as `release` drops the slot's state, no other mistake can
     /// leak one sequence's state into another.
     fn release(&mut self, slot: usize);
+
+    /// The maximum number of tokens one slot can hold — the KV cache (context-window) capacity.
+    ///
+    /// Lane mode does not evict, so this is a hard ceiling rather than a sliding window. The engine
+    /// retires a sequence with `ContextLengthExceeded` before its next forward would push a slot
+    /// past this, so a live `prefill`/`decode` never overflows. A decoder with no fixed limit
+    /// returns `usize::MAX`.
+    fn max_context_len(&self) -> usize;
 }
 
 /// A server that can expose a `BatchedDecoder` for batched serving.
@@ -194,6 +202,7 @@ pub struct ActiveSeq<Extra = ()> {
 /// passed in. A sequence that was already finished (or empty) at the start of the round yields
 /// `Skipped`; an advanced sequence yields `Stepped`, or `Failed` if its forward violated the batch
 /// contract.
+#[derive(Debug)]
 pub enum StepOutcome {
     /// The sequence was not advanced this round, because it was already finished or had no
     /// unprocessed tokens.
@@ -300,6 +309,7 @@ pub fn step_round<D: BatchedDecoder, X>(
     // Classify each sequence: retire the no-ops (already finished, `max_gen` reached, empty prompt)
     // and split the rest into prefill candidates and decode rows. The `max_gen` check comes before
     // prefill so a zero-token request is a true no-op instead of prefilling and producing one token.
+    let max_context_len = decoder.max_context_len();
     let mut prefills: Vec<usize> = Vec::new();
     let mut decode_rows: Vec<(usize, DecodeRow)> = Vec::new();
     for (i, seq) in active.iter_mut().enumerate() {
@@ -308,6 +318,21 @@ pub fn step_round<D: BatchedDecoder, X>(
         }
         if seq.generated >= seq.max_gen || seq.processed >= seq.tokens.len() {
             seq.finished = true;
+            continue;
+        }
+        // Lane mode does not evict, so a slot is a hard ceiling at `max_context_len`. This round's
+        // forward pushes the unprocessed tail, bringing the lane's length up to `seq.tokens.len()`,
+        // so once that would pass the ceiling the sequence cannot continue: retire it here, with
+        // `ContextLengthExceeded`, BEFORE it joins the fused decode. This is the same boundary the
+        // model's `prepare_lanes` guards, lifted up to the engine so one over-long lane retires alone
+        // instead of failing every sequence batched with it in the all-or-nothing decode. (A `max_gen`
+        // budget that fits inside the context never reaches this; a long prompt plus generation can.)
+        if seq.tokens.len() > max_context_len {
+            seq.finished = true;
+            outcomes[i] = StepOutcome::Failed(InferenceError::ContextLengthExceeded(
+                seq.tokens.len(),
+                max_context_len,
+            ));
             continue;
         }
         if seq.tokens.len() - seq.processed > 1 {

@@ -131,6 +131,10 @@ impl BatchedDecoder for LlamaDecoder {
     fn release(&mut self, slot: usize) {
         self.cache.reset_lane(slot);
     }
+
+    fn max_context_len(&self) -> usize {
+        self.cache.max_seq_len()
+    }
 }
 
 impl<T: Tokenizer> Llama<T> {

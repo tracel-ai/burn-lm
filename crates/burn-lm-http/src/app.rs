@@ -45,11 +45,42 @@ impl Default for App {
     }
 }
 
+/// Load-time server overrides a caller can pass to [`App::new_with_config`] — the programmatic
+/// equivalent of the `BURN_LM_MAX_SLOTS` / `BURN_LM_MAX_SEQ_LEN` env vars, for code that embeds the
+/// server (e.g. a benchmark harness) and wants to size the KV slab without the environment. Each
+/// `None` leaves that knob to its env var or compiled default.
+#[derive(Debug, Default, Clone)]
+pub struct AppConfig {
+    /// The batched decoder's KV-slab lane count (the concurrency cap, `max_slots`).
+    pub max_slots: Option<usize>,
+    /// The context window each lane reserves (`max_seq_len`); lower it to fit a high `max_slots`.
+    pub max_seq_len: Option<usize>,
+}
+
 impl App {
     pub fn new(host: IpAddr, port: u16) -> Self {
         dotenvy::from_filename(".env").ok();
         trace::init();
         Self { host, port }
+    }
+
+    /// Like [`App::new`], but applies load-time config from code. It works by setting the same env
+    /// vars the server reads when it sizes the KV slab at load (`config_usize` in the Llama server),
+    /// so it shares one mechanism with deployment env config — and an env var already set in the
+    /// process wins, so an operator can still override a baked-in code value. Call this before
+    /// `serve()`; the model loads lazily on the first request, after which the values are fixed until
+    /// reload.
+    pub fn new_with_config(host: IpAddr, port: u16, config: AppConfig) -> Self {
+        let set_if_unset = |var: &str, value: Option<usize>| {
+            if let Some(value) = value {
+                if std::env::var(var).is_err() {
+                    std::env::set_var(var, value.to_string());
+                }
+            }
+        };
+        set_if_unset("BURN_LM_MAX_SLOTS", config.max_slots);
+        set_if_unset("BURN_LM_MAX_SEQ_LEN", config.max_seq_len);
+        Self::new(host, port)
     }
 }
 

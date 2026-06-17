@@ -14,5 +14,5 @@ mod utils;
 
 mod openapi;
 
-pub use app::App;
+pub use app::{App, AppConfig};
 pub use tracing;

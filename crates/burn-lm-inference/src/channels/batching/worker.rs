@@ -316,6 +316,16 @@ fn admit<S: BatchedInferenceServer>(
             .find(|candidate| active.iter().all(|seq| seq.slot != *candidate))
             .expect("admission only runs while a slot is free");
 
+        // Lifecycle trace, at debug level (off by default): a sequence just entered this lane. Paired
+        // with the retire log below, it bounds each request's life in the log so its overlap with other
+        // in-flight requests is readable. `in_flight` is the count after this admission.
+        tracing::debug!(
+            target: "batching",
+            slot,
+            in_flight = active.len() + 1,
+            "admitted a sequence to a decode lane"
+        );
+
         // Release the slot before handing it over, even though retire normally already did. A safety
         // net added after a review: re-releasing a free slot is a no-op, but it guarantees one
         // prompt's leftover state can never bleed into the next if some retire or failed-prefill
@@ -343,6 +353,11 @@ fn admit<S: BatchedInferenceServer>(
         });
     }
 }
+
+/// Logged once, the first time a round successfully borrows the decoder, so the deployment's real
+/// admission cap (the loaded KV-slab lane count) is unambiguous in the logs. This answers "is
+/// `max_slots` what I set?" without needing debug logging.
+static CAP_LOGGED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// Run one round and deal with its results. The shared `step_round` core does the actual work — one
 /// fused decode over every decoding sequence, plus at most one prefill — and this function handles
@@ -399,6 +414,16 @@ fn step<S: BatchedInferenceServer>(server: &mut S, active: &mut Vec<JobSeq>) {
         }
     };
 
+    // Once the model is loaded, log the real admission cap so the deployment's effective lane count
+    // (not just the configured `max_slots`) is unambiguous in the logs.
+    if !CAP_LOGGED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        tracing::info!(
+            target: "batching",
+            max_slots = server.batch_capacity().max_slots,
+            "effective batching capacity (loaded lane count)"
+        );
+    }
+
     // Stream the round's output. For each sequence that advanced, push its new token's bytes through
     // the detok cursor and emit whatever text is now complete — a stop token isn't streamed, and a
     // mid-character byte is held back for next round. A sequence whose forward failed is retired here.
@@ -432,6 +457,14 @@ fn step<S: BatchedInferenceServer>(server: &mut S, active: &mut Vec<JobSeq>) {
     active.retain_mut(|seq| {
         if seq.finished {
             freed_slots.push(seq.slot);
+            // Lifecycle trace (debug): this request is leaving its lane, freeing it for the next
+            // admission. Pairs with the admit log to delimit the request's run in the log stream.
+            tracing::debug!(
+                target: "batching",
+                slot = seq.slot,
+                generated = seq.generated,
+                "retired a sequence from its decode lane"
+            );
             let mut stats = Stats::new();
             stats
                 .entries

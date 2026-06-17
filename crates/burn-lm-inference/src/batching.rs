@@ -356,7 +356,24 @@ pub fn step_round<D: BatchedDecoder, X>(
     let decode_width = decode_rows.len();
     let prev_width = LAST_DECODE_WIDTH.swap(decode_width, std::sync::atomic::Ordering::Relaxed);
     if decode_width > 1 && decode_width != prev_width {
-        tracing::info!(decode_width, "fused decode parallelizing across sequences");
+        tracing::info!(target: "batching", decode_width, "fused decode parallelizing across sequences");
+    }
+
+    // The full per-round picture, at debug level (off by default — enable with `RUST_LOG=debug`). It
+    // names the exact lanes co-decoded this round and how many prompts are queued to prefill, so the
+    // log stream shows the batch composition round by round: which sequences run together and how they
+    // interleave as requests arrive and retire. A lane (slot) identifies a sequence for its lifetime,
+    // and the log timestamps double as per-round timing, so no dedicated instrumentation is needed.
+    // Guarded so it allocates nothing when debug logging is off.
+    if tracing::enabled!(target: "batching", tracing::Level::DEBUG) {
+        let decoding_lanes: Vec<usize> = decode_rows.iter().map(|(_, row)| row.slot).collect();
+        tracing::debug!(
+            target: "batching",
+            decode_width,
+            prefill_candidates = prefills.len(),
+            ?decoding_lanes,
+            "round"
+        );
     }
 
     // Prefill pass: the budget allows at most one prompt per round while anything decodes. Prompts

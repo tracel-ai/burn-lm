@@ -331,6 +331,14 @@ macro_rules! impl_batched_llama_server {
                 self.config.sample_len
             }
 
+            // The `Sampler` trait is open, so a framework consumer can write their own `impl Sampler`
+            // and run it on any model. Today, though, this method hardcodes `LlamaSampler`, so that
+            // openness stops at the trait: someone who picks up Llama can't actually swap in their own
+            // sampler without editing this line. The change we want later is to make the sampler
+            // injectable through the server config — the config already owns the sampling settings, so
+            // it can carry the sampler choice too, and this method just returns whatever the config was
+            // built with, defaulting to `LlamaSampler`. That turns "swap Llama's sampler" into a config
+            // decision a deployment makes, with no edit to the model code.
             fn sampler(&self) -> Box<dyn Sampler> {
                 Box::new(LlamaSampler::new(self.config.sampling_defaults()))
             }

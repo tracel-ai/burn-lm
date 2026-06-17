@@ -15,7 +15,6 @@ use crate::{
     },
     errors::{InferenceError, InferenceResult},
     job::CancelSignal,
-    sampler::SamplingState,
     utf8::Utf8Buffer,
     GeneratedItem, GeneratedItemEmitter, Stats,
 };
@@ -38,14 +37,6 @@ struct JobMeta {
     /// this the stream could surface a broken U+FFFD character, or the decoder could panic on
     /// invalid UTF-8.
     detok: Utf8Buffer,
-    /// This request's per-sequence sampling state, built once when the request is admitted and kept
-    /// for its whole life. Sampling can be stateful — a seeded RNG has to advance across the
-    /// request's tokens rather than restart every round — so we never rebuild it mid-flight, and two
-    /// concurrent requests each get their own RNG so they never draw off one shared stream. The
-    /// sampler itself (the config) is shared across the batch and owned by the round; only this
-    /// per-sequence state lives here. It is an `Option` only so `step` can briefly `take` it out
-    /// while the sequence is borrowed for the round, then put it back.
-    sample_state: Option<SamplingState>,
     /// The one-shot channel that tells the caller their request is done, with stats or an error. It
     /// is an `Option` so every place that might send must first `take`, to guarantee we reply
     /// exactly once: the first send wins. This matters because the channel is a bounded one-shot —
@@ -344,11 +335,6 @@ fn admit<S: BatchedInferenceServer>(
             extra: JobMeta {
                 emitter: job.emitter,
                 detok: Utf8Buffer::new(),
-                // Built once, here, from the server's config-driven sampler, so this sequence's RNG
-                // lives for its whole generation and two concurrent requests sample off independent
-                // streams. The sampler (the shared config) is grabbed fresh each round; only this
-                // per-sequence state persists.
-                sample_state: Some(server.sampler().fresh_state()),
                 completion: Some(completion),
                 cancel: job.cancel,
                 queue_wait,
@@ -395,47 +381,11 @@ fn step<S: BatchedInferenceServer>(server: &mut S, active: &mut Vec<JobSeq>) {
             // One prefill budget covers the whole round and is computed across the full active set,
             // so a single long prompt can't hold up the in-flight decoders for more than one round.
             let mut budget = PrefillBudget::for_round(active);
-            // Each request has its own per-sequence sampling state (a seeded RNG that persists across
-            // its tokens). Move them out of `extra` into a parallel vec so the closure can reach them
-            // by index while `step_round` holds `active` borrowed, then put them back after the round.
-            let mut states: Vec<SamplingState> = active
-                .iter_mut()
-                .map(|seq| {
-                    seq.extra
-                        .sample_state
-                        .take()
-                        .expect("sample_state is only taken for the duration of a round")
-                })
-                .collect();
-            let outcomes = step_round(
-                decoder,
-                active,
-                &stop_ids,
-                &mut budget,
-                |logits, indices| {
-                    // Gather the sampled rows' per-sequence states into a contiguous slice in row order,
-                    // sample the whole batch through the one shared sampler, then return each state to
-                    // its slot. `swap` with a throwaway lets us move a state out of `states[index]` and
-                    // back without cloning — the index list has no duplicates within a round, so this
-                    // round can't read a slot it just emptied.
-                    let placeholder = || SamplingState {
-                        rng: rand::SeedableRng::seed_from_u64(0),
-                    };
-                    let mut gathered: Vec<SamplingState> = indices
-                        .iter()
-                        .map(|&index| std::mem::replace(&mut states[index], placeholder()))
-                        .collect();
-                    let result = sampler.sample(logits, &mut gathered);
-                    for (&index, state) in indices.iter().zip(gathered) {
-                        states[index] = state;
-                    }
-                    result
-                },
-            );
-            for (seq, state) in active.iter_mut().zip(states) {
-                seq.extra.sample_state = Some(state);
-            }
-            outcomes
+            // The sampler carries no per-sequence state — any randomness it needs is drawn from the
+            // backend RNG — so the round's whole job is to hand `step_round` the one shared sampler.
+            step_round(decoder, active, &stop_ids, &mut budget, |logits| {
+                sampler.sample(logits)
+            })
         }
         Err(err) => {
             // Couldn't borrow the decoder, so retire every sequence with this error. There's nothing

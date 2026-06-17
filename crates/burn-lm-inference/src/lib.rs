@@ -28,7 +28,7 @@ pub use crate::client::InferenceClient;
 pub use crate::errors::*;
 pub use crate::message::{Message, MessageRole};
 pub use crate::plugin::InferencePlugin;
-pub use crate::sampler::{ids_to_host, Argmax, Sampler, SamplingState};
+pub use crate::sampler::{ids_to_host, Argmax, Sampler};
 pub use crate::server::{InferenceServer, InferenceServerConfig, ServerConfigParsing};
 pub use crate::stats::{StatEntry, Stats, STATS_MARKER};
 pub use crate::utf8::Utf8Buffer;

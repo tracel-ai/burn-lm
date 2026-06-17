@@ -1,11 +1,6 @@
-// `Tensor` is needed by `temperature_scaled_softmax` (test-or-server gate); the rest are needed only
-// by `top_p_sample_row` (server gate). Gate each `use` to where its items are actually consumed so a
-// plain non-test build that compiles neither helper carries no unused imports.
-#[cfg(all(
-    feature = "inference-server",
-    any(feature = "llama3", feature = "tiny")
-))]
-use burn::tensor::Int;
+// `temperature_scaled_softmax` is needed in test builds and in the server build; `LlamaSampler` is
+// needed only in the server build. Gate each item to where it is consumed so a plain build that
+// compiles neither carries no dead code.
 #[cfg(any(
     test,
     all(
@@ -14,17 +9,9 @@ use burn::tensor::Int;
     )
 ))]
 use burn::tensor::Tensor;
-#[cfg(all(
-    feature = "inference-server",
-    any(feature = "llama3", feature = "tiny")
-))]
-use rand::{
-    distr::{weighted::WeightedIndex, Distribution},
-    rngs::StdRng,
-};
 
 // `temperature_scaled_softmax` is exercised both by `LlamaSampler` (under the server-feature gate)
-// and by this module's unit test. Gate it to those two so a plain non-test build that compiles
+// and by a unit test in `generate`. Gate it to those two so a plain non-test build that compiles
 // neither doesn't carry it as dead code.
 #[cfg(any(
     test,
@@ -35,46 +22,6 @@ use rand::{
 ))]
 pub(crate) fn temperature_scaled_softmax(logits: Tensor<2>, temperature: f64) -> Tensor<2> {
     burn::tensor::activation::softmax(logits / temperature, 1)
-}
-
-/// Top-p (nucleus) sampling over a single `[1, vocab]` row of probabilities, drawing from the given
-/// RNG. Selects the smallest set of tokens whose cumulative probability mass exceeds `p`, then
-/// samples one token from that nucleus, returning a `[1, 1]` token id.
-///
-/// This is the exact nucleus math the old `TopP` sampler ran, lifted out so the config-driven
-/// `LlamaSampler` can call it per row with that row's own RNG. The single-row `assert` is preserved:
-/// `LlamaSampler::sample` slices the batch into rows and calls this once per row.
-///
-/// Gated to the `LlamaSampler` build (its only caller), so a build without the server features
-/// doesn't carry it as dead code.
-#[cfg(all(
-    feature = "inference-server",
-    any(feature = "llama3", feature = "tiny")
-))]
-pub(crate) fn top_p_sample_row(probs: Tensor<2>, p: f64, rng: &mut StdRng) -> Tensor<2, Int> {
-    assert_eq!(
-        probs.dims()[0],
-        1,
-        "Naive top-p sampling only supports single-batch tensors"
-    );
-    let (probs_sort, probs_idx) = probs.sort_descending_with_indices(1);
-
-    // TODO: cumsum + Distribution::Multinomial support
-
-    let mut probs_sort = probs_sort.to_data().iter::<f64>().collect::<Vec<_>>();
-
-    let mut cumsum = 0.;
-    probs_sort.iter_mut().for_each(|x| {
-        if cumsum >= p {
-            *x = 0.0;
-        } else {
-            cumsum += *x;
-        }
-    });
-
-    let next_token_idx = WeightedIndex::new(probs_sort).unwrap().sample(rng);
-
-    probs_idx.slice([0..1, next_token_idx..next_token_idx + 1])
 }
 
 // The config-driven sampler that plugs the Llama generation strategy (temperature scaling plus
@@ -94,21 +41,26 @@ pub use llama_sampler::LlamaSampler;
     any(feature = "llama3", feature = "tiny")
 ))]
 mod llama_sampler {
-    use super::{temperature_scaled_softmax, top_p_sample_row};
+    use super::temperature_scaled_softmax;
     use crate::server::params::SamplingSettings;
-    use burn::tensor::Tensor;
-    use burn_lm_inference::{ids_to_host, InferenceResult, Sampler, SamplingState};
-    use rand::SeedableRng;
+    use burn::tensor::{Distribution, Tensor};
+    use burn_lm_inference::{ids_to_host, InferenceResult, Sampler};
+
+    /// The lower bound on the uniform draws feeding the Gumbel noise. The Gumbel transform is
+    /// `-log(-log(u))`, which is `NaN` at `u == 0` and `+inf` at `u == 1`. Burn's `Uniform(low, high)`
+    /// is `[low, high)`, so the high end is already excluded; clamping the low end just above zero
+    /// keeps `log(u)` finite. The value is far smaller than any probability that ever wins, so it does
+    /// not bias the draw.
+    const GUMBEL_LOW: f64 = 1e-7;
 
     /// The Llama models' config-driven next-token sampler.
     ///
-    /// It holds the server's sampling-config defaults (temperature, top-p threshold, seed) and is
-    /// shared by every in-flight sequence — the framework hands one `LlamaSampler` to a whole round.
-    /// The per-sequence variation is only the RNG, which rides in each row's `SamplingState`, seeded
-    /// in `fresh_state` from `effective_seed()` so two concurrent sequences draw off independent
-    /// streams. At `temperature == 0.0` this is plain argmax, byte-identical to the old
-    /// `Sampler::Argmax` path; above zero it temperature-scales the logits then draws from the
-    /// preserved top-p nucleus using that row's RNG.
+    /// It holds the server's sampling-config defaults (temperature, top-p threshold) and is shared by
+    /// every in-flight sequence — the framework hands one `LlamaSampler` to a whole round. It keeps no
+    /// per-sequence state: at `temperature == 0.0` it is plain greedy argmax, and above zero it draws
+    /// from the top-p nucleus entirely on the device, taking its randomness from the tensor backend's
+    /// own RNG. Reproducibility, when a test or deployment wants it, comes from seeding that backend
+    /// RNG (`Device::seed`).
     pub struct LlamaSampler {
         settings: SamplingSettings,
     }
@@ -121,39 +73,112 @@ mod llama_sampler {
     }
 
     impl Sampler for LlamaSampler {
-        fn fresh_state(&self) -> SamplingState {
-            // Each sequence seeds its own RNG from the config seed (a `0` seed draws a fresh random
-            // one per sequence), so two concurrent requests never share a stream.
-            SamplingState {
-                rng: rand::rngs::StdRng::seed_from_u64(self.settings.effective_seed()),
-            }
-        }
-
-        fn sample(
-            &self,
-            logits: Tensor<2>,
-            states: &mut [SamplingState],
-        ) -> InferenceResult<Vec<u32>> {
+        fn sample(&self, logits: Tensor<2>) -> InferenceResult<Vec<u32>> {
             // Greedy fast path: at temperature 0 there is nothing stochastic, so the whole batch is a
-            // single argmax — byte-identical to the old argmax sampler, and the per-sequence RNGs are
-            // untouched. This is the path the equivalence and worker tests exercise.
+            // single argmax — byte-identical to the framework's argmax sampler. This is the path the
+            // equivalence and worker tests exercise.
             if self.settings.temperature <= 0.0 {
                 return ids_to_host(logits.argmax(1));
             }
 
-            // Stochastic path: temperature-scale the whole batch once, then draw each row from its own
-            // top-p nucleus using that row's RNG. We slice the `[n, vocab]` probabilities into single
-            // rows because the moved top-p math is single-row (its preserved `assert`), and each row's
-            // RNG must advance independently across the sequence's tokens.
+            // Stochastic top-p, batched on the device with a single readback. The old path sorted, read
+            // back, and drew one row at a time on the host; this does the whole round on the device and
+            // only reads back the final `[rows, 1]` token ids.
             let [rows, vocab] = logits.dims();
+            let device = logits.device();
             let probs = temperature_scaled_softmax(logits, self.settings.temperature);
-            let mut ids = Vec::with_capacity(rows);
-            for (row, state) in states.iter_mut().enumerate().take(rows) {
-                let row_probs = probs.clone().slice([row..row + 1, 0..vocab]);
-                let id = top_p_sample_row(row_probs, self.settings.top_p, &mut state.rng);
-                ids.extend(ids_to_host(id)?);
-            }
-            Ok(ids)
+
+            // Sort every row's vocabulary by probability so the nucleus is a contiguous leading run,
+            // and keep the original token ids alongside so the winner can be mapped back.
+            let (sorted, idx) = probs.sort_descending_with_indices(1);
+
+            // The nucleus is the smallest leading run whose mass first reaches `p`. A token belongs to
+            // it exactly when the mass *before* it is still below `p`; that exclusive prefix mass is the
+            // inclusive cumulative sum minus the token itself. Everything past the nucleus is dropped to
+            // `-inf` log-probability, so it can never win the argmax below.
+            let exclusive_mass = sorted.clone().cumsum(1) - sorted.clone();
+            let dropped = exclusive_mass.greater_equal_elem(self.settings.top_p);
+            let masked = sorted.log().mask_fill(dropped, f32::NEG_INFINITY);
+
+            // Gumbel-max: the argmax of `log p + g`, with `g` a Gumbel(0,1) draw per token, is an exact
+            // categorical sample from the (renormalised) nucleus. The `-inf` tokens stay `-inf` and
+            // never win, so the draw is confined to the nucleus. `g = -log(-log(u))`, `u ~ Uniform`.
+            let uniform = Tensor::random(
+                [rows, vocab],
+                Distribution::Uniform(GUMBEL_LOW, 1.0),
+                &device,
+            );
+            let gumbel = uniform.log().neg().log().neg();
+            let winner = (masked + gumbel).argmax(1);
+
+            // `winner` indexes into the sorted order; map it back to the original token ids and read
+            // back the one column per row — the single device-to-host transfer of the whole sampler.
+            ids_to_host(idx.gather(1, winner))
         }
+    }
+}
+
+#[cfg(all(
+    test,
+    feature = "inference-server",
+    any(feature = "llama3", feature = "tiny")
+))]
+mod tests {
+    use super::LlamaSampler;
+    use crate::server::params::SamplingSettings;
+    use crate::tests::TestTensor;
+    use burn_lm_inference::Sampler;
+    use std::collections::HashSet;
+
+    fn settings(temperature: f64, top_p: f64) -> SamplingSettings {
+        SamplingSettings {
+            top_p,
+            temperature,
+            sample_len: 16,
+            seed: 0,
+        }
+    }
+
+    #[test]
+    fn temperature_zero_is_argmax() {
+        // The greedy fast path must pick each row's largest logit and draw no randomness.
+        let logits = TestTensor::<2>::from([[0.1, 5.0, 0.2, 0.0], [3.0, 0.1, 0.2, 0.9]]);
+        let sampler = LlamaSampler::new(settings(0.0, 0.9));
+        assert_eq!(sampler.sample(logits).unwrap(), vec![1, 0]);
+    }
+
+    #[test]
+    fn a_dominant_token_is_always_drawn() {
+        // Token 0 carries more than `p` of the mass on its own, so the nucleus is just {0}: every draw
+        // must return 0 whatever the Gumbel noise. Deterministic, so it needs no seed — it pins that
+        // the nucleus mask is right and that `-inf` tokens never win.
+        let logits = TestTensor::<2>::from([[10.0, 0.0, 0.0, 0.0]]);
+        let sampler = LlamaSampler::new(settings(1.0, 0.9));
+        for _ in 0..16 {
+            assert_eq!(sampler.sample(logits.clone()).unwrap(), vec![0]);
+        }
+    }
+
+    #[test]
+    fn draws_stay_in_the_nucleus_and_actually_vary() {
+        // Two tokens dominate (0 and 1, roughly 57/43 of the mass) and the rest are negligible, so the
+        // nucleus is {0, 1}. Over many draws every token must be in {0, 1} — the mask is correct — AND
+        // both must appear, which proves it genuinely samples rather than collapsing to argmax. The
+        // draw is stochastic (the backend's RNG is not seeded here), but with a 57/43 split over 200
+        // draws both tokens appearing is a certainty, so the test is not flaky.
+        let logits = TestTensor::<2>::from([[1.0, 0.7, -20.0, -20.0]]);
+        let sampler = LlamaSampler::new(settings(1.0, 0.95));
+
+        let mut seen = HashSet::new();
+        for _ in 0..200 {
+            let id = sampler.sample(logits.clone()).unwrap()[0];
+            assert!(id == 0 || id == 1, "drew {id} outside the nucleus {{0, 1}}");
+            seen.insert(id);
+        }
+        assert_eq!(
+            seen.len(),
+            2,
+            "top-p collapsed to a single token instead of sampling the nucleus"
+        );
     }
 }

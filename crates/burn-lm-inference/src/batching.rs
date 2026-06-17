@@ -149,13 +149,13 @@ pub trait BatchedInferenceServer: InferenceServer {
     /// The sampler this server uses to turn logits into token ids, built from the server's own
     /// sampling config.
     ///
-    /// Sampling is config-driven: one sampler serves every in-flight sequence (it carries the
-    /// config — temperature, top-p), and the per-sequence variation is only the RNG, which the
-    /// engine takes from each sequence's `SamplingState`. The worker grabs this as an owned
-    /// `Box<dyn Sampler>` before it borrows the decoder, so the owned box — which does not borrow
-    /// the server — cannot collide with the `&mut` decoder borrow. The default is the framework's
-    /// deterministic argmax, so a model with no sampling config needs nothing extra; a server with
-    /// sampling config overrides this with its own sampler.
+    /// Sampling is config-driven: one sampler serves every in-flight sequence and carries only the
+    /// config (temperature, top-p), with no per-sequence state — any randomness a strategy needs is
+    /// drawn from the tensor backend's RNG. The worker grabs this as an owned `Box<dyn Sampler>`
+    /// before it borrows the decoder, so the owned box — which does not borrow the server — cannot
+    /// collide with the `&mut` decoder borrow. The default is the framework's deterministic argmax,
+    /// so a model with no sampling config needs nothing extra; a server with sampling config
+    /// overrides this with its own sampler.
     fn sampler(&self) -> Box<dyn Sampler> {
         Box::new(Argmax)
     }
@@ -279,14 +279,11 @@ impl PrefillBudget {
 /// exactly one new token decodes through a single fused `decode` call for the whole round
 /// (`[n, vocab]`), and the whole round's rows are sampled in one batched `sample` call.
 ///
-/// `sample(logits, indices)` samples the next token for a batch of rows at once: `logits` is
-/// `[indices.len(), vocab]`, `indices[r]` is the active-set index of row `r`, and the returned `Vec`
-/// has one token id per row, in row order. A prefill samples a single row (`&[i]`); the whole decode
-/// pass samples all its rows in one call, passing the rows' active indices so the driver can reach
-/// each sequence's per-sequence state by index. Passing the active indices, rather than one shared
-/// sampler, is what lets the serving worker hand each row its own per-sequence RNG while the library
-/// driver ignores them — and the driver keeps that per-sequence state outside `active`, which is
-/// what lets this function borrow `active` mutably and still sample.
+/// `sample(logits)` samples the next token for a batch of rows at once: `logits` is `[rows, vocab]`
+/// and the returned `Vec` has one token id per row, in row order. A prefill samples its single row;
+/// the whole decode pass samples all its rows in one call. The sampler carries no per-sequence
+/// state — any randomness comes from the backend RNG — so nothing sequence-specific needs to cross
+/// this seam, which is what lets `step_round` borrow `active` mutably and still sample.
 ///
 /// Stop detection is synchronous: a sampled token that is in `stop_ids` finishes its sequence in
 /// the same round it is produced, so no extra token is generated past a stop id. The `max_gen` cap
@@ -296,7 +293,7 @@ pub fn step_round<D: BatchedDecoder, X>(
     active: &mut [ActiveSeq<X>],
     stop_ids: &[u32],
     budget: &mut PrefillBudget,
-    mut sample: impl FnMut(Tensor<2>, &[usize]) -> InferenceResult<Vec<u32>>,
+    mut sample: impl FnMut(Tensor<2>) -> InferenceResult<Vec<u32>>,
 ) -> Vec<StepOutcome> {
     let mut outcomes: Vec<StepOutcome> = (0..active.len()).map(|_| StepOutcome::Skipped).collect();
 
@@ -345,12 +342,12 @@ pub fn step_round<D: BatchedDecoder, X>(
             continue;
         }
         let position = active[i].processed;
-        // A prefill produces a single `[1, vocab]` row, so it samples one row: `sample(logits, &[i])`
-        // returns a one-element `Vec`, and we take its single id.
+        // A prefill produces a single `[1, vocab]` row, so `sample(logits)` returns a one-element
+        // `Vec`, and we take its single id.
         let sampled = decoder
             .prefill(active[i].slot, &active[i].tokens[position..], position)
             .and_then(|logits| expect_rows(logits, 1))
-            .and_then(|logits| sample(logits, &[i]))
+            .and_then(|logits| sample(logits))
             .and_then(|ids| {
                 ids.into_iter().next().ok_or_else(|| {
                     InferenceError::BatchContractViolation(
@@ -367,16 +364,10 @@ pub fn step_round<D: BatchedDecoder, X>(
     // `expect_rows` contract still guards against a silently misaligned row count.
     if !decode_rows.is_empty() {
         let rows: Vec<DecodeRow> = decode_rows.iter().map(|(_, row)| *row).collect();
-        // The active-set index of each decode row, in row order — what the closure samples over so a
-        // batched sampler can reach each row's per-sequence state by index.
-        let row_indices: Vec<usize> = decode_rows
-            .iter()
-            .map(|(seq_index, _)| *seq_index)
-            .collect();
         let sampled = decoder
             .decode(&rows)
             .and_then(|logits| expect_rows(logits, rows.len()))
-            .and_then(|logits| sample(logits, &row_indices));
+            .and_then(|logits| sample(logits));
         match sampled {
             Ok(ids) if ids.len() == decode_rows.len() => {
                 // Fan each sampled id back to its sequence, in row order, through the shared advance

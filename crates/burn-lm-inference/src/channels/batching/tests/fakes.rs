@@ -3,7 +3,7 @@ use crate::{
     batching::{BatchCapacity, BatchedDecoder, DecodeRow},
     errors::InferenceError,
     job::{CancelSignal, GenerationParams, InferenceJob, InferenceTask},
-    sampler::{Argmax, Sampler, SamplingState},
+    sampler::{Argmax, Sampler},
     server::{InferenceServer, ServerConfigParsing},
     InferenceResult, InferenceServerConfig, Stats, INFERENCE_DEVICE,
 };
@@ -147,17 +147,7 @@ impl BatchedDecoder for FakeDecoder {
 pub(super) struct FixedSampler(pub(super) u32);
 
 impl Sampler for FixedSampler {
-    fn fresh_state(&self) -> SamplingState {
-        SamplingState {
-            rng: rand::SeedableRng::seed_from_u64(0),
-        }
-    }
-
-    fn sample(
-        &self,
-        logits: Tensor<2>,
-        _states: &mut [SamplingState],
-    ) -> InferenceResult<Vec<u32>> {
+    fn sample(&self, logits: Tensor<2>) -> InferenceResult<Vec<u32>> {
         // One fixed id per input row, regardless of logits.
         let rows = logits.dims()[0];
         Ok(vec![self.0; rows])

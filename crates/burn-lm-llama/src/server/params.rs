@@ -3,8 +3,9 @@
 //!
 //! Both generation paths resolve through here — the batching worker (via `sampler`/admission) and
 //! the single-request `run_job` path — so a request means the same thing whichever channel serves
-//! it, and neither path mutates shared server config. Sampling itself is config-driven: temperature,
-//! top-p, and seed come from the server config; the only thing a request carries is its token cap.
+//! it, and neither path mutates shared server config. Sampling itself is config-driven: temperature
+//! and top-p come from the server config; the only thing a request carries is its token cap. (The
+//! `seed` field is also config-driven but currently inert — see `SamplingSettings::seed`.)
 
 use burn_lm_inference::GenerationParams;
 use rand::RngExt;
@@ -17,7 +18,13 @@ pub struct SamplingSettings {
     pub top_p: f64,
     pub temperature: f64,
     pub sample_len: usize,
-    /// `0` means "draw a fresh random seed for this job".
+    /// The configured sampling seed (`0` historically meant "draw a fresh random seed per job").
+    ///
+    /// This is currently inert: the device-side sampler draws its randomness from the tensor
+    /// backend's own RNG, not from this value, so nothing in production reads it. Reproducibility
+    /// today comes from seeding the backend RNG (`Device::seed`). The field is kept because it is an
+    /// existing server-config knob, and the planned follow-up is to wire it through to a backend seed
+    /// at a generation entry point.
     pub seed: u64,
 }
 
@@ -37,6 +44,10 @@ impl SamplingSettings {
     }
 
     /// The seed to actually use: `0` draws a fresh random seed per job.
+    ///
+    /// Not yet wired into sampling — the device-side sampler seeds nothing from here (see the `seed`
+    /// field). This is exercised only by its unit test, kept ready for the follow-up that seeds the
+    /// backend RNG from the config seed.
     pub fn effective_seed(&self) -> u64 {
         match self.seed {
             0 => rand::rng().random::<u64>(),

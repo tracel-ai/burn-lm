@@ -10,11 +10,9 @@ use std::sync::{Arc, Mutex};
 
 /// Argmax over each row of `[n, vocab]` logits, returning one id per row — the batched-closure
 /// shape `step_round` expects. The direct `step_round` tests below use this as their `sample`
-/// closure, standing in for the worker's gather-sample-scatter over the shared `Argmax` sampler.
-fn argmax_rows(logits: burn::tensor::Tensor<2>, indices: &[usize]) -> InferenceResult<Vec<u32>> {
-    let mut states: Vec<crate::sampler::SamplingState> =
-        indices.iter().map(|_| Argmax.fresh_state()).collect();
-    Argmax.sample(logits, &mut states)
+/// closure, standing in for the worker's call into the shared `Argmax` sampler.
+fn argmax_rows(logits: burn::tensor::Tensor<2>) -> InferenceResult<Vec<u32>> {
+    Argmax.sample(logits)
 }
 
 /// Capacity >= 2: both jobs are admitted concurrently and their emission streams INTERLEAVE.
@@ -306,28 +304,24 @@ fn a_mixed_round_aligns_each_sampled_token_to_its_sequence() {
     let mut active = vec![decoding(0, 10), prompt(1), decoding(2, 12)];
 
     let mut budget = PrefillBudget::for_round(&active);
-    // The sampler returns, for each sampled row, a token keyed to that row's ACTIVE INDEX, ignoring
-    // the logits — so a prefill/decode index mixup would land the wrong token on the wrong sequence.
+    // Argmax over the decoder's one-hot logits: the `FakeDecoder` echoes each row's identity token as
+    // a one-hot row, so argmax recovers a token unique to that row — the two fused-decode rows their
+    // last tokens (10, 12) and the prefill row its prompt token (30). A prefill/decode index mixup in
+    // `step_round` would land one of these on the wrong sequence, which the distinct values catch.
     let outcomes = step_round(
         &mut decoder,
         &mut active,
         &stop_ids,
         &mut budget,
-        |_logits, indices| Ok(indices.iter().map(|&i| 100 + i as u32).collect()),
+        argmax_rows,
     );
 
-    // Each sequence's newly appended token must equal 100 + its own active index — the prefill row
-    // (1) and the two fused-decode rows (0, 2) each landed their own sampler's token.
-    assert_eq!(*active[0].tokens.last().unwrap(), 100, "decode row 0 token");
-    assert_eq!(
-        *active[1].tokens.last().unwrap(),
-        101,
-        "prefill row 1 token"
-    );
-    assert_eq!(*active[2].tokens.last().unwrap(), 102, "decode row 2 token");
-    for i in 0..3 {
+    assert_eq!(*active[0].tokens.last().unwrap(), 10, "decode row 0 token");
+    assert_eq!(*active[1].tokens.last().unwrap(), 30, "prefill row 1 token");
+    assert_eq!(*active[2].tokens.last().unwrap(), 12, "decode row 2 token");
+    for (i, expected) in [(0usize, 10u32), (1, 30), (2, 12)] {
         assert!(
-            matches!(outcomes[i], StepOutcome::Stepped { token, .. } if token == 100 + i as u32),
+            matches!(outcomes[i], StepOutcome::Stepped { token, .. } if token == expected),
             "outcome {i} must carry its own sequence's token"
         );
     }

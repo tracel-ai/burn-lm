@@ -3,7 +3,7 @@ use std::time::Instant;
 use crate::{inference::Llama, tokenizer::Tokenizer};
 use burn_lm_inference::{
     batching::{step_round, ActiveSeq, BatchedDecoder, PrefillBudget, StepOutcome},
-    GeneratedItemEmitter, InferenceResult, Sampler, SamplingState,
+    GeneratedItemEmitter, InferenceResult, Sampler,
 };
 
 use super::GenerationContext;
@@ -111,10 +111,6 @@ impl<T: Tokenizer + 'static> Llama<T> {
             .collect();
 
         let stop_ids = self.tokenizer.stop_ids();
-        // One per-sequence sampling state per active sequence, kept in a parallel vec alongside
-        // `active` (not inside it) so the closure can reach a row's state by index while `step_round`
-        // holds `active` borrowed. The shared `sampler` carries the config; only the RNG varies here.
-        let mut states: Vec<SamplingState> = active.iter().map(|_| sampler.fresh_state()).collect();
 
         let now = Instant::now();
         // Run the shared generic decode core to completion: one round advances every still-active
@@ -126,30 +122,15 @@ impl<T: Tokenizer + 'static> Llama<T> {
         'rounds: while active.iter().any(|seq| !seq.finished) {
             // A fresh prefill budget per round over the whole batch.
             let mut budget = PrefillBudget::for_round(&active);
-            // The closure gathers the sampled rows' per-sequence states into a contiguous slice (in
-            // row order), samples them all through the one shared `sampler`, and returns each state
-            // to its slot — the same shape the serving worker uses. Each sequence now has its OWN RNG
-            // (in `states`), so a stochastic batch is no longer at the mercy of one shared stream;
-            // greedy (argmax, temperature 0) ignores the RNGs and stays byte-identical to a solo run.
+            // The sampler carries no per-sequence state — greedy argmax draws nothing, and a
+            // stochastic strategy draws from the backend RNG — so the whole round samples through the
+            // one shared `sampler`, the same shape the serving worker uses.
             let outcomes = step_round(
                 &mut self.decoder,
                 &mut active,
                 &stop_ids,
                 &mut budget,
-                |logits, indices| {
-                    let placeholder = || SamplingState {
-                        rng: rand::SeedableRng::seed_from_u64(0),
-                    };
-                    let mut gathered: Vec<SamplingState> = indices
-                        .iter()
-                        .map(|&index| std::mem::replace(&mut states[index], placeholder()))
-                        .collect();
-                    let result = sampler.sample(logits, &mut gathered);
-                    for (&index, state) in indices.iter().zip(gathered) {
-                        states[index] = state;
-                    }
-                    result
-                },
+                |logits| sampler.sample(logits),
             );
             for (seq, outcome) in active.iter_mut().zip(outcomes) {
                 match outcome {

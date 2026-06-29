@@ -384,10 +384,16 @@ pub fn step_round<D: BatchedDecoder, X>(
             continue;
         }
         let position = active[i].processed;
+        // The prefill consumes the unprocessed tail this round: from `position` (the lane's current
+        // length) up to the full prompt length. Naming that upper bound now marks the seam where a
+        // chunk boundary will later cap it; today `chunk_end == tokens.len()`, so behavior is
+        // unchanged. It is the prompt length, fixed for the round — tokens generated this round are
+        // not yet in `tokens`.
+        let chunk_end = active[i].tokens.len();
         // A prefill produces a single `[1, vocab]` row, so `sample(logits)` returns a one-element
         // `Vec`, and we take its single id.
         let sampled = decoder
-            .prefill(active[i].slot, &active[i].tokens[position..], position)
+            .prefill(active[i].slot, &active[i].tokens[position..chunk_end], position)
             .and_then(|logits| expect_rows(logits, 1))
             .and_then(|logits| sample(logits))
             .and_then(|ids| {

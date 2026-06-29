@@ -51,6 +51,13 @@ pub struct Llama3ServerConfig {
     /// raised value takes effect on the next reload.
     #[config(default = 4)]
     pub max_slots: usize,
+    /// How many prompt tokens to prefill per round. A long prompt is sliced into chunks of this width
+    /// so it advances one chunk per round alongside the fused decode, instead of stalling every
+    /// decoder for one giant prefill. `0` means unbounded — the whole prompt in one round, the
+    /// pre-chunking behavior. Resolved at load via `BURN_LM_PREFILL_CHUNK_SIZE`; the scheduler reads it
+    /// starting in a later change.
+    #[config(default = 512)]
+    pub prefill_chunk_size: usize,
 }
 
 impl Llama3ServerConfig {
@@ -649,6 +656,12 @@ impl Llama3BaseServer {
             // so the reported cap matches the slab it sizes here.
             let max_seq_len = config_usize(config.max_seq_len, "BURN_LM_MAX_SEQ_LEN");
             let max_slots = config_usize(config.max_slots, "BURN_LM_MAX_SLOTS");
+            // The chunked-prefill width, resolved with the same env-override mechanism so it is fixed
+            // and visible at load. Logged but not yet consumed — the scheduler reads it in a later
+            // change; this commit only establishes the knob.
+            let prefill_chunk_size =
+                config_usize(config.prefill_chunk_size, "BURN_LM_PREFILL_CHUNK_SIZE");
+            tracing::info!(target: "batching", prefill_chunk_size, "prefill chunk size");
             let model = match self.version {
                 LlamaVersion::Llama3Instruct => {
                     LlamaConfig::llama3_8b_pretrained(max_seq_len, max_slots, &*INFERENCE_DEVICE)

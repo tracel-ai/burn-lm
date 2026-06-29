@@ -55,6 +55,9 @@ pub struct AppConfig {
     pub max_slots: Option<usize>,
     /// The context window each lane reserves (`max_seq_len`); lower it to fit a high `max_slots`.
     pub max_seq_len: Option<usize>,
+    /// The chunked-prefill width (`prefill_chunk_size`): prompt tokens prefilled per round. `0` is
+    /// unbounded (the whole prompt in one round).
+    pub prefill_chunk_size: Option<usize>,
 }
 
 impl App {
@@ -80,6 +83,7 @@ impl App {
         };
         set_if_unset("BURN_LM_MAX_SLOTS", config.max_slots);
         set_if_unset("BURN_LM_MAX_SEQ_LEN", config.max_seq_len);
+        set_if_unset("BURN_LM_PREFILL_CHUNK_SIZE", config.prefill_chunk_size);
         Self::new(host, port)
     }
 }

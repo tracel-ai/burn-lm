@@ -125,6 +125,7 @@ fn at_most_one_prompt_prefills_per_round_while_another_sequence_decodes() {
         &mut active,
         &stop_ids,
         &mut budget,
+        0,
         argmax_rows,
     );
 
@@ -152,6 +153,7 @@ fn at_most_one_prompt_prefills_per_round_while_another_sequence_decodes() {
         &mut active[2..3],
         &stop_ids,
         &mut budget,
+        0,
         argmax_rows,
     )
     .pop()
@@ -190,6 +192,7 @@ fn decoding_sequences_share_one_fused_decode_call() {
         &mut active,
         &stop_ids,
         &mut budget,
+        0,
         argmax_rows,
     );
 
@@ -248,6 +251,7 @@ fn a_fused_decode_error_retires_every_decode_row_but_not_a_concurrent_prefill() 
         &mut active,
         &stop_ids,
         &mut budget,
+        0,
         argmax_rows,
     );
 
@@ -313,6 +317,7 @@ fn a_mixed_round_aligns_each_sampled_token_to_its_sequence() {
         &mut active,
         &stop_ids,
         &mut budget,
+        0,
         argmax_rows,
     );
 
@@ -362,6 +367,7 @@ fn a_lane_over_the_context_limit_retires_alone_without_failing_its_batch_mates()
         &mut active,
         &stop_ids,
         &mut budget,
+        0,
         argmax_rows,
     );
 
@@ -413,6 +419,7 @@ fn a_prompt_longer_than_the_context_window_is_rejected_before_prefill() {
         &mut active,
         &stop_ids,
         &mut budget,
+        0,
         argmax_rows,
     );
 
@@ -488,4 +495,68 @@ fn worker_uses_the_server_configured_sampler() {
         "7".repeat(16),
         "emitted text must come from the server's configured sampler, not argmax"
     );
+}
+
+/// Chunked prefill scheduling: a prompt longer than `chunk_size` prefills one chunk per round, each
+/// intermediate chunk reporting `Prefilling` and advancing `processed` by the chunk width WITHOUT
+/// sampling. Only the final chunk produces a token — either directly, when the last chunk still has
+/// more than one token, or via the fused decode that classification routes a lone trailing token to.
+/// Both endings are exercised. (The decode MATH of chunked prefill is gated separately against the
+/// real model in `burn-lm-llama`; this is the engine-side routing.)
+#[test]
+fn chunked_prefill_defers_sampling_to_the_final_chunk() {
+    fn seq(tokens: Vec<u32>, max_gen: usize) -> ActiveSeq<()> {
+        ActiveSeq {
+            slot: 0,
+            tokens,
+            processed: 0,
+            generated: 0,
+            max_gen,
+            finished: false,
+            extra: (),
+        }
+    }
+    // `emit` high so the fake never stops on its own; no stop ids, so only `max_gen` ends a sequence.
+    let chunk = 4;
+
+    // 10-token prompt, chunk 4: chunks [0,4) [4,8) [8,10). The final chunk holds two tokens, so the
+    // prefill final-chunk branch itself samples.
+    let mut decoder = FakeDecoder::new(Arc::new(Mutex::new(Vec::new())), 100);
+    let mut active = vec![seq((1..=10).collect(), 2)];
+    for (round, expected) in [(1usize, 4usize), (2, 8)] {
+        let mut budget = PrefillBudget::for_round(&active);
+        let outcomes = step_round(&mut decoder, &mut active, &[], &mut budget, chunk, argmax_rows);
+        assert!(
+            matches!(outcomes[0], StepOutcome::Prefilling),
+            "round {round}: an intermediate chunk should report Prefilling"
+        );
+        assert_eq!(active[0].processed, expected, "round {round}: cursor advances by the chunk width");
+        assert_eq!(active[0].generated, 0, "round {round}: no token before the prompt is fully in");
+    }
+    let mut budget = PrefillBudget::for_round(&active);
+    let outcomes = step_round(&mut decoder, &mut active, &[], &mut budget, chunk, argmax_rows);
+    assert!(
+        matches!(outcomes[0], StepOutcome::Stepped { .. }),
+        "the final prefill chunk (two tokens left) samples the first generated token"
+    );
+    assert_eq!(active[0].processed, 10);
+    assert_eq!(active[0].generated, 1);
+
+    // 9-token prompt, chunk 4: chunks [0,4) [4,8), then a single token (index 8) is left, which
+    // classification routes to the fused decode rather than a final prefill chunk.
+    let mut decoder = FakeDecoder::new(Arc::new(Mutex::new(Vec::new())), 100);
+    let mut active = vec![seq((1..=9).collect(), 2)];
+    for expected in [4usize, 8] {
+        let mut budget = PrefillBudget::for_round(&active);
+        let outcomes = step_round(&mut decoder, &mut active, &[], &mut budget, chunk, argmax_rows);
+        assert!(matches!(outcomes[0], StepOutcome::Prefilling));
+        assert_eq!(active[0].processed, expected);
+    }
+    let mut budget = PrefillBudget::for_round(&active);
+    let outcomes = step_round(&mut decoder, &mut active, &[], &mut budget, chunk, argmax_rows);
+    assert!(
+        matches!(outcomes[0], StepOutcome::Stepped { .. }),
+        "a lone trailing prompt token is decoded, sampling the first generated token"
+    );
+    assert_eq!(active[0].generated, 1);
 }

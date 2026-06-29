@@ -311,6 +311,86 @@ fn lane_reuse_after_release_starts_clean() {
     );
 }
 
+/// Like `reference_run`, but prefills the prompt in `chunk_size`-token slices — the chunked-prefill
+/// path: repeated `prefill` calls with strictly increasing `position`, every chunk's logits discarded
+/// except the last (only the final chunk, with the whole prompt present, feeds the first token).
+/// `chunk_size == 0` is a single prefill, i.e. exactly `reference_run`. Splitting must not change the
+/// math: each chunk appends the same KV at the same positions, and the final chunk attends the full
+/// prompt — so the sampled logits, and every downstream token, must match a one-shot prefill.
+fn chunked_reference_run(
+    prompt: &[u32],
+    steps: usize,
+    chunk_size: usize,
+    device: &Device,
+) -> (Vec<u32>, Vec<Vec<f32>>) {
+    let mut llama = test_llama_lanes(1, device);
+    let vocab = LlamaConfig::llama3_2_1b_test().vocab_size;
+    let mut tokens = Vec::with_capacity(steps);
+    let mut logits_steps = Vec::with_capacity(steps);
+
+    // Prefill the prompt one chunk at a time, keeping only the final chunk's logits.
+    let mut position = 0usize;
+    let mut last_out = None;
+    while position < prompt.len() {
+        let end = if chunk_size == 0 {
+            prompt.len()
+        } else {
+            (position + chunk_size).min(prompt.len())
+        };
+        last_out = Some(llama.decoder.prefill(0, &prompt[position..end], position).unwrap());
+        position = end;
+    }
+    let out = last_out.expect("prompt is non-empty");
+    let mut last = argmax_rows(&out)[0];
+    tokens.push(last);
+    logits_steps.push(logits_row(&out, 0, vocab));
+
+    for _ in 1..steps {
+        let out = llama
+            .decoder
+            .decode(&[DecodeRow { slot: 0, token: last }])
+            .unwrap();
+        last = argmax_rows(&out)[0];
+        tokens.push(last);
+        logits_steps.push(logits_row(&out, 0, vocab));
+    }
+    llama.decoder.release(0);
+
+    (tokens, logits_steps)
+}
+
+/// Chunked prefill is token-for-token equivalent to a one-shot prefill on the real decoder. This is
+/// the load-bearing gate for shipping chunked prefill on by default: across a spread of chunk widths
+/// (including 1, the whole prompt, and the leave-one-token boundary), both the argmax stream and the
+/// tight-tolerance per-step logits must match the monolithic reference. A regression here means a
+/// chunk saw the wrong KV/position or sampled before the prompt was fully present.
+#[test]
+fn chunked_prefill_matches_monolithic_prefill() {
+    let device: Device = Default::default();
+    let prompt = prompt_bytes("This is a sufficiently long prompt to split into prefill chunks", 48);
+    let steps = 20;
+    let (ref_tokens, ref_logits) = reference_run(&prompt, steps, &device);
+    // The token stream must be EXACT — that is the equivalence we guarantee. The per-step logits get a
+    // looser tolerance than the fused-decode gate (1e-4): chunking changes the matmul SHAPES for the
+    // final chunk's attention (it reads cached KV rather than recomputing the whole prompt inline in
+    // one matmul), so the float reduction order differs and drifts ~1e-4 relative. That is benign
+    // reassociation — a real bug (wrong KV, position, or sampling a partial prefix) diverges by orders
+    // of magnitude and flips the argmax, which the strict token check catches.
+    let tolerance = Tolerance::<f32>::rel_abs(2e-3, 1e-4);
+    for chunk in [1usize, 2, 3, 7, 16, 47, 48, 100] {
+        let (tokens, logits) = chunked_reference_run(&prompt, steps, chunk, &device);
+        assert_eq!(
+            tokens, ref_tokens,
+            "chunk_size={chunk}: argmax stream diverged from monolithic prefill"
+        );
+        for (got, expected) in logits.iter().zip(ref_logits.iter()) {
+            let got = TensorData::new(got.clone(), [got.len()]);
+            let expected = TensorData::new(expected.clone(), [expected.len()]);
+            got.assert_approx_eq::<f32>(&expected, tolerance);
+        }
+    }
+}
+
 /// Shared benchmark: drive the real `LlamaDecoder` at batch 1/2/4/8 over a slab sized to the max
 /// batch (reset between runs, using lanes `0..batch`). Prefill plus a few warmup decode steps
 /// (shader compile and autotune) are untimed. This times the shipped fused decode path

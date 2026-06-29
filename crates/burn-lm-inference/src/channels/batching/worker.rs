@@ -389,6 +389,10 @@ fn step<S: BatchedInferenceServer>(server: &mut S, active: &mut Vec<JobSeq>) {
     // with the `&mut` decoder borrow below — no raw pointer, no unsafe.
     let sampler = server.sampler();
 
+    // Read the chunked-prefill width now, while we still hold only `&self` — the same reason the
+    // sampler is taken owned above: it must not collide with the `&mut` decoder borrow below.
+    let chunk_size = server.prefill_chunk_size();
+
     // Borrow the decoder for the whole round. If the model isn't loaded we can't run anything, so
     // rather than panic the worker we retire every active sequence with that error.
     let outcomes = match server.decoder() {
@@ -398,7 +402,7 @@ fn step<S: BatchedInferenceServer>(server: &mut S, active: &mut Vec<JobSeq>) {
             let mut budget = PrefillBudget::for_round(active);
             // The sampler carries no per-sequence state — any randomness it needs is drawn from the
             // backend RNG — so the round's whole job is to hand `step_round` the one shared sampler.
-            step_round(decoder, active, &stop_ids, &mut budget, |logits| {
+            step_round(decoder, active, &stop_ids, &mut budget, chunk_size, |logits| {
                 sampler.sample(logits)
             })
         }
@@ -444,6 +448,9 @@ fn step<S: BatchedInferenceServer>(server: &mut S, active: &mut Vec<JobSeq>) {
                 retire(&mut seq.extra, Err(err));
             }
             StepOutcome::Skipped => {}
+            // An intermediate prefill chunk advanced its lane's KV but sampled no token, so there is
+            // nothing to stream and nothing to retire — the sequence keeps prefilling next round.
+            StepOutcome::Prefilling => {}
         }
     }
 

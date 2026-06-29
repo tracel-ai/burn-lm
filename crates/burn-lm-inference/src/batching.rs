@@ -122,6 +122,15 @@ pub trait BatchedInferenceServer: InferenceServer {
     /// lazily loading — the model.
     fn batch_capacity(&self) -> BatchCapacity;
 
+    /// How many prompt tokens to prefill per round; `0` means unbounded — the whole prompt in one
+    /// round. Like `batch_capacity`, this is operator-facing load-time config that lives on the server
+    /// rather than the decoder. The default keeps the pre-chunking behavior (one forward over the whole
+    /// prompt); a server overrides it to slice long prefills into chunks so a single long prompt does
+    /// not stall the in-flight decoders for more than one round's worth of work.
+    fn prefill_chunk_size(&self) -> usize {
+        0
+    }
+
     /// Tokenize a submitted task into the token ids the decoder consumes.
     ///
     /// This is a thin wrapper over the model's own tokenizer. It is a primitive the continuous loop
@@ -219,6 +228,11 @@ pub enum StepOutcome {
         /// it.
         finished: bool,
     },
+    /// The sequence prefilled an intermediate chunk this round: its KV advanced by the chunk width
+    /// but no token was sampled. Only the final chunk of a prompt samples (with the whole prompt
+    /// present), so an intermediate chunk produces no output and does not finish the sequence — it
+    /// stays active to continue prefilling next round.
+    Prefilling,
     /// The sequence's forward failed; the driver should retire it with this error.
     Failed(InferenceError),
 }
@@ -302,6 +316,7 @@ pub fn step_round<D: BatchedDecoder, X>(
     active: &mut [ActiveSeq<X>],
     stop_ids: &[u32],
     budget: &mut PrefillBudget,
+    chunk_size: usize,
     mut sample: impl FnMut(Tensor<2>) -> InferenceResult<Vec<u32>>,
 ) -> Vec<StepOutcome> {
     let mut outcomes: Vec<StepOutcome> = (0..active.len()).map(|_| StepOutcome::Skipped).collect();
@@ -384,26 +399,51 @@ pub fn step_round<D: BatchedDecoder, X>(
             continue;
         }
         let position = active[i].processed;
-        // The prefill consumes the unprocessed tail this round: from `position` (the lane's current
-        // length) up to the full prompt length. Naming that upper bound now marks the seam where a
-        // chunk boundary will later cap it; today `chunk_end == tokens.len()`, so behavior is
-        // unchanged. It is the prompt length, fixed for the round — tokens generated this round are
-        // not yet in `tokens`.
-        let chunk_end = active[i].tokens.len();
-        // A prefill produces a single `[1, vocab]` row, so `sample(logits)` returns a one-element
-        // `Vec`, and we take its single id.
-        let sampled = decoder
-            .prefill(active[i].slot, &active[i].tokens[position..chunk_end], position)
-            .and_then(|logits| expect_rows(logits, 1))
-            .and_then(|logits| sample(logits))
-            .and_then(|ids| {
-                ids.into_iter().next().ok_or_else(|| {
-                    InferenceError::BatchContractViolation(
-                        "sampler produced no token for the prefill row".to_string(),
-                    )
-                })
-            });
-        outcomes[i] = advance_or_fail(&mut active[i], sampled, stop_ids);
+        let tail_len = active[i].tokens.len();
+        // Chunked prefill: process at most `chunk_size` tokens of the unprocessed tail this round, so a
+        // long prompt advances one chunk per round alongside the fused decode instead of stalling it
+        // for one giant forward. `chunk_size == 0` means unbounded — the whole tail in one round, which
+        // is exactly the pre-chunking path. The lane's KV grows by this slice, keeping the cursor
+        // (`processed`) and the lane length in lockstep.
+        let chunk_end = if chunk_size == 0 {
+            tail_len
+        } else {
+            (position + chunk_size).min(tail_len)
+        };
+        let logits = decoder.prefill(active[i].slot, &active[i].tokens[position..chunk_end], position);
+        if chunk_end < tail_len {
+            // Intermediate chunk: the lane now holds `[0, chunk_end)`, but the prompt is not fully in
+            // yet, so these logits are over a partial prefix and MUST be discarded — only the final
+            // chunk samples, once the whole prompt is present (see the correctness note on
+            // `StepOutcome::Prefilling`). Advance the cursor and keep the sequence prefilling; a forward
+            // error still retires it.
+            outcomes[i] = match logits {
+                Ok(_) => {
+                    active[i].processed = chunk_end;
+                    StepOutcome::Prefilling
+                }
+                Err(err) => {
+                    active[i].finished = true;
+                    StepOutcome::Failed(err)
+                }
+            };
+        } else {
+            // Final chunk: it reaches the end of the tail, including the last token, so its single
+            // `[1, vocab]` row is the sampling row — identical to a one-shot prefill of the whole
+            // prompt. (When only one token remained at the round's start, classification routed it to
+            // the fused decode instead, and it never reached this loop.)
+            let sampled = logits
+                .and_then(|logits| expect_rows(logits, 1))
+                .and_then(|logits| sample(logits))
+                .and_then(|ids| {
+                    ids.into_iter().next().ok_or_else(|| {
+                        InferenceError::BatchContractViolation(
+                            "sampler produced no token for the prefill row".to_string(),
+                        )
+                    })
+                });
+            outcomes[i] = advance_or_fail(&mut active[i], sampled, stop_ids);
+        }
     }
 
     // Decode pass: one fused call advances every decode-ready row, then the whole round's rows are

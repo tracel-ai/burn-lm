@@ -130,6 +130,9 @@ impl<T: Tokenizer + 'static> Llama<T> {
                 &mut active,
                 &stop_ids,
                 &mut budget,
+                // Unbounded prefill (the whole prompt in one round) for the local generation path; the
+                // chunked-prefill width is server config, applied by the serving worker.
+                0,
                 |logits| sampler.sample(logits),
             );
             for (seq, outcome) in active.iter_mut().zip(outcomes) {
@@ -146,6 +149,10 @@ impl<T: Tokenizer + 'static> Llama<T> {
                         break 'rounds;
                     }
                     StepOutcome::Skipped => {}
+                    // Unreachable on this path (it prefills unbounded, so a prompt is never split into
+                    // intermediate chunks), but the match is exhaustive: an intermediate chunk produces
+                    // no token and leaves the sequence running.
+                    StepOutcome::Prefilling => {}
                 }
             }
         }

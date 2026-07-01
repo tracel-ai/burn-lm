@@ -20,7 +20,7 @@ selected-backend = []
 
 cuda = ["burn/cuda", "burn/default", "selected-backend"]
 rocm = ["burn/rocm", "burn/default", "selected-backend"]
-metal = ["burn/metal", "selected-backend"]
+metal = ["burn/metal", "burn/default", "selected-backend"]
 libtorch = ["burn/tch", "selected-backend"]
 libtorch-cpu = ["burn/tch", "selected-backend"]
 ndarray = ["burn/ndarray"]

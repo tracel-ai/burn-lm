@@ -331,6 +331,14 @@ macro_rules! impl_batched_llama_server {
                 BatchCapacity { max_slots }
             }
 
+            fn prefill_chunk_size(&self) -> usize {
+                // Turn chunked prefill on by default for the batched Llama servers: a long prompt is
+                // sliced so it advances one chunk per round instead of stalling the in-flight decoders
+                // for one giant forward. Resolved with the same env-override mechanism as the slab
+                // sizing, so the value the worker schedules with matches the one logged at load.
+                config_usize(self.config.prefill_chunk_size, "BURN_LM_PREFILL_CHUNK_SIZE")
+            }
+
             fn tokenize(&self, task: &InferenceTask) -> InferenceResult<Vec<u32>> {
                 let prompt = match task {
                     InferenceTask::Message(message) => self.server.prompt(vec![message.clone()])?,

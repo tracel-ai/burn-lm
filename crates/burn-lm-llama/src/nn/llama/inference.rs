@@ -78,6 +78,9 @@ impl LlamaDecoder {
                 GenerationError::MaxSequenceLengthExceeded { actual, max } => {
                     InferenceError::ContextLengthExceeded(actual, max)
                 }
+                GenerationError::KvPoolExhausted { short_by } => {
+                    InferenceError::KvPoolExhausted(short_by)
+                }
             })?;
         let logits =
             self.model

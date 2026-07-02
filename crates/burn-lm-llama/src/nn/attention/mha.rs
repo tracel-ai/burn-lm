@@ -95,8 +95,9 @@ impl MultiHeadAttention {
         let q = apply_rope_lanes(rope, q, &plan.starts);
         let k = apply_rope_lanes(rope, k, &plan.starts);
 
-        // Lane-sliced KV write + ragged read-back to the longest active lane.
-        let (k, v) = cache.forward_lanes(&plan.lanes, &plan.starts, k, v);
+        // Block-addressed KV write + ragged read-back to the longest active lane, both driven by the
+        // plan's block tables — the cache below is purely physical and knows nothing about lanes.
+        let (k, v) = cache.forward_lanes(&plan.tables, &plan.starts, k, v);
 
         // plan.mask is [n, 1, seq_len, l_max]; broadcasts over heads inside forward_attention.
         let output =

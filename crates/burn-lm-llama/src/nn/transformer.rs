@@ -130,6 +130,13 @@ pub struct LanePlan {
     /// position of the lane's first new token, and the offset its new tokens are written to in the KV
     /// buffer.
     pub starts: Vec<usize>,
+    /// Per active lane, in `lanes` order: the KV block ids covering the lane's positions after this
+    /// forward, entry `i` covering positions `[i·block_size, (i+1)·block_size)`. The allocator grew
+    /// each table before this plan was built, so every block a layer's write will touch already
+    /// exists and the layers allocate nothing. This snapshot is also, deliberately, the handoff
+    /// artifact a future prefill/decode split would ship: "prefill output = block list" is a literal
+    /// value here.
+    pub tables: Vec<Vec<u32>>,
     /// The per-lane attention mask, shaped `[n, 1, q, l_max]`, where `true` means masked. Row `r` of
     /// lane `j` may attend to columns `0..=starts[j] + r`; everything past that is masked off — both
     /// the lane's own future and the stale buffer tail out to the longest active lane. The attention
@@ -153,16 +160,26 @@ pub struct TransformerCache {
     /// threads them down as the KV write offsets, so the underlying KV buffers need no counter of
     /// their own. `prepare_lanes` grows an entry; `reset_lane` zeroes one.
     lens: Vec<usize>,
+    /// The block allocator: which KV blocks each lane owns, and the shared free stack. One id space
+    /// serves every layer's K and V pools — block `b` names the same row in all of them — so the
+    /// bookkeeping lives here, once, next to `lens`. Tables and lengths advance and roll back
+    /// together: `prepare_lanes` grows both or neither, `reset_lane` clears both.
+    pool: BlockPool,
 }
 
 impl TransformerCache {
     pub fn new(config: &TransformerConfig, max_batch_size: usize, device: &Device) -> Self {
+        // One block spans a lane's whole sequence space at this stage, so the pool is one block per
+        // lane plus the sentinel — the same bytes as the old per-lane slab plus one row. Shrinking
+        // the block (many small blocks per lane) is the next stage; only these two numbers change.
+        let block_size = config.max_seq_len;
+        let num_blocks = max_batch_size + 1;
         let cache = (0..config.n_layers)
             .map(|_| {
                 KeyValueCache::new(
-                    max_batch_size,
+                    num_blocks,
                     config.n_kv_heads,
-                    config.max_seq_len,
+                    block_size,
                     config.d_model / config.n_heads,
                     device,
                 )
@@ -174,6 +191,7 @@ impl TransformerCache {
             device: device.clone(),
             max_seq_len: config.max_seq_len,
             lens: vec![0; max_batch_size],
+            pool: BlockPool::new(block_size, num_blocks, max_batch_size),
         }
     }
 
@@ -231,6 +249,30 @@ impl TransformerCache {
             }
         }
 
+        // Grow every lane's block table to cover this forward, BEFORE any length advances — ensure,
+        // then advance, so a failure leaves every lane exactly as it was. `ensure_capacity` is
+        // all-or-nothing per lane; the loop below extends that to the whole round by unwinding the
+        // lanes already grown when a later one cannot fit. Allocation happens only here, before any
+        // layer runs, so the write path downstream never allocates. (While one block spans the whole
+        // sequence space the pool cannot actually run dry — every lane needs at most one block, and
+        // the pool holds one per lane — but the rollback is the contract the smaller block sizes of
+        // the next stage inherit.)
+        let mut grown: Vec<(usize, usize)> = Vec::with_capacity(lanes.len());
+        for &lane in lanes {
+            let before = self.pool.lane_blocks(lane).len();
+            match self.pool.ensure_capacity(lane, self.lens[lane] + seq_len) {
+                Ok(()) => grown.push((lane, before)),
+                Err(exhausted) => {
+                    for &(grown_lane, keep) in &grown {
+                        self.pool.truncate_lane(grown_lane, keep);
+                    }
+                    return Err(GenerationError::KvPoolExhausted {
+                        short_by: exhausted.short_by,
+                    });
+                }
+            }
+        }
+
         let starts: Vec<usize> = lanes.iter().map(|&lane| self.lens[lane]).collect();
         let n = lanes.len();
         let l_max = starts.iter().map(|s| s + seq_len).max().expect("n >= 1");
@@ -253,9 +295,17 @@ impl TransformerCache {
             self.lens[lane] += seq_len;
         }
 
+        // Snapshot each lane's covering blocks into the plan, in `lanes` order — the same order the
+        // mask and RoPE rows use — so the layers address KV purely through the plan.
+        let tables: Vec<Vec<u32>> = lanes
+            .iter()
+            .map(|&lane| self.pool.lane_blocks(lane).to_vec())
+            .collect();
+
         Ok(LanePlan {
             lanes: lanes.to_vec(),
             starts,
+            tables,
             mask,
         })
     }
@@ -280,6 +330,7 @@ impl TransformerCache {
             return;
         }
         self.lens[lane] = 0;
+        self.pool.free_lane(lane);
     }
 }
 
@@ -485,7 +536,7 @@ mod tests {
             let x = Tensor::ones([lanes.len(), config.n_kv_heads, seq_len, head_dim], &device);
             let plan = cache.prepare_lanes(lanes, seq_len).unwrap();
             for layer in cache.layers.iter_mut() {
-                layer.forward_lanes(&plan.lanes, &plan.starts, x.clone(), x.clone());
+                layer.forward_lanes(&plan.tables, &plan.starts, x.clone(), x.clone());
             }
         };
 
@@ -516,5 +567,37 @@ mod tests {
         cache.reset_lane(5); // 5 >= lane_count 2 — must not panic
         assert_eq!(cache.lane_count(), 2);
         assert_eq!(cache.lane_len(0), 3, "an in-range lane is untouched");
+    }
+
+    /// Pool exhaustion mid-round is all-or-nothing across the WHOLE round: when one lane of a
+    /// multi-lane `prepare_lanes` cannot get its block, the lanes already grown this round are
+    /// unwound too — no length advances, no table grows, and the free stack is exactly as it was.
+    /// The production pool (one block per lane) can never run dry, so the test swaps in a smaller
+    /// one; smaller block sizes inherit this contract, where exhaustion becomes reachable for real.
+    #[test]
+    fn test_pool_exhaustion_rolls_back_the_whole_round() {
+        let config = lane_test_config(8);
+        let mut cache = TransformerCache::new(&config, 3, &Default::default());
+        // Three lanes, but a pool with only two usable blocks.
+        cache.pool = BlockPool::new(8, 3, 3);
+
+        let err = cache.prepare_lanes(&[0, 1, 2], 4).unwrap_err();
+        assert!(
+            matches!(err, GenerationError::KvPoolExhausted { short_by: 1 }),
+            "expected a one-block shortfall: {err:?}"
+        );
+        for lane in 0..3 {
+            assert_eq!(cache.lane_len(lane), 0, "lane {lane}: no length may survive the rollback");
+            assert!(
+                cache.pool.lane_blocks(lane).is_empty(),
+                "lane {lane}: no block may survive the rollback"
+            );
+        }
+        assert_eq!(cache.pool.free_blocks(), 2, "the free stack is exactly as it was");
+
+        // The pool still serves what fits: two lanes prefill fine after the failed round.
+        let plan = cache.prepare_lanes(&[0, 1], 4).unwrap();
+        assert_eq!(plan.tables.len(), 2);
+        assert!(plan.tables.iter().all(|t| t.len() == 1));
     }
 }

@@ -85,11 +85,16 @@ fn bench(device: &Device, dtype: DType) -> Vec<BenchmarkResult> {
         let mut tcache = TransformerCache::new(&cfg, batch_size, device);
 
         // Prefill every lane to PROMPT_LEN so the decode step attends over real history.
+        // Keep each lane's prefill plan: its block table is where the standalone KV cache below
+        // must seed, so the seeding lands in the same blocks the decode plan will address.
+        let mut tables: Vec<Vec<u32>> = Vec::with_capacity(batch_size);
         for lane in 0..batch_size {
-            tcache.prepare_lanes(&[lane], PROMPT_LEN).unwrap();
+            let plan = tcache.prepare_lanes(&[lane], PROMPT_LEN).unwrap();
+            tables.push(plan.tables[0].clone());
         }
         let mut cache =
-            KeyValueCache::new(batch_size, n_kv_heads, max_seq_length, head_dim, device);
+            KeyValueCache::new(
+            batch_size + 1, n_kv_heads, max_seq_length, head_dim, device);
         let lanes: Vec<usize> = (0..batch_size).collect();
         let prompt_kv = Tensor::<4>::random(
             [batch_size, n_kv_heads, PROMPT_LEN, head_dim],
@@ -100,7 +105,7 @@ fn bench(device: &Device, dtype: DType) -> Vec<BenchmarkResult> {
         // two stay in lockstep: the plan's per-lane starts (PROMPT_LEN) are exactly where the next
         // token writes.
         cache.forward_lanes(
-            &lanes,
+            &tables,
             &vec![0usize; batch_size],
             prompt_kv.clone(),
             prompt_kv,

@@ -124,13 +124,17 @@ fn bench(device: &Device, dtype: DType) -> Vec<BenchmarkResult> {
             )
             .with_max_seq_len(max_seq_length);
             let mut tcache = TransformerCache::new(&tcfg, batch_size, device);
+            // Keep each lane's prefill plan: its block table is where the standalone KV cache
+            // below must seed, so the seeding lands in the same blocks the decode plan addresses.
+            let mut tables: Vec<Vec<u32>> = Vec::with_capacity(batch_size);
             for lane in 0..batch_size {
-                tcache.prepare_lanes(&[lane], PROMPT_LEN).unwrap();
+                let plan = tcache.prepare_lanes(&[lane], PROMPT_LEN).unwrap();
+                tables.push(plan.tables[0].clone());
             }
 
             // Seed the block's own KV buffer to the same prefilled state.
             let mut cache = KeyValueCache::new(
-                batch_size,
+                batch_size + 1,
                 config.n_heads_kv,
                 max_seq_length,
                 head_dim,
@@ -143,7 +147,7 @@ fn bench(device: &Device, dtype: DType) -> Vec<BenchmarkResult> {
                 device,
             );
             cache.forward_lanes(
-                &lanes,
+                &tables,
                 &vec![0usize; batch_size],
                 prompt_kv.clone(),
                 prompt_kv,

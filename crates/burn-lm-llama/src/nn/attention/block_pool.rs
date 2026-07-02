@@ -38,7 +38,7 @@ pub struct PoolExhausted {
 /// overwritten. That is safe only because every ragged read is masked — the same contract the slab's
 /// ragged read-back relies on today. If a future change ever weakens the mask, blocks must be zeroed
 /// on free instead.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct BlockPool {
     /// Tokens per block. Fixed at construction, never per-sequence.
     block_size: usize,
@@ -119,6 +119,17 @@ impl BlockPool {
     pub fn free_lane(&mut self, lane: usize) {
         let blocks = std::mem::take(&mut self.tables[lane]);
         self.free.extend(blocks);
+        self.check_invariants();
+    }
+
+    /// Shrink `lane`'s table back to its first `keep` blocks, returning the excess to the free
+    /// stack. This is the round-level rollback primitive: when one lane's `ensure_capacity` fails
+    /// mid-round, the caller unwinds the lanes it already grew this round so the whole round is
+    /// all-or-nothing, not just the failing lane.
+    pub fn truncate_lane(&mut self, lane: usize, keep: usize) {
+        let keep = keep.min(self.tables[lane].len());
+        let excess = self.tables[lane].split_off(keep);
+        self.free.extend(excess);
         self.check_invariants();
     }
 

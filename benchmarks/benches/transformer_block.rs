@@ -146,7 +146,7 @@ fn bench(device: &Device, dtype: DType) -> Vec<BenchmarkResult> {
                 Distribution::Default,
                 device,
             );
-            cache.forward_lanes(
+            cache.write_lanes(
                 &tables,
                 &vec![0usize; batch_size],
                 prompt_kv.clone(),

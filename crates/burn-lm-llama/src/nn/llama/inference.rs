@@ -41,8 +41,9 @@ pub struct Llama<T: Tokenizer> {
 pub struct LlamaDecoder {
     /// Llama decoder-only transformer.
     pub model: Transformer,
-    /// Shared, lane-indexed KV cache (one lane per engine slot). Writes and reads are lane-sliced,
-    /// and `release` resets a lane.
+    /// Shared paged KV cache (one lane per engine slot): per-layer block stores plus the block
+    /// allocator and lane lengths. Writes and reads are addressed through per-lane block tables,
+    /// and `release` frees a lane's blocks back to the pool.
     pub cache: TransformerCache,
     /// Rotary positional encoding (RoPE). Lane decode reads `rope` directly at each lane's absolute
     /// position, with no table shift.
@@ -97,8 +98,10 @@ impl BatchedDecoder for LlamaDecoder {
     ///
     /// A `position == 0` prompt is a new sequence: reset the lane first so a fresh sequence can
     /// never resume a previous occupant's KV. Normally `release` already did this, so resetting
-    /// again is a no-op that lets the lane recover if some release was missed. Chunked prompts
-    /// (`position > 0`, future work) legitimately continue the lane's state.
+    /// again is a no-op that lets the lane recover if some release was missed. A chunked prompt
+    /// (`position > 0`) legitimately continues the lane's state: `prefill` may be called repeatedly
+    /// on the same slot with strictly increasing `position` and contiguous token ranges, each call
+    /// appending KV at `position == lane_len(slot)`.
     fn prefill(
         &mut self,
         slot: usize,

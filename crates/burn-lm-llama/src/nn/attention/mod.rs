@@ -1,5 +1,5 @@
 mod block_pool;
-mod cache;
+mod block_store;
 mod kv_cache;
 mod mha;
 

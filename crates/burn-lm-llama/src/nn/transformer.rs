@@ -137,6 +137,15 @@ pub struct LanePlan {
     /// artifact a future prefill/decode split would ship: "prefill output = block list" is a literal
     /// value here.
     pub tables: Vec<Vec<u32>>,
+    /// The round's KV gather index, prebuilt from `tables`: `blocks_per_lane` block ids per lane in
+    /// position order, short lanes padded with the zeroed sentinel. A pure function of the round, so
+    /// it is uploaded once here and every layer's K and V gather through the same handle.
+    pub gather_idx: Tensor<1, Int>,
+    /// Blocks per lane in `gather_idx`: enough to cover `l_max`.
+    pub blocks_per_lane: usize,
+    /// The longest active lane's length after this forward — the width of the gathered KV and of
+    /// the mask's last dimension.
+    pub l_max: usize,
     /// The per-lane attention mask, shaped `[n, 1, q, l_max]`, where `true` means masked. Row `r` of
     /// lane `j` may attend to columns `0..=starts[j] + r`; everything past that is masked off — both
     /// the lane's own future and the stale buffer tail out to the longest active lane. The attention
@@ -146,10 +155,10 @@ pub struct LanePlan {
     pub mask: Tensor<4, Bool>,
 }
 
-/// The model-owned KV cache for one batch of lanes: the per-layer key/value buffers plus the only
-/// length bookkeeping in the system. Each lane is an independent sequence sharing the fixed-size
-/// buffers, and a lane is addressed by its row index throughout. The whole batched decode loop runs
-/// against one of these.
+/// The model-owned KV cache for one batch of lanes: the per-layer key/value block stores plus the
+/// only length-and-ownership bookkeeping in the system. Each lane is an independent sequence drawing
+/// blocks from a shared pool; a lane is a logical index here, mapped to physical blocks by its
+/// table. The whole batched decode loop runs against one of these.
 #[derive(Clone, Debug)]
 pub struct TransformerCache {
     layers: Vec<KeyValueCache>,
@@ -328,10 +337,27 @@ impl TransformerCache {
             .map(|&lane| self.pool.lane_blocks(lane).to_vec())
             .collect();
 
+        // Prebuild the round's gather index — like the mask, a pure per-round artifact: every
+        // layer's K and V gather through this one uploaded tensor instead of rebuilding it.
+        let blocks_per_lane = l_max.div_ceil(self.pool.block_size());
+        let ids: Vec<i32> = tables
+            .iter()
+            .flat_map(|table| {
+                (0..blocks_per_lane).map(|i| *table.get(i).unwrap_or(&SENTINEL_BLOCK) as i32)
+            })
+            .collect();
+        let gather_idx = Tensor::<1, Int>::from_data(
+            burn::tensor::TensorData::new(ids, [lanes.len() * blocks_per_lane]),
+            &self.device,
+        );
+
         Ok(LanePlan {
             lanes: lanes.to_vec(),
             starts,
             tables,
+            gather_idx,
+            blocks_per_lane,
+            l_max,
             mask,
         })
     }
@@ -562,7 +588,7 @@ mod tests {
             let x = Tensor::ones([lanes.len(), config.n_kv_heads, seq_len, head_dim], &device);
             let plan = cache.prepare_lanes(lanes, seq_len).unwrap();
             for layer in cache.layers.iter_mut() {
-                layer.forward_lanes(&plan.tables, &plan.starts, x.clone(), x.clone());
+                layer.write_lanes(&plan.tables, &plan.starts, x.clone(), x.clone());
             }
         };
 

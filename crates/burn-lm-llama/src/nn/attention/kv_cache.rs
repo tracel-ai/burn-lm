@@ -1,14 +1,15 @@
 use burn::tensor::{Device, Tensor};
 
-use super::cache::AutoregressiveCache;
+use super::block_store::BlockStore;
+use crate::nn::transformer::LanePlan;
 
 /// Key-value cache for autoregressive models: a pool of KV blocks, keys and values side by side.
-/// One block id names the same row in both pools, so a lane's block table addresses its keys and
+/// One block id names the same row in both stores, so a lane's block table addresses its keys and
 /// its values at once.
 #[derive(Debug, Clone)]
 pub struct KeyValueCache {
-    key: AutoregressiveCache,
-    value: AutoregressiveCache,
+    key: BlockStore,
+    value: BlockStore,
 }
 
 impl KeyValueCache {
@@ -22,25 +23,44 @@ impl KeyValueCache {
         device: &Device,
     ) -> Self {
         Self {
-            key: AutoregressiveCache::new([num_blocks, num_heads, block_size, d_model], device),
-            value: AutoregressiveCache::new([num_blocks, num_heads, block_size, d_model], device),
+            key: BlockStore::new([num_blocks, num_heads, block_size, d_model], device),
+            value: BlockStore::new([num_blocks, num_heads, block_size, d_model], device),
         }
     }
 
-    /// Update the key and value caches for one round, one lane per row. Row `j` of `key`/`value` is
-    /// written into the blocks of `tables[j]` at logical offset `starts[j]`, the caller's length for
-    /// that lane. Returns the active lanes' keys and values up to the longest active lane; the
-    /// caller masks each lane's stale tail. This is the only thing this cache does — the underlying
-    /// pools carry no length or ownership state of their own.
-    pub fn forward_lanes(
+    /// Write one round's new keys and values, without reading back. Row `j` of `key`/`value` lands
+    /// in the blocks of `tables[j]` at logical offset `starts[j]`. This is the seeding/write half of
+    /// `forward_lanes`, for callers (benchmarks, tests) that fill lanes without running attention.
+    pub fn write_lanes(
         &mut self,
         tables: &[Vec<u32>],
         starts: &[usize],
         key: Tensor<4>,
         value: Tensor<4>,
+    ) {
+        self.key.write_lanes(tables, starts, key);
+        self.value.write_lanes(tables, starts, value);
+    }
+
+    /// Update the key and value caches for one round, one lane per row: write each lane's new
+    /// keys/values into its blocks, then gather every active lane back out to the round's `l_max`.
+    /// The plan carries all the addressing — tables and offsets for the writes, the prebuilt gather
+    /// index for the reads (one index upload per round, shared by every layer's K and V) — so this
+    /// cache holds no length or ownership state of its own. The caller masks each lane's stale tail.
+    pub fn forward_lanes(
+        &mut self,
+        plan: &LanePlan,
+        key: Tensor<4>,
+        value: Tensor<4>,
     ) -> (Tensor<4>, Tensor<4>) {
-        let k = self.key.append_lanes(tables, starts, key);
-        let v = self.value.append_lanes(tables, starts, value);
+        self.key.write_lanes(&plan.tables, &plan.starts, key);
+        self.value.write_lanes(&plan.tables, &plan.starts, value);
+        let k = self
+            .key
+            .gather(plan.gather_idx.clone(), plan.blocks_per_lane, plan.l_max);
+        let v = self
+            .value
+            .gather(plan.gather_idx.clone(), plan.blocks_per_lane, plan.l_max);
         (k, v)
     }
 }

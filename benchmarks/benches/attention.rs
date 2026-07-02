@@ -104,7 +104,7 @@ fn bench(device: &Device, dtype: DType) -> Vec<BenchmarkResult> {
         // Seed every lane's KV from offset 0, mirroring the TransformerCache prefill above so the
         // two stay in lockstep: the plan's per-lane starts (PROMPT_LEN) are exactly where the next
         // token writes.
-        cache.forward_lanes(
+        cache.write_lanes(
             &tables,
             &vec![0usize; batch_size],
             prompt_kv.clone(),

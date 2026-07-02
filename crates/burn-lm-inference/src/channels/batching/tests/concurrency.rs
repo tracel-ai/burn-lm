@@ -560,3 +560,44 @@ fn chunked_prefill_defers_sampling_to_the_final_chunk() {
     );
     assert_eq!(active[0].generated, 1);
 }
+
+/// A forward error on an INTERMEDIATE prefill chunk retires the sequence with that error, just as a
+/// one-shot prefill failure does — it must not linger half-prefilled, pinning a slot. This covers the
+/// chunked path's error branch, which a non-final chunk reaches (the final chunk fails through the
+/// shared `advance_or_fail` path instead).
+#[test]
+fn a_failed_prefill_chunk_retires_the_sequence() {
+    fn seq(tokens: Vec<u32>, max_gen: usize) -> ActiveSeq<()> {
+        ActiveSeq {
+            slot: 0,
+            tokens,
+            processed: 0,
+            generated: 0,
+            max_gen,
+            finished: false,
+            extra: (),
+        }
+    }
+    // Fail the first prefill call. For a 10-token prompt at chunk 4 that first call is chunk [0,4) —
+    // an intermediate chunk, still short of the full prompt — so it exercises the chunked error path.
+    let mut decoder = FakeDecoder::new(Arc::new(Mutex::new(Vec::new())), 100);
+    decoder.fail_prefills = 1;
+    let mut active = vec![seq((1..=10).collect(), 8)];
+
+    let mut budget = PrefillBudget::for_round(&active);
+    let outcomes = step_round(&mut decoder, &mut active, &[], &mut budget, 4, argmax_rows);
+
+    assert!(
+        matches!(outcomes[0], StepOutcome::Failed(_)),
+        "a failed intermediate chunk retires the sequence: {:?}",
+        outcomes[0]
+    );
+    assert!(
+        active[0].finished,
+        "the sequence is marked finished so the retire sweep frees its slot"
+    );
+    assert_eq!(
+        active[0].generated, 0,
+        "a prompt that failed before its final chunk produced no token"
+    );
+}

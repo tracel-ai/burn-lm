@@ -167,13 +167,39 @@ pub struct TransformerCache {
     pool: BlockPool,
 }
 
+/// Tokens per KV block. Small enough that a short sequence's footprint is a few blocks instead of a
+/// whole `max_seq_len` stripe (the point of paging), large enough that per-block gather granularity
+/// stays cheap — at most `block_size - 1` wasted columns per lane per read. A model with a context
+/// window smaller than this just uses one block per lane (the block is clamped to the window).
+pub(crate) const DEFAULT_BLOCK_SIZE: usize = 128;
+
 impl TransformerCache {
     pub fn new(config: &TransformerConfig, max_batch_size: usize, device: &Device) -> Self {
-        // One block spans a lane's whole sequence space at this stage, so the pool is one block per
-        // lane plus the sentinel — the same bytes as the old per-lane slab plus one row. Shrinking
-        // the block (many small blocks per lane) is the next stage; only these two numbers change.
-        let block_size = config.max_seq_len;
-        let num_blocks = max_batch_size + 1;
+        Self::new_with_block_size(
+            config,
+            max_batch_size,
+            DEFAULT_BLOCK_SIZE.min(config.max_seq_len),
+            device,
+        )
+    }
+
+    /// Like [`Self::new`] with an explicit block size — the seam the block-size equivalence tests
+    /// drive, and where a measured, per-platform tuning of the default would plug in.
+    pub fn new_with_block_size(
+        config: &TransformerConfig,
+        max_batch_size: usize,
+        block_size: usize,
+        device: &Device,
+    ) -> Self {
+        assert!(
+            block_size >= 1 && block_size <= config.max_seq_len,
+            "block_size must be in 1..=max_seq_len"
+        );
+        // The pool holds the same tokens as the old rectangle — `max_batch_size × max_seq_len` —
+        // just cut into blocks, plus the zeroed sentinel. Decoupling the pool's size from the
+        // rectangle (so lanes can oversubscribe it) is a later, engine-side change; the layout
+        // stops depending on it here.
+        let num_blocks = (max_batch_size * config.max_seq_len).div_ceil(block_size) + 1;
         let cache = (0..config.n_layers)
             .map(|_| {
                 KeyValueCache::new(

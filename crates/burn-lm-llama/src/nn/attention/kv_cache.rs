@@ -7,8 +7,8 @@ use super::cache::AutoregressiveCache;
 /// its values at once.
 #[derive(Debug, Clone)]
 pub struct KeyValueCache {
-    key: AutoregressiveCache<4>,
-    value: AutoregressiveCache<4>,
+    key: AutoregressiveCache,
+    value: AutoregressiveCache,
 }
 
 impl KeyValueCache {
@@ -22,12 +22,8 @@ impl KeyValueCache {
         device: &Device,
     ) -> Self {
         Self {
-            key: AutoregressiveCache::new([num_blocks, num_heads, block_size, d_model], 2, device),
-            value: AutoregressiveCache::new(
-                [num_blocks, num_heads, block_size, d_model],
-                2,
-                device,
-            ),
+            key: AutoregressiveCache::new([num_blocks, num_heads, block_size, d_model], device),
+            value: AutoregressiveCache::new([num_blocks, num_heads, block_size, d_model], device),
         }
     }
 

@@ -99,6 +99,32 @@ fn test_llama_lanes(n_lanes: usize, device: &Device) -> Llama<ByteTokenizer> {
     llama
 }
 
+/// Like `test_llama_lanes`, but with the KV cache rebuilt at an explicit block size, so the
+/// equivalence tests can drive the multi-block paths (boundary-splitting writes, sentinel-padded
+/// multi-block gathers) that the default — one block spanning the tiny model's whole context —
+/// never reaches. The swap happens before any token is written: a fresh cache, not a migration.
+fn test_llama_lanes_with_block_size(
+    n_lanes: usize,
+    block_size: usize,
+    device: &Device,
+) -> Llama<ByteTokenizer> {
+    use crate::nn::transformer::{TransformerCache, TransformerConfig};
+    let mut llama = test_llama_lanes(n_lanes, device);
+    let cfg = LlamaConfig::llama3_2_1b_test();
+    let tcfg = TransformerConfig::new(
+        cfg.vocab_size,
+        cfg.num_hidden_layers,
+        cfg.d_model,
+        cfg.hidden_size,
+        cfg.num_attention_heads,
+        cfg.num_key_value_heads.unwrap_or(cfg.num_attention_heads),
+    )
+    .with_max_seq_len(cfg.max_seq_len)
+    .with_norm_eps(cfg.norm_eps);
+    llama.decoder.cache = TransformerCache::new_with_block_size(&tcfg, n_lanes, block_size, device);
+    llama
+}
+
 /// Greedy multi-lane run through the real decoder: staggered prefill into each lane, then fused
 /// `[n, 1]` decode rounds. Returns each lane's (argmax stream, per-step last-position logits).
 fn real_decoder_batched_run(
@@ -106,9 +132,19 @@ fn real_decoder_batched_run(
     steps: usize,
     device: &Device,
 ) -> Vec<(Vec<u32>, Vec<Vec<f32>>)> {
+    let llama = test_llama_lanes(prompts.len(), device);
+    batched_run_on(llama, prompts, steps)
+}
+
+/// The batched-run body, on a caller-built model — so the block-size-parameterized test can drive
+/// the identical loop over a cache with small blocks.
+fn batched_run_on(
+    mut llama: Llama<ByteTokenizer>,
+    prompts: &[Vec<u32>],
+    steps: usize,
+) -> Vec<(Vec<u32>, Vec<Vec<f32>>)> {
     let n = prompts.len();
     let vocab = LlamaConfig::llama3_2_1b_test().vocab_size;
-    let mut llama = test_llama_lanes(n, device);
 
     let mut tokens: Vec<Vec<u32>> = vec![Vec::new(); n];
     let mut logits: Vec<Vec<Vec<f32>>> = vec![Vec::new(); n];
@@ -323,7 +359,18 @@ fn chunked_reference_run(
     chunk_size: usize,
     device: &Device,
 ) -> (Vec<u32>, Vec<Vec<f32>>) {
-    let mut llama = test_llama_lanes(1, device);
+    let llama = test_llama_lanes(1, device);
+    chunked_run_on(llama, prompt, steps, chunk_size)
+}
+
+/// The chunked-run body, on a caller-built model — so the block-size-parameterized test can drive
+/// chunked prefill over a cache with small blocks (chunks continuing mid-block and crossing edges).
+fn chunked_run_on(
+    mut llama: Llama<ByteTokenizer>,
+    prompt: &[u32],
+    steps: usize,
+    chunk_size: usize,
+) -> (Vec<u32>, Vec<Vec<f32>>) {
     let vocab = LlamaConfig::llama3_2_1b_test().vocab_size;
     let mut tokens = Vec::with_capacity(steps);
     let mut logits_steps = Vec::with_capacity(steps);
@@ -382,6 +429,69 @@ fn chunked_prefill_matches_monolithic_prefill() {
         assert_eq!(
             tokens, ref_tokens,
             "chunk_size={chunk}: argmax stream diverged from monolithic prefill"
+        );
+        for (got, expected) in logits.iter().zip(ref_logits.iter()) {
+            let got = TensorData::new(got.clone(), [got.len()]);
+            let expected = TensorData::new(expected.clone(), [expected.len()]);
+            got.assert_approx_eq::<f32>(&expected, tolerance);
+        }
+    }
+}
+
+/// Small-block paging is invisible to the model: the fused multi-lane run over a cache cut into
+/// 16-, 32-, and 128-token blocks (128 = the tiny model's whole context, the degenerate one-block
+/// case) matches the independent batch-1 references token for token and logit for logit. At bs=16
+/// the two divergent-position lanes span several blocks each and pad raggedly with the sentinel, so
+/// this drives the boundary-splitting writes and the multi-block stitched gather end to end through
+/// real attention.
+#[test]
+fn small_block_paging_matches_batch1() {
+    let device: Device = Default::default();
+    let prompts = divergent_prompts();
+    let steps = 16;
+    let refs: Vec<_> = prompts
+        .iter()
+        .map(|p| reference_run(p, steps, &device))
+        .collect();
+    let tolerance = Tolerance::<f32>::rel_abs(1e-4, 1e-5);
+    for bs in [16usize, 32, 128] {
+        let llama = test_llama_lanes_with_block_size(prompts.len(), bs, &device);
+        let batched = batched_run_on(llama, &prompts, steps);
+        for (lane, ((tokens, logits), (ref_tokens, ref_logits))) in
+            batched.iter().zip(refs.iter()).enumerate()
+        {
+            assert_eq!(
+                tokens, ref_tokens,
+                "block_size={bs}, lane {lane}: paged argmax stream diverged from batch-1"
+            );
+            for (got, expected) in logits.iter().zip(ref_logits.iter()) {
+                let got = TensorData::new(got.clone(), [got.len()]);
+                let expected = TensorData::new(expected.clone(), [expected.len()]);
+                got.assert_approx_eq::<f32>(&expected, tolerance);
+            }
+        }
+    }
+}
+
+/// Chunked prefill over small blocks: chunks that end mid-block (the next chunk continues in the
+/// same partial tail block) and chunks that cross block edges must still be token-for-token
+/// equivalent to a monolithic prefill. Chunk width 7 against 16-token blocks puts a seam at every
+/// alignment; width 24 against 32-token blocks crosses an edge inside a single chunk.
+#[test]
+fn chunked_prefill_across_small_blocks_matches_monolithic() {
+    let device: Device = Default::default();
+    let prompt = prompt_bytes("This is a sufficiently long prompt to split into prefill chunks", 48);
+    let steps = 12;
+    let (ref_tokens, ref_logits) = reference_run(&prompt, steps, &device);
+    // Same tolerance as the chunked-prefill gate: chunking reassociates the final chunk's attention
+    // (see `chunked_prefill_matches_monolithic_prefill`); the token stream stays exact.
+    let tolerance = Tolerance::<f32>::rel_abs(2e-3, 1e-4);
+    for (bs, chunk) in [(16usize, 7usize), (16, 16), (32, 24)] {
+        let llama = test_llama_lanes_with_block_size(1, bs, &device);
+        let (tokens, logits) = chunked_run_on(llama, &prompt, steps, chunk);
+        assert_eq!(
+            tokens, ref_tokens,
+            "block_size={bs}, chunk={chunk}: argmax stream diverged from monolithic prefill"
         );
         for (got, expected) in logits.iter().zip(ref_logits.iter()) {
             let got = TensorData::new(got.clone(), [got.len()]);

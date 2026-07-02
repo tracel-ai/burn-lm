@@ -3,49 +3,51 @@ use burn::tensor::{Device, Int, Tensor, TensorData};
 use super::block_pool::SENTINEL_BLOCK;
 
 #[derive(Debug, Clone)]
-/// A fixed-size pool of KV blocks. Dimension 0 is the block id; every other dimension is per-token
-/// state. This type is purely physical: it neither knows which lane owns which block nor tracks any
-/// lengths — the caller (`TransformerCache`, via the `BlockPool` allocator) hands every call the
-/// block table and write offset to use, so the same pool serves any lane-to-block assignment. Writes
-/// address a block row; the read-back gathers whole blocks by id and trims to the requested length.
+/// A fixed-size pool of KV blocks, shaped `[num_blocks, num_heads, block_size, head_dim]`. This type
+/// is purely physical: it neither knows which lane owns which block nor tracks any lengths — the
+/// caller (`TransformerCache`, via the `BlockPool` allocator) hands every call the block tables and
+/// write offsets to use, so the same pool serves any lane-to-block assignment. A lane's positions
+/// map onto its table in order: position `p` lives in block `table[p / block_size]` at offset
+/// `p % block_size`. Writes address block rows; the read-back gathers each lane's covering blocks
+/// and trims to the requested length.
 ///
 /// Block 0 is a zeroed sentinel no lane ever owns (the `BlockPool` never allocates it). Ragged
 /// gathers pad short lanes with it, so padding can never read a live block — even a masking bug then
 /// exposes zeros, not another sequence's KV.
-pub(crate) struct AutoregressiveCache<const D: usize> {
-    /// `[num_blocks, ...per-token state]`; row 0 is the sentinel.
-    pool: Tensor<D>,
-    seq_dim: usize,
+pub(crate) struct AutoregressiveCache {
+    /// `[num_blocks, num_heads, block_size, head_dim]`; row 0 is the sentinel.
+    pool: Tensor<4>,
 }
 
-impl<const D: usize> AutoregressiveCache<D> {
-    /// Creates an empty pool of `shape[0]` blocks, each spanning `shape[seq_dim]` positions. Only
-    /// the sentinel (block 0) is initialized, to zeros; every other block holds garbage until
-    /// written, exactly like the old slab.
-    pub fn new(shape: [usize; D], seq_dim: usize, device: &Device) -> Self {
-        debug_assert_ne!(seq_dim, 0, "dimension 0 is the block id");
+impl AutoregressiveCache {
+    /// Creates an empty pool of `shape[0]` blocks, each spanning `shape[2]` positions. Only the
+    /// sentinel (block 0) is initialized, to zeros; every other block holds garbage until written,
+    /// exactly like the old slab.
+    pub fn new(shape: [usize; 4], device: &Device) -> Self {
         let pool = Tensor::empty(shape, device);
 
         // Zero the sentinel row.
-        let mut row_shape = shape;
-        row_shape[0] = 1;
-        let zeros = Tensor::zeros(row_shape, device);
-        let mut sentinel_idx: Vec<_> = shape.iter().map(|&d| 0..d).collect();
-        sentinel_idx[0] = 0..1;
-        let pool = pool.slice_assign(sentinel_idx.as_slice(), zeros);
+        let [_, heads, bs, head_dim] = shape;
+        let zeros = Tensor::zeros([1, heads, bs, head_dim], device);
+        let pool = pool.slice_assign([0..1, 0..heads, 0..bs, 0..head_dim], zeros);
 
-        Self { pool, seq_dim }
+        Self { pool }
     }
 
     /// Tokens per block: the sequence extent of one block row.
     fn block_size(&self) -> usize {
-        self.pool.shape()[self.seq_dim]
+        self.pool.shape()[2]
     }
 
     /// Write each active lane's new tokens into its blocks, then gather the active lanes back. Row
-    /// `j` of `tokens` lands in the blocks of `tables[j]` at logical offset `starts[j]`, which the
-    /// caller supplies as that lane's length before this write; `tables[j]` must already cover
-    /// `starts[j] + seq_len_input` positions (the allocator grew it before the forward).
+    /// `j` of `tokens` lands in the blocks of `tables[j]` starting at logical position `starts[j]`,
+    /// which the caller supplies as that lane's length before this write; `tables[j]` must already
+    /// cover `starts[j] + seq_len_input` positions (the allocator grew it before the forward).
+    ///
+    /// A write that crosses block boundaries is split at each edge, one `slice_assign` per touched
+    /// block: a prefill chunk continues in the partial tail block the previous chunk left, fills it,
+    /// and spills the rest into the following blocks of the table. The single-token decode write —
+    /// the hot case — never splits.
     ///
     /// The lanes sit at independent positions, so the read-back spans the longest active lane and the
     /// shorter lanes come back with a stale tail past their own length. The caller MUST mask that tail
@@ -53,50 +55,42 @@ impl<const D: usize> AutoregressiveCache<D> {
     ///
     /// # Shapes
     ///
-    /// - tokens: `[n_active, num_heads, seq_len_input, d_model]`
-    /// - output: `[n_active, num_heads, max(starts) + seq_len_input, d_model]`
+    /// - tokens: `[n_active, num_heads, seq_len_input, head_dim]`
+    /// - output: `[n_active, num_heads, max(starts) + seq_len_input, head_dim]`
     pub fn append_lanes(
         &mut self,
         tables: &[Vec<u32>],
         starts: &[usize],
-        tokens: Tensor<D>,
-    ) -> Tensor<D> {
-        debug_assert_ne!(self.seq_dim, 0, "block dimension is dim 0");
-        let shape = tokens.shape();
-        debug_assert_eq!(shape[0], tables.len());
+        tokens: Tensor<4>,
+    ) -> Tensor<4> {
+        let [n, heads, seq_len_input, head_dim] = tokens.dims();
+        debug_assert_eq!(n, tables.len());
         debug_assert_eq!(starts.len(), tables.len());
-        let seq_len_input = shape[self.seq_dim];
         let bs = self.block_size();
 
         for (j, table) in tables.iter().enumerate() {
-            let start = starts[j];
-            // The write targets one block: the one covering `start`, at the block-local offset.
-            // Splitting a write that crosses a block boundary arrives with the smaller block sizes
-            // of the next stage; while a block spans the whole sequence space this cannot trigger.
-            let offset = start % bs;
-            debug_assert!(
-                offset + seq_len_input <= bs,
-                "write [{start}, {}) crosses a block boundary; splitting lands in the next stage",
-                start + seq_len_input
-            );
-            let block = table[start / bs] as usize;
-            let mut value_idx = Vec::with_capacity(shape.len());
-            let mut pool_idx = Vec::with_capacity(shape.len());
-            for (i, dim) in shape.iter().enumerate() {
-                if i == 0 {
-                    value_idx.push(j..j + 1);
-                    pool_idx.push(block..block + 1);
-                } else if i == self.seq_dim {
-                    value_idx.push(0..seq_len_input);
-                    pool_idx.push(offset..offset + seq_len_input);
-                } else {
-                    value_idx.push(0..*dim);
-                    pool_idx.push(0..*dim);
-                }
+            // Walk the lane's new tokens block by block: each pass writes the largest piece that
+            // fits in the block covering the current position, then moves to the next block edge.
+            let mut written = 0;
+            while written < seq_len_input {
+                let position = starts[j] + written;
+                let block = table[position / bs] as usize;
+                let offset = position % bs;
+                let piece = (bs - offset).min(seq_len_input - written);
+                let row = tokens.clone().slice([
+                    j..j + 1,
+                    0..heads,
+                    written..written + piece,
+                    0..head_dim,
+                ]);
+                self.pool.inplace(|pool| {
+                    pool.slice_assign(
+                        [block..block + 1, 0..heads, offset..offset + piece, 0..head_dim],
+                        row,
+                    )
+                });
+                written += piece;
             }
-            let row = tokens.clone().slice(value_idx.as_slice());
-            self.pool
-                .inplace(|pool| pool.slice_assign(pool_idx.as_slice(), row));
         }
 
         // Gather the active lanes back, ragged tails included (mask handles them). This is the read
@@ -106,26 +100,35 @@ impl<const D: usize> AutoregressiveCache<D> {
         self.gather_blocks(tables, l_max)
     }
 
-    /// Read the given lanes' blocks as one `[n, ..., l_max, ...]` tensor: select each lane's
-    /// covering blocks by id — padding lanes shorter than the batch max with the zeroed sentinel —
-    /// then trim the sequence dimension to `l_max`. Whole blocks are selected before the trim (the
-    /// granularity cost of paging), so this leans on the backend fusing select+slice; the decode
-    /// latency gate measures whether it does.
-    fn gather_blocks(&self, tables: &[Vec<u32>], l_max: usize) -> Tensor<D> {
-        let bs = self.block_size();
+    /// Read the given lanes' blocks as one `[n, heads, l_max, head_dim]` tensor. Each lane
+    /// contributes the `nb` blocks covering `l_max` positions — lanes with shorter tables are padded
+    /// with the zeroed sentinel — selected in one indexed gather, stitched back into a contiguous
+    /// sequence, and trimmed to `l_max`. Whole blocks are selected before the trim (the granularity
+    /// cost of paging, at most `block_size - 1` wasted columns per lane), and this leans on the
+    /// backend fusing the chain; the decode latency gate measures whether it does.
+    fn gather_blocks(&self, tables: &[Vec<u32>], l_max: usize) -> Tensor<4> {
+        let [_, heads, bs, head_dim] = self.pool.dims();
         let nb = l_max.div_ceil(bs);
-        debug_assert_eq!(nb, 1, "multi-block gather lands in the next stage");
         let ids: Vec<i32> = tables
             .iter()
             .flat_map(|table| (0..nb).map(|i| *table.get(i).unwrap_or(&SENTINEL_BLOCK) as i32))
             .collect();
         let n = tables.len();
         let idx = Tensor::<1, Int>::from_data(TensorData::new(ids, [n * nb]), &self.pool.device());
-        let pool_shape = self.pool.shape();
-        let mut trim: Vec<_> = pool_shape.iter().map(|&d| 0..d).collect();
-        trim[0] = 0..n;
-        trim[self.seq_dim] = 0..l_max;
-        self.pool.clone().select(0, idx).slice(trim.as_slice())
+        // Select every lane's covering blocks, then stitch each lane's blocks into one contiguous
+        // sequence axis: [n·nb, h, bs, d] -> [n, nb, h, bs, d] -> [n, h, nb, bs, d] -> [n, h, nb·bs, d].
+        //
+        // The clone is a handle (refcount bump), not a copy of the pool — and it must stay AFTER the
+        // writes: `append_lanes` mutates through `inplace`/`slice_assign`, which only skips a full
+        // copy while the pool handle is uniquely owned. A pool clone held across the writes would
+        // turn every layer's KV write into a copy-on-write of the whole pool.
+        self.pool
+            .clone()
+            .select(0, idx)
+            .reshape([n, nb, heads, bs, head_dim])
+            .swap_dims(1, 2)
+            .reshape([n, heads, nb * bs, head_dim])
+            .slice([0..n, 0..heads, 0..l_max, 0..head_dim])
     }
 }
 
@@ -133,6 +136,22 @@ impl<const D: usize> AutoregressiveCache<D> {
 mod tests {
     use super::*;
     use burn::tensor::TensorData;
+
+    /// A `[1, 1, len, 1]` tokens tensor holding `base + position` at each position, so any
+    /// misplacement changes some element.
+    fn vals(base: usize, range: std::ops::Range<usize>) -> Tensor<4> {
+        let data: Vec<f32> = range.map(|p| (base + p) as f32).collect();
+        let len = data.len();
+        Tensor::<4>::from_data(TensorData::new(data, [1, 1, len, 1]), &Default::default())
+    }
+
+    /// The expected `[1, 1, n, 1]` read-back for `base + position` over `0..n`.
+    fn expect(base: usize, n: usize) -> TensorData {
+        TensorData::new(
+            (0..n).map(|p| (base + p) as f32).collect::<Vec<f32>>(),
+            [1, 1, n, 1],
+        )
+    }
 
     /// Lanes at divergent positions: ragged writes land at each lane's own
     /// caller-supplied offset, the read-back covers the longest active lane,
@@ -143,7 +162,7 @@ mod tests {
     fn test_append_lanes_ragged_positions_and_reset_lane() {
         let device = Default::default();
         // [num_blocks=4 (sentinel + 3), heads=1, block_size=8, head_dim=2]
-        let mut cache = AutoregressiveCache::<4>::new([4, 1, 8, 2], 2, &device);
+        let mut cache = AutoregressiveCache::new([4, 1, 8, 2], &device);
         let t0 = vec![3u32]; // lane 0 -> block 3
         let t2 = vec![1u32]; // lane 2 -> block 1
 
@@ -191,22 +210,16 @@ mod tests {
     #[test]
     fn scripted_appends_reproduce_slab_contents_exactly() {
         let device = Default::default();
-        // [num_blocks=3, heads=1, block_size=6, head_dim=1]; every position holds one distinct value
-        // `100·(lane+1) + position`, so any misplacement changes some element.
-        let mut cache = AutoregressiveCache::<4>::new([3, 1, 6, 1], 2, &device);
+        // [num_blocks=3, heads=1, block_size=6, head_dim=1]
+        let mut cache = AutoregressiveCache::new([3, 1, 6, 1], &device);
         let t0 = vec![2u32];
         let t1 = vec![1u32];
-        let vals = |lane: usize, range: std::ops::Range<usize>| {
-            let data: Vec<f32> = range.map(|p| (100 * (lane + 1) + p) as f32).collect();
-            let len = data.len();
-            Tensor::<4>::from_data(TensorData::new(data, [1, 1, len, 1]), &device)
-        };
 
         // Lane 0 prefills 4 tokens in two chunks (the chunked-prefill shape: second append lands at
         // position 2, continuing where the first ended). Lane 1 prefills 3 tokens in one shot.
-        cache.append_lanes(std::slice::from_ref(&t0), &[0], vals(0, 0..2));
-        cache.append_lanes(std::slice::from_ref(&t0), &[2], vals(0, 2..4));
-        cache.append_lanes(std::slice::from_ref(&t1), &[0], vals(1, 0..3));
+        cache.append_lanes(std::slice::from_ref(&t0), &[0], vals(100, 0..2));
+        cache.append_lanes(std::slice::from_ref(&t0), &[2], vals(100, 2..4));
+        cache.append_lanes(std::slice::from_ref(&t1), &[0], vals(200, 0..3));
 
         // One fused decode round: lane 0 writes position 4, lane 1 writes position 3.
         let step = Tensor::<4>::from_data(
@@ -221,12 +234,72 @@ mod tests {
         out.clone()
             .slice([0..1, 0..1, 0..5, 0..1])
             .to_data()
-            .assert_eq(
-                &TensorData::from([[[[100.0f32], [101.0], [102.0], [103.0], [104.0]]]]),
-                false,
-            );
-        out.slice([1..2, 0..1, 0..4, 0..1]).to_data().assert_eq(
-            &TensorData::from([[[[200.0f32], [201.0], [202.0], [203.0]]]]),
+            .assert_eq(&expect(100, 5), false);
+        out.slice([1..2, 0..1, 0..4, 0..1])
+            .to_data()
+            .assert_eq(&expect(200, 4), false);
+    }
+
+    /// A prefill chunk spanning several small blocks is split at every block edge and lands intact:
+    /// start offset 2 into a half-full tail block, 9 more tokens across blocks of 4 — pieces of
+    /// 2 + 4 + 3 — then a decode token crossing into a fresh block. Exercises the worked example of
+    /// the plan: fill the partial tail, spill into following blocks, continue at `position > 0`.
+    #[test]
+    fn writes_split_at_block_boundaries_and_read_back_contiguously() {
+        let device = Default::default();
+        // [num_blocks=5 (sentinel + 4), heads=1, block_size=4, head_dim=1]
+        let mut cache = AutoregressiveCache::new([5, 1, 4, 1], &device);
+        // Deliberately unordered, non-contiguous ids: position i·4.. lives in table[i].
+        let table = vec![3u32, 1, 4];
+
+        // Chunk 1: positions [0, 2) — a partial tail block.
+        cache.append_lanes(std::slice::from_ref(&table), &[0], vals(500, 0..2));
+        // Chunk 2: positions [2, 11) — fills block 3's tail (2), all of block 1 (4), part of 4 (3).
+        let out = cache.append_lanes(std::slice::from_ref(&table), &[2], vals(500, 2..11));
+        assert_eq!(out.dims(), [1, 1, 11, 1]);
+        out.to_data().assert_eq(&expect(500, 11), false);
+
+        // Decode step at position 11: the last slot of table[2]; then position 12 would need a
+        // fourth block — grow the table first, as the allocator does, and write again.
+        let out = cache.append_lanes(std::slice::from_ref(&table), &[11], vals(500, 11..12));
+        out.to_data().assert_eq(&expect(500, 12), false);
+        let grown = vec![3u32, 1, 4, 2];
+        let out = cache.append_lanes(std::slice::from_ref(&grown), &[12], vals(500, 12..13));
+        out.to_data().assert_eq(&expect(500, 13), false);
+    }
+
+    /// Ragged multi-lane gather with small blocks: the long lane sets `l_max`, the short lane's
+    /// missing blocks come back as the zeroed sentinel — provably zeros, not another lane's data —
+    /// and its stale tail inside its own last block is whatever it is (the mask's job, not asserted).
+    #[test]
+    fn short_lanes_pad_with_the_sentinel_never_a_live_block() {
+        let device = Default::default();
+        // [num_blocks=5 (sentinel + 4), heads=1, block_size=2, head_dim=1]
+        let mut cache = AutoregressiveCache::new([5, 1, 2, 1], &device);
+        let long = vec![1u32, 2]; // positions 0..4
+        let short = vec![3u32]; // positions 0..2
+
+        cache.append_lanes(std::slice::from_ref(&long), &[0], vals(700, 0..4));
+        cache.append_lanes(std::slice::from_ref(&short), &[0], vals(900, 0..1));
+
+        // Fused decode: long at position 4 needs a third block (4); short at position 1.
+        let long_grown = vec![1u32, 2, 4];
+        let step = Tensor::<4>::from_data(TensorData::new(vec![704.0f32, 901.0], [2, 1, 1, 1]), &device);
+        let out = cache.append_lanes(&[long_grown, short.clone()], &[4, 1], step);
+
+        // l_max = 5 -> nb = 3 blocks per lane; `short` has one, so blocks 2 and 3 of its row are
+        // the sentinel: columns [2, 5) of its row must read back exactly zero.
+        assert_eq!(out.dims(), [2, 1, 5, 1]);
+        out.clone()
+            .slice([0..1, 0..1, 0..5, 0..1])
+            .to_data()
+            .assert_eq(&expect(700, 5), false);
+        out.clone()
+            .slice([1..2, 0..1, 0..2, 0..1])
+            .to_data()
+            .assert_eq(&expect(900, 2), false);
+        out.slice([1..2, 0..1, 2..5, 0..1]).to_data().assert_eq(
+            &TensorData::new(vec![0.0f32; 3], [1, 1, 3, 1]),
             false,
         );
     }
@@ -236,7 +309,7 @@ mod tests {
     #[test]
     fn sentinel_block_stays_zeroed() {
         let device = Default::default();
-        let mut cache = AutoregressiveCache::<4>::new([3, 1, 4, 1], 2, &device);
+        let mut cache = AutoregressiveCache::new([3, 1, 4, 1], &device);
         cache.append_lanes(
             &[vec![1u32], vec![2u32]],
             &[0, 0],

@@ -164,15 +164,10 @@ pub struct TransformerCache {
     layers: Vec<KeyValueCache>,
     device: Device,
     max_seq_len: usize,
-    /// Each lane's current sequence length, one entry per buffer lane. This is the single source of
-    /// truth for lane lengths: `prepare_lanes` reads these into `LanePlan.starts` and the model
-    /// threads them down as the KV write offsets, so the underlying KV buffers need no counter of
-    /// their own. `prepare_lanes` grows an entry; `reset_lane` zeroes one.
-    lens: Vec<usize>,
-    /// The block allocator: which KV blocks each lane owns, and the shared free stack. One id space
-    /// serves every layer's K and V pools — block `b` names the same row in all of them — so the
-    /// bookkeeping lives here, once, next to `lens`. Tables and lengths advance and roll back
-    /// together: `prepare_lanes` grows both or neither, `reset_lane` clears both.
+    /// The per-lane ledger: each lane's length and block table, plus the shared free stack — the
+    /// only length-and-ownership bookkeeping in the system, in one type so lengths and tables can
+    /// never drift apart. One block-id space serves every layer's K and V stores — block `b` names
+    /// the same row in all of them.
     pool: BlockPool,
 }
 
@@ -225,19 +220,18 @@ impl TransformerCache {
             layers: cache,
             device: device.clone(),
             max_seq_len: config.max_seq_len,
-            lens: vec![0; max_batch_size],
             pool: BlockPool::new(block_size, num_blocks, max_batch_size),
         }
     }
 
     /// Number of buffer lanes (the model's `max_batch_size`).
     pub fn lane_count(&self) -> usize {
-        self.lens.len()
+        self.pool.lane_count()
     }
 
     /// Sequence length of one lane.
     pub fn lane_len(&self, lane: usize) -> usize {
-        self.lens[lane]
+        self.pool.lane_len(lane)
     }
 
     /// The hard per-lane token capacity (the context window). Lane mode does not evict, so no lane
@@ -261,54 +255,36 @@ impl TransformerCache {
         lanes: &[usize],
         seq_len: usize,
     ) -> Result<LanePlan, GenerationError> {
-        // Two invariants the per-lane correctness rests on, checked only in debug builds. The lanes
-        // must be distinct: a repeated lane would advance its length twice while the RoPE and mask
-        // for the second row used the stale start, silently corrupting that lane. And the lanes must
-        // be in range, since an out-of-range lane would otherwise be a raw indexing panic below.
+        // The lanes must be in range, or the ledger lookups below would be raw indexing panics.
+        // (Duplicate lanes are asserted inside `begin_round`, where a repeat would corrupt the
+        // ledger by advancing a length twice.)
         debug_assert!(
-            lanes.iter().collect::<std::collections::HashSet<_>>().len() == lanes.len(),
-            "prepare_lanes got a duplicate lane: {lanes:?}"
-        );
-        debug_assert!(
-            lanes.iter().all(|&lane| lane < self.lens.len()),
+            lanes.iter().all(|&lane| lane < self.pool.lane_count()),
             "prepare_lanes got a lane >= lane_count ({}): {lanes:?}",
-            self.lens.len()
+            self.pool.lane_count()
         );
 
         for &lane in lanes {
-            if self.lens[lane] + seq_len > self.max_seq_len {
+            if self.pool.lane_len(lane) + seq_len > self.max_seq_len {
                 return Err(GenerationError::MaxSequenceLengthExceeded {
-                    actual: self.lens[lane] + seq_len,
+                    actual: self.pool.lane_len(lane) + seq_len,
                     max: self.max_seq_len,
                 });
             }
         }
 
-        // Grow every lane's block table to cover this forward, BEFORE any length advances — ensure,
-        // then advance, so a failure leaves every lane exactly as it was. `ensure_capacity` is
-        // all-or-nothing per lane; the loop below extends that to the whole round by unwinding the
-        // lanes already grown when a later one cannot fit. Allocation happens only here, before any
-        // layer runs, so the write path downstream never allocates. (While one block spans the whole
-        // sequence space the pool cannot actually run dry — every lane needs at most one block, and
-        // the pool holds one per lane — but the rollback is the contract the smaller block sizes of
-        // the next stage inherit.)
-        let mut grown: Vec<(usize, usize)> = Vec::with_capacity(lanes.len());
-        for &lane in lanes {
-            let before = self.pool.lane_blocks(lane).len();
-            match self.pool.ensure_capacity(lane, self.lens[lane] + seq_len) {
-                Ok(()) => grown.push((lane, before)),
-                Err(exhausted) => {
-                    for &(grown_lane, keep) in &grown {
-                        self.pool.truncate_lane(grown_lane, keep);
-                    }
-                    return Err(GenerationError::KvPoolExhausted {
-                        short_by: exhausted.short_by,
-                    });
-                }
-            }
-        }
-
-        let starts: Vec<usize> = lanes.iter().map(|&lane| self.lens[lane]).collect();
+        // Commit the round in the ledger: one transactional call grows every lane's table and
+        // advances every lane's length together — all lanes or none — and hands back the round's
+        // start positions. Allocation happens only here, before any layer runs, so the write path
+        // downstream never allocates. (While the pool matches the old rectangle it cannot actually
+        // run dry — the ceiling check above fires first — but the rollback is the contract an
+        // oversubscribed pool inherits.)
+        let starts = self
+            .pool
+            .begin_round(lanes, seq_len)
+            .map_err(|exhausted| GenerationError::KvPoolExhausted {
+                short_by: exhausted.short_by,
+            })?;
         let n = lanes.len();
         let l_max = starts.iter().map(|s| s + seq_len).max().expect("n >= 1");
 
@@ -325,10 +301,6 @@ impl TransformerCache {
             burn::tensor::TensorData::new(mask_data, [n, 1, seq_len, l_max]),
             &self.device,
         );
-
-        for &lane in lanes {
-            self.lens[lane] += seq_len;
-        }
 
         // Snapshot each lane's covering blocks into the plan, in `lanes` order — the same order the
         // mask and RoPE rows use — so the layers address KV purely through the plan.
@@ -364,7 +336,7 @@ impl TransformerCache {
 
     /// Reset the whole cache by zeroing every lane's length, reused between independent generations.
     pub fn reset(&mut self) {
-        for lane in 0..self.lens.len() {
+        for lane in 0..self.pool.lane_count() {
             self.reset_lane(lane);
         }
     }
@@ -378,10 +350,9 @@ impl TransformerCache {
     /// count — reaching here and indexing the fixed-length length vector out of bounds. Admission
     /// already caps slots at `lane_count` (see `batch_capacity`), so this is a second line of defense.
     pub fn reset_lane(&mut self, lane: usize) {
-        if lane >= self.lens.len() {
+        if lane >= self.pool.lane_count() {
             return;
         }
-        self.lens[lane] = 0;
         self.pool.free_lane(lane);
     }
 }
@@ -574,7 +545,7 @@ mod tests {
     }
 
     /// `reset_lane` zeroes one lane's length, leaving the other lane untouched.
-    /// With `TransformerCache.lens` the single source of length, the freed
+    /// With the pool's ledger the single source of length, the freed
     /// lane's next write lands at offset 0 (the KV caches carry no counter).
     #[test]
     fn test_reset_lane_isolates_one_lane() {

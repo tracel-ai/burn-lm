@@ -1,34 +1,40 @@
-//! Host-side bookkeeping for a paged KV cache: a shared pool of fixed-size blocks and, per lane,
-//! the table mapping the lane's logical token positions onto blocks it has been allocated.
+//! Host-side bookkeeping for the paged KV cache: a shared pool of fixed-size blocks and, per lane,
+//! the ledger of what the lane holds — its current length and the table mapping its logical token
+//! positions onto the blocks it has been allocated.
 //!
-//! Today every lane owns a fixed `max_seq_len` stripe of the KV slab, so capacity is the rectangle
-//! `max_slots × max_seq_len` — paid in full whether a sequence is a 200-token chat turn or an
+//! Under the old slab every lane owned a fixed `max_seq_len` stripe, so capacity was the rectangle
+//! `max_slots × max_seq_len` — paid in full whether a sequence was a 200-token chat turn or an
 //! 8000-token document. This pool replaces the stripe with on-demand blocks: a lane holds only the
 //! blocks covering the tokens it has actually written, and capacity becomes the sum of what live
-//! sequences actually need. This module is bookkeeping only — block ids and tables, no tensors; the
-//! storage they index into is wired up by the commits that follow.
+//! sequences actually need. This module is bookkeeping only — lengths, block ids, and tables, no
+//! tensors; the storage they index into is the `BlockStore`.
 //!
 //! The mapping contract: logical position `p` of a lane lives in block `tables[lane][p / block_size]`
 //! at offset `p % block_size`. Only the table's *index* is positional — the block ids inside a table
 //! need not be contiguous or ordered, and after lanes churn they won't be. Nothing may assume id
 //! contiguity.
 //!
+//! A lane's length and its blocks are one concept, so they live in one type: `begin_round` grows
+//! tables and advances lengths together — all lanes or none — and `free_lane` clears both. There is
+//! no way to move one without the other, which is the invariant everything downstream leans on.
+//!
 //! Block 0 is a sentinel: it never enters the free stack and is never allocated to a lane. It exists
 //! so that ragged gathers can pad short lanes with a block that provably belongs to no one — even a
 //! masking bug then exposes zeros, never another sequence's KV. Usable blocks are `1..num_blocks`.
 
-/// The block id ragged gathers pad with. Zeroed at pool-tensor init (a later commit), owned by no lane.
+/// The block id ragged gathers pad with. Zeroed at store init, owned by no lane.
 pub const SENTINEL_BLOCK: u32 = 0;
 
-/// The pool could not supply enough blocks. The caller's state is untouched when this is returned:
-/// `ensure_capacity` rolls back everything it took before reporting failure.
+/// The pool could not supply enough blocks for a round. The caller's state is untouched when this is
+/// returned: `begin_round` rolls back everything it took before reporting failure.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PoolExhausted {
-    /// How many more blocks the request needed than the free stack held.
+    /// How many more blocks the round needed than the free stack held.
     pub short_by: usize,
 }
 
-/// A shared pool of fixed-size KV blocks and the per-lane tables that map positions onto them.
+/// A shared pool of fixed-size KV blocks and the per-lane ledger (length + block table) that maps
+/// each lane's positions onto them.
 ///
 /// Allocation is a LIFO free stack: alloc = pop, free = push, both O(1). Reuse order is irrelevant to
 /// correctness (the table maps positions explicitly) and to the device (blocks are rows of one
@@ -36,8 +42,8 @@ pub struct PoolExhausted {
 ///
 /// Freed blocks keep their old contents; a reallocated block may hold another lane's stale KV until
 /// overwritten. That is safe only because every ragged read is masked — the same contract the slab's
-/// ragged read-back relies on today. If a future change ever weakens the mask, blocks must be zeroed
-/// on free instead.
+/// ragged read-back relied on. If a future change ever weakens the mask, blocks must be zeroed on
+/// free instead.
 #[derive(Debug, Clone)]
 pub struct BlockPool {
     /// Tokens per block. Fixed at construction, never per-sequence.
@@ -45,13 +51,16 @@ pub struct BlockPool {
     /// Free block ids, LIFO. Never contains the sentinel.
     free: Vec<u32>,
     /// Per lane, the block ids covering its tokens: `tables[lane][i]` holds positions
-    /// `[i·block_size, (i+1)·block_size)`.
+    /// `[i·block_size, (i+1)·block_size)`. Grows and shrinks only in lockstep with `lens`.
     tables: Vec<Vec<u32>>,
+    /// Per lane, its current sequence length — the single source of truth for lane lengths. The
+    /// covering table always holds exactly `lens[lane].div_ceil(block_size)` blocks.
+    lens: Vec<usize>,
 }
 
 impl BlockPool {
     /// A pool of `num_blocks` blocks (block 0 is the sentinel, so `num_blocks - 1` are usable) with
-    /// tables for `num_lanes` lanes, all empty.
+    /// empty ledgers for `num_lanes` lanes.
     pub fn new(block_size: usize, num_blocks: usize, num_lanes: usize) -> Self {
         assert!(block_size >= 1, "block_size must be at least 1");
         assert!(
@@ -64,6 +73,7 @@ impl BlockPool {
             // arbitrary by contract, and the tests exercise that no caller depends on it.
             free: (1..num_blocks as u32).collect(),
             tables: vec![Vec::new(); num_lanes],
+            lens: vec![0; num_lanes],
         }
     }
 
@@ -82,17 +92,77 @@ impl BlockPool {
         self.free.len()
     }
 
+    /// Number of lanes this pool keeps ledgers for.
+    pub fn lane_count(&self) -> usize {
+        self.lens.len()
+    }
+
+    /// Sequence length of one lane.
+    pub fn lane_len(&self, lane: usize) -> usize {
+        self.lens[lane]
+    }
+
     /// The blocks backing `lane`, in position order: entry `i` covers positions
     /// `[i·block_size, (i+1)·block_size)`.
     pub fn lane_blocks(&self, lane: usize) -> &[u32] {
         &self.tables[lane]
     }
 
-    /// Grow `lane`'s table until it covers `new_len` tokens. Idempotent — asking for a length the
-    /// table already covers is a no-op, so repeated calls across prefill chunks are safe. All or
-    /// nothing — if the free stack runs dry mid-grow, every block taken by THIS call goes back and
-    /// the table is exactly as it was, so a failed round leaves no partial allocation behind.
-    pub fn ensure_capacity(&mut self, lane: usize, new_len: usize) -> Result<(), PoolExhausted> {
+    /// Commit one round of `seq_len` new tokens over the given lanes: grow every lane's table to
+    /// cover its new length, then advance every lane's length, returning the pre-advance lengths —
+    /// the round's start positions. All lanes or none: if the free stack cannot cover one lane, the
+    /// blocks already taken this round go back and every ledger is exactly as the caller left it.
+    /// This is the single place tables and lengths move, so they can never drift apart.
+    pub fn begin_round(
+        &mut self,
+        lanes: &[usize],
+        seq_len: usize,
+    ) -> Result<Vec<usize>, PoolExhausted> {
+        debug_assert!(
+            lanes
+                .iter()
+                .collect::<std::collections::HashSet<_>>()
+                .len()
+                == lanes.len(),
+            "begin_round got a duplicate lane: {lanes:?}"
+        );
+        let mut grown: Vec<(usize, usize)> = Vec::with_capacity(lanes.len());
+        for &lane in lanes {
+            let before = self.tables[lane].len();
+            match self.grow_table(lane, self.lens[lane] + seq_len) {
+                Ok(()) => grown.push((lane, before)),
+                Err(exhausted) => {
+                    for &(grown_lane, keep) in &grown {
+                        let excess = self.tables[grown_lane].split_off(keep);
+                        self.free.extend(excess);
+                    }
+                    self.check_invariants();
+                    return Err(exhausted);
+                }
+            }
+        }
+        let starts = lanes.iter().map(|&lane| self.lens[lane]).collect();
+        for &lane in lanes {
+            self.lens[lane] += seq_len;
+        }
+        self.check_invariants();
+        Ok(starts)
+    }
+
+    /// Return every one of `lane`'s blocks to the free stack and zero its length. Block contents are
+    /// not touched (see the stale-data note on the type).
+    pub fn free_lane(&mut self, lane: usize) {
+        let blocks = std::mem::take(&mut self.tables[lane]);
+        self.free.extend(blocks);
+        self.lens[lane] = 0;
+        self.check_invariants();
+    }
+
+    /// Grow `lane`'s table until it covers `new_len` tokens. Idempotent — a length the table already
+    /// covers is a no-op, so repeated calls across prefill chunks are safe. All or nothing for this
+    /// lane — on exhaustion the blocks taken by THIS call go back and the table is as it was;
+    /// `begin_round` extends that to the whole round.
+    fn grow_table(&mut self, lane: usize, new_len: usize) -> Result<(), PoolExhausted> {
         let need = self.blocks_for(new_len);
         let have = self.tables[lane].len();
         if need <= have {
@@ -109,32 +179,12 @@ impl BlockPool {
             debug_assert_ne!(block, SENTINEL_BLOCK, "the sentinel must never be allocated");
             self.tables[lane].push(block);
         }
-        self.check_invariants();
         Ok(())
     }
 
-    /// Return every one of `lane`'s blocks to the free stack, leaving its table empty. The caller
-    /// zeroes its own length bookkeeping; block contents are not touched (see the stale-data note on
-    /// the type).
-    pub fn free_lane(&mut self, lane: usize) {
-        let blocks = std::mem::take(&mut self.tables[lane]);
-        self.free.extend(blocks);
-        self.check_invariants();
-    }
-
-    /// Shrink `lane`'s table back to its first `keep` blocks, returning the excess to the free
-    /// stack. This is the round-level rollback primitive: when one lane's `ensure_capacity` fails
-    /// mid-round, the caller unwinds the lanes it already grew this round so the whole round is
-    /// all-or-nothing, not just the failing lane.
-    pub fn truncate_lane(&mut self, lane: usize, keep: usize) {
-        let keep = keep.min(self.tables[lane].len());
-        let excess = self.tables[lane].split_off(keep);
-        self.free.extend(excess);
-        self.check_invariants();
-    }
-
-    /// Every usable block is in exactly one table or the free stack — no leaks, no double ownership.
-    /// Debug builds check this after every mutation; release builds skip it.
+    /// The ledger invariants, checked after every committed mutation in debug builds: every usable
+    /// block is in exactly one table or the free stack (no leaks, no double ownership), and every
+    /// lane's table holds exactly the blocks its length needs — lengths and tables never drift.
     fn check_invariants(&self) {
         #[cfg(debug_assertions)]
         {
@@ -150,6 +200,13 @@ impl BlockPool {
             };
             self.free.iter().copied().for_each(&mut mark);
             self.tables.iter().flatten().copied().for_each(&mut mark);
+            for (lane, len) in self.lens.iter().enumerate() {
+                assert_eq!(
+                    self.tables[lane].len(),
+                    len.div_ceil(self.block_size),
+                    "lane {lane}: table and length drifted apart"
+                );
+            }
         }
     }
 }
@@ -158,67 +215,80 @@ impl BlockPool {
 mod tests {
     use super::*;
 
-    /// Position → block mapping stays correct while lanes grow, and growth is idempotent: asking
-    /// again for a length already covered takes nothing from the pool.
+    /// Position → block mapping stays correct while lanes grow round by round, growth within a
+    /// covered block takes nothing from the pool, and the returned starts are the pre-advance
+    /// lengths — the same values decode uses as write offsets and RoPE positions.
     #[test]
-    fn grows_by_position_and_reensure_is_a_noop() {
+    fn rounds_grow_tables_and_lengths_together() {
         let mut pool = BlockPool::new(4, 8, 2); // 7 usable blocks of 4 tokens
-        pool.ensure_capacity(0, 5).unwrap(); // 5 tokens -> 2 blocks
+        let starts = pool.begin_round(&[0], 5).unwrap(); // 5 tokens -> 2 blocks
+        assert_eq!(starts, vec![0]);
+        assert_eq!(pool.lane_len(0), 5);
         assert_eq!(pool.lane_blocks(0).len(), 2);
         let before: Vec<u32> = pool.lane_blocks(0).to_vec();
         let free_before = pool.free_blocks();
 
-        pool.ensure_capacity(0, 5).unwrap(); // same length: no-op
-        pool.ensure_capacity(0, 8).unwrap(); // 8 tokens still fit 2 blocks: no-op
+        let starts = pool.begin_round(&[0], 3).unwrap(); // to 8 tokens: still 2 blocks
+        assert_eq!(starts, vec![5]);
         assert_eq!(pool.lane_blocks(0), before.as_slice());
         assert_eq!(pool.free_blocks(), free_before);
 
-        pool.ensure_capacity(0, 9).unwrap(); // crosses into a third block
+        let starts = pool.begin_round(&[0], 1).unwrap(); // 9th token crosses into a third block
+        assert_eq!(starts, vec![8]);
         assert_eq!(pool.lane_blocks(0).len(), 3);
         assert_eq!(&pool.lane_blocks(0)[..2], before.as_slice(), "existing blocks keep their slots");
     }
 
-    /// Exhaustion is all-or-nothing: a grow that cannot complete returns the blocks it took, leaving
-    /// the table and the free stack exactly as the caller saw them before the call.
+    /// Exhaustion is all-or-nothing across the whole round: when one lane of a multi-lane round
+    /// cannot get its block, the lanes already grown are unwound too — no length advances, no table
+    /// keeps a block, and the free stack is exactly as it was.
     #[test]
-    fn exhaustion_rolls_back_completely() {
-        let mut pool = BlockPool::new(4, 4, 2); // 3 usable blocks
-        pool.ensure_capacity(0, 8).unwrap(); // takes 2, leaves 1 free
-        let table_before: Vec<u32> = pool.lane_blocks(0).to_vec();
+    fn exhaustion_rolls_back_the_whole_round() {
+        let mut pool = BlockPool::new(4, 4, 3); // 3 usable blocks
+        pool.begin_round(&[0], 4).unwrap(); // lane 0 takes 1, leaves 2 free
 
-        // Lane 1 wants 3 blocks; only 1 is free.
-        let err = pool.ensure_capacity(1, 12).unwrap_err();
+        // Lanes 1 and 2 want 2 blocks each; only 2 are free — lane 2 comes up short.
+        let err = pool.begin_round(&[1, 2], 8).unwrap_err();
         assert_eq!(err.short_by, 2);
-        assert!(pool.lane_blocks(1).is_empty(), "failed grow must leave the table empty");
-        assert_eq!(pool.free_blocks(), 1, "failed grow must return what it took");
-        assert_eq!(pool.lane_blocks(0), table_before.as_slice(), "other lanes untouched");
+        for lane in [1, 2] {
+            assert_eq!(pool.lane_len(lane), 0, "lane {lane}: no length may survive");
+            assert!(pool.lane_blocks(lane).is_empty(), "lane {lane}: no block may survive");
+        }
+        assert_eq!(pool.free_blocks(), 2, "the free stack is exactly as it was");
+        assert_eq!(pool.lane_len(0), 4, "an uninvolved lane is untouched");
+
+        // What fits still fits: one of the two lanes alone succeeds.
+        pool.begin_round(&[1], 8).unwrap();
+        assert_eq!(pool.lane_len(1), 8);
     }
 
-    /// A freed lane returns exactly its blocks, and the pool can hand them straight to another lane.
+    /// A freed lane returns exactly its blocks and zeroes its length, and the pool can hand the
+    /// blocks straight to another lane.
     #[test]
     fn freeing_a_lane_recycles_its_blocks() {
         let mut pool = BlockPool::new(4, 4, 2); // 3 usable
-        pool.ensure_capacity(0, 12).unwrap(); // all 3
+        pool.begin_round(&[0], 12).unwrap(); // all 3
         assert_eq!(pool.free_blocks(), 0);
 
         pool.free_lane(0);
         assert_eq!(pool.free_blocks(), 3);
+        assert_eq!(pool.lane_len(0), 0);
         assert!(pool.lane_blocks(0).is_empty());
 
-        pool.ensure_capacity(1, 12).unwrap(); // the recycled blocks fit lane 1 whole
+        pool.begin_round(&[1], 12).unwrap(); // the recycled blocks fit lane 1 whole
         assert_eq!(pool.lane_blocks(1).len(), 3);
     }
 
     /// After lanes churn, a table's block ids are not contiguous — and that is fine, because only
-    /// the table index is positional. This is the contract the gather path will rely on.
+    /// the table index is positional. This is the contract the gather path relies on.
     #[test]
     fn interleaved_churn_yields_noncontiguous_ids_with_correct_mapping() {
         let mut pool = BlockPool::new(2, 8, 3); // 7 usable blocks of 2 tokens
-        pool.ensure_capacity(0, 4).unwrap(); // lane 0: 2 blocks
-        pool.ensure_capacity(1, 4).unwrap(); // lane 1: 2 blocks
+        pool.begin_round(&[0], 4).unwrap(); // lane 0: 2 blocks
+        pool.begin_round(&[1], 4).unwrap(); // lane 1: 2 blocks
         pool.free_lane(0); // lane 0's ids go back on top of the stack
-        pool.ensure_capacity(2, 2).unwrap(); // lane 2 takes one of lane 0's old ids
-        pool.ensure_capacity(1, 8).unwrap(); // lane 1 grows with whatever is on top
+        pool.begin_round(&[2], 2).unwrap(); // lane 2 takes one of lane 0's old ids
+        pool.begin_round(&[1], 4).unwrap(); // lane 1 grows with whatever is on top
 
         let table = pool.lane_blocks(1);
         assert_eq!(table.len(), 4);
@@ -232,9 +302,9 @@ mod tests {
     #[test]
     fn sentinel_is_never_allocated() {
         let mut pool = BlockPool::new(1, 3, 1); // 2 usable
-        pool.ensure_capacity(0, 2).unwrap(); // drain the pool
+        pool.begin_round(&[0], 2).unwrap(); // drain the pool
         assert_eq!(pool.free_blocks(), 0);
         assert!(pool.lane_blocks(0).iter().all(|&b| b != SENTINEL_BLOCK));
-        assert!(pool.ensure_capacity(0, 3).is_err(), "nothing left but the sentinel");
+        assert!(pool.begin_round(&[0], 1).is_err(), "nothing left but the sentinel");
     }
 }

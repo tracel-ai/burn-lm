@@ -2,7 +2,8 @@ use crate::{
     inference::{self, LlamaDecoder},
     nn::{
         pos_encoding::{PositionalEncodingState, RopeConfig, RopeFrequencyScaling},
-        transformer::{TransformerCache, TransformerConfig},
+        attention::PagedKvCache,
+        transformer::TransformerConfig,
     },
     tokenizer::Tokenizer,
 };
@@ -272,7 +273,8 @@ impl LlamaConfig {
         .with_norm_eps(self.norm_eps);
 
         let model = config.init(device);
-        let cache = TransformerCache::new(&config, self.max_batch_size, device);
+        let cache =
+            PagedKvCache::with_default_blocks(config.kv_layout(), self.max_batch_size, device);
 
         // Precompute a RoPE window larger than the KV-cache window. With the default
         // max_seq_len=8192 this covers 40960 positions, so normal stateless requests

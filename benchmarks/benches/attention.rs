@@ -3,8 +3,8 @@ use burn::{
     tensor::{DType, Device, Distribution, Tensor},
 };
 use burn_lm_llama::nn::{
-    attention::{KeyValueCache, MultiHeadAttention, MultiHeadAttentionConfig},
-    transformer::{LanePlan, TransformerCache, TransformerConfig},
+    attention::{KeyValueCache, LanePlan, MultiHeadAttention, MultiHeadAttentionConfig, PagedKvCache},
+    transformer::TransformerConfig,
 };
 use burnbench::{run_benchmark, Benchmark, BenchmarkResult};
 
@@ -82,7 +82,7 @@ fn bench(device: &Device, dtype: DType) -> Vec<BenchmarkResult> {
         // bookkeeping `prepare_lanes` needs to build the decode plan.
         let cfg = TransformerConfig::new(128256, 1, d_model, 14336, n_heads, n_kv_heads)
             .with_max_seq_len(max_seq_length);
-        let mut tcache = TransformerCache::new(&cfg, batch_size, device);
+        let mut tcache = PagedKvCache::with_default_blocks(cfg.kv_layout(), batch_size, device);
 
         // Prefill every lane to PROMPT_LEN so the decode step attends over real history.
         // Keep each lane's prefill plan: its block table is where the standalone KV cache below
@@ -101,7 +101,7 @@ fn bench(device: &Device, dtype: DType) -> Vec<BenchmarkResult> {
             Distribution::Default,
             device,
         );
-        // Seed every lane's KV from offset 0, mirroring the TransformerCache prefill above so the
+        // Seed every lane's KV from offset 0, mirroring the PagedKvCache prefill above so the
         // two stay in lockstep: the plan's per-lane starts (PROMPT_LEN) are exactly where the next
         // token writes.
         cache.write_lanes(

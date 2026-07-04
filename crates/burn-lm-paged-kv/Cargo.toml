@@ -1,0 +1,10 @@
+[package]
+authors = []
+name = "burn-lm-paged-kv"
+description = "Paged KV cache for burn-lm models: a shared block pool, per-lane block tables, and the plan/store machinery a batched decoder-only model uses to write and gather its KV by blocks instead of per-lane stripes."
+version = "0.0.1"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+burn = { workspace = true, features = ["std", "ndarray"], default-features = false }

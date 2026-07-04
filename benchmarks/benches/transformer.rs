@@ -2,7 +2,8 @@ use burn::{
     nn::{RotaryEncoding, RotaryEncodingConfig},
     tensor::{DType, Device, Distribution, Int, Tensor},
 };
-use burn_lm_llama::nn::transformer::{LanePlan, Transformer, TransformerCache, TransformerConfig};
+use burn_lm_llama::nn::attention::{LanePlan, PagedKvCache};
+use burn_lm_llama::nn::transformer::{Transformer, TransformerConfig};
 use burnbench::{run_benchmark, Benchmark, BenchmarkResult};
 
 // Lane-aware whole-transformer decode benchmark, swept over the lane count (batch) 1, 2, 4, 8. Each
@@ -19,13 +20,13 @@ pub struct TransformerBenchmark {
     device: Device,
     transformer: Transformer,
     rope: RotaryEncoding,
-    cache: TransformerCache,
+    cache: PagedKvCache,
     plan: LanePlan,
     dtype: DType,
 }
 
 impl Benchmark for TransformerBenchmark {
-    type Input = (Tensor<2, Int>, TransformerCache);
+    type Input = (Tensor<2, Int>, PagedKvCache);
     type Output = Tensor<3>;
 
     fn name(&self) -> String {
@@ -125,7 +126,7 @@ fn bench(device: &Device, dtype: DType) -> Vec<BenchmarkResult> {
 
             // Prefill every lane to PROMPT_LEN through the real lane forward so the cache holds true
             // KV, then build the decode-round plan (one new token per lane).
-            let mut cache = TransformerCache::new(&config_transformer, batch_size, device);
+            let mut cache = PagedKvCache::with_default_blocks(config_transformer.kv_layout(), batch_size, device);
             for lane in 0..batch_size {
                 let prefill_plan = cache.prepare_lanes(&[lane], PROMPT_LEN).unwrap();
                 let prompt = Tensor::<2>::random(

@@ -14,10 +14,10 @@ use burn_lm_inference::{
 };
 
 use crate::{
-    generation::GenerationError,
     nn::{
+        attention::{PagedKvCache, PagedKvError},
         pos_encoding::PositionalEncodingState,
-        transformer::{Transformer, TransformerCache},
+        transformer::Transformer,
     },
     tokenizer::Tokenizer,
 };
@@ -44,7 +44,7 @@ pub struct LlamaDecoder {
     /// Shared paged KV cache (one lane per engine slot): per-layer block stores plus the block
     /// allocator and lane lengths. Writes and reads are addressed through per-lane block tables,
     /// and `release` frees a lane's blocks back to the pool.
-    pub cache: TransformerCache,
+    pub cache: PagedKvCache,
     /// Rotary positional encoding (RoPE). Lane decode reads `rope` directly at each lane's absolute
     /// position, with no table shift.
     pub pos_encoding: PositionalEncodingState,
@@ -76,10 +76,10 @@ impl LlamaDecoder {
             .cache
             .prepare_lanes(lanes, seq_len_in)
             .map_err(|err| match err {
-                GenerationError::MaxSequenceLengthExceeded { actual, max } => {
+                PagedKvError::MaxSequenceLengthExceeded { actual, max } => {
                     InferenceError::ContextLengthExceeded(actual, max)
                 }
-                GenerationError::KvPoolExhausted { short_by } => {
+                PagedKvError::PoolExhausted { short_by } => {
                     InferenceError::KvPoolExhausted(short_by)
                 }
             })?;

@@ -48,6 +48,7 @@ test-wgpu = [
 ]
 
 [dependencies]
+burn-lm-paged-kv = { path = "../burn-lm-paged-kv", version = "0.0.1" }
 burn = { workspace = true, features = [
     "std",
     "ndarray",

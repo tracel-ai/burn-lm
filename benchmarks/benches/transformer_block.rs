@@ -3,8 +3,8 @@ use burn::{
     tensor::{DType, Device, Distribution, Tensor},
 };
 use burn_lm_llama::nn::{
-    attention::KeyValueCache,
-    transformer::{LanePlan, TransformerBlock, TransformerBlockConfig, TransformerCache, TransformerConfig},
+    attention::{KeyValueCache, LanePlan, PagedKvCache},
+    transformer::{TransformerBlock, TransformerBlockConfig, TransformerConfig},
 };
 use burnbench::{run_benchmark, Benchmark, BenchmarkResult};
 
@@ -123,7 +123,7 @@ fn bench(device: &Device, dtype: DType) -> Vec<BenchmarkResult> {
                 config.n_heads_kv,
             )
             .with_max_seq_len(max_seq_length);
-            let mut tcache = TransformerCache::new(&tcfg, batch_size, device);
+            let mut tcache = PagedKvCache::with_default_blocks(tcfg.kv_layout(), batch_size, device);
             // Keep each lane's prefill plan: its block table is where the standalone KV cache
             // below must seed, so the seeding lands in the same blocks the decode plan addresses.
             let mut tables: Vec<Vec<u32>> = Vec::with_capacity(batch_size);

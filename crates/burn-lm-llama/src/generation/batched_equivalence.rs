@@ -108,7 +108,8 @@ fn test_llama_lanes_with_block_size(
     block_size: usize,
     device: &Device,
 ) -> Llama<ByteTokenizer> {
-    use crate::nn::transformer::{TransformerCache, TransformerConfig};
+    use crate::nn::attention::PagedKvCache;
+    use crate::nn::transformer::TransformerConfig;
     let mut llama = test_llama_lanes(n_lanes, device);
     let cfg = LlamaConfig::llama3_2_1b_test();
     let tcfg = TransformerConfig::new(
@@ -121,7 +122,7 @@ fn test_llama_lanes_with_block_size(
     )
     .with_max_seq_len(cfg.max_seq_len)
     .with_norm_eps(cfg.norm_eps);
-    llama.decoder.cache = TransformerCache::new_with_block_size(&tcfg, n_lanes, block_size, device);
+    llama.decoder.cache = PagedKvCache::new(tcfg.kv_layout(), n_lanes, block_size, device);
     llama
 }
 

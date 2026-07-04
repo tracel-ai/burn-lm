@@ -16,16 +16,6 @@ pub struct GenerationOutput {
     pub time: std::time::Duration,
 }
 
-#[derive(Debug)]
-pub enum GenerationError {
-    MaxSequenceLengthExceeded { actual: usize, max: usize },
-    /// The KV block pool could not cover a forward: it is `short_by` blocks short. Admission is
-    /// meant to reserve worst-case blocks per sequence before it lets one in, so a live sequence
-    /// hitting this indicates an engine bug, not a runtime condition — the caller retires the
-    /// sequence with the error rather than crashing the batch.
-    KvPoolExhausted { short_by: usize },
-}
-
 impl<T: Tokenizer + 'static> Llama<T> {
     /// Generate text sample based on the provided prompt.
     ///

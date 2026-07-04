@@ -1,7 +1,7 @@
 use burn::tensor::{Device, Tensor};
 
 use super::block_store::BlockStore;
-use crate::nn::transformer::LanePlan;
+use crate::cache::LanePlan;
 
 /// Key-value cache for autoregressive models: a pool of KV blocks, keys and values side by side.
 /// One block id names the same row in both stores, so a lane's block table addresses its keys and

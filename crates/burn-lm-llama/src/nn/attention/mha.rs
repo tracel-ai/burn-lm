@@ -4,9 +4,9 @@ use burn::{
     tensor::{module::attention, ops::AttentionModuleOptions},
 };
 
-use crate::nn::{pos_encoding::apply_rope_lanes, transformer::LanePlan};
+use crate::nn::pos_encoding::apply_rope_lanes;
 
-use super::kv_cache::KeyValueCache;
+use super::{KeyValueCache, LanePlan};
 
 /// Configuration to create a [multi-head attention](MultiHeadAttention) module.
 #[derive(Config, Debug)]

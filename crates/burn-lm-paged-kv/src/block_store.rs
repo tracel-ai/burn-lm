@@ -119,7 +119,7 @@ impl BlockStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::nn::attention::block_pool::SENTINEL_BLOCK;
+    use crate::block_pool::SENTINEL_BLOCK;
     use burn::tensor::TensorData;
 
     /// A `[1, 1, len, 1]` tokens tensor holding `base + position` at each position, so any

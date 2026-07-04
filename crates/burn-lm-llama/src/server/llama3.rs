@@ -2,6 +2,7 @@ use serde::Deserialize;
 
 use crate::{
     generation::LlamaSampler,
+    nn::attention::DEFAULT_BLOCK_SIZE,
     inference::LlamaDecoder,
     pretrained::ModelMeta,
     tokenizer::{Tiktoken, Tokenizer},
@@ -328,7 +329,22 @@ macro_rules! impl_batched_llama_server {
                     Some(lanes) => configured.min(lanes),
                     None => configured,
                 };
-                BatchCapacity { max_slots }
+                // The KV block budget admission reserves against. Loaded, it is the pool's real
+                // numbers; before load, the same rectangle the pool will be sized to, computed from
+                // the same env-overridden config values `load` uses — so the budget an early
+                // admission sees matches the pool that materializes.
+                let kv = match self.server.loaded_kv_budget() {
+                    Some((block_size, total_blocks)) => KvBudget { block_size, total_blocks },
+                    None => {
+                        let max_seq_len = config_usize(self.config.max_seq_len, "BURN_LM_MAX_SEQ_LEN");
+                        let block_size = DEFAULT_BLOCK_SIZE.min(max_seq_len);
+                        KvBudget {
+                            block_size,
+                            total_blocks: (configured * max_seq_len).div_ceil(block_size),
+                        }
+                    }
+                };
+                BatchCapacity { max_slots, kv }
             }
 
             fn prefill_chunk_size(&self) -> usize {
@@ -611,6 +627,16 @@ impl Llama3BaseServer {
             .get()
             .ok()
             .map(|model| model.decoder.cache.lane_count())
+    }
+
+    /// The loaded pool's real KV budget, `(block_size, usable_blocks)` — `None` before load. Like
+    /// `loaded_lane_count`, this reports what was actually sized at load so admission's arithmetic
+    /// and the pool can never disagree.
+    fn loaded_kv_budget(&self) -> Option<(usize, usize)> {
+        self.model.get().ok().map(|model| {
+            let cache = &model.decoder.cache;
+            (cache.block_size(), cache.usable_blocks())
+        })
     }
 
     /// Mutably borrow the loaded decoder, loading the model first if needed.

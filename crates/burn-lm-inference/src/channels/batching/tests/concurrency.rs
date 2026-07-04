@@ -34,6 +34,32 @@ fn capacity_two_admits_concurrently_and_interleaves() {
     );
 }
 
+/// KV BUDGET GATE: two free slots, but a block budget that fits only one worst-case reservation —
+/// the jobs run SERIALLY. Each job reserves `blocks_for(prompt + max_gen) = 1 + 16 = 17` blocks
+/// (block_size 1); the 20-block budget fits one, so the second waits in the queue until the first
+/// retires and its reservation frees. Nothing errors — running short of blocks is backpressure,
+/// not failure — and both jobs complete in full. With an unlimited budget the same two slots run
+/// these jobs interleaved (`capacity_two_admits_concurrently_and_interleaves`), so serialization
+/// here is attributable to the KV gate alone.
+#[test]
+fn kv_budget_serializes_admission_when_blocks_run_short() {
+    let log: OrderLog = Arc::new(Mutex::new(Vec::new()));
+    let server = FakeServer::new(2, log.clone()).with_kv_budget(1, 20);
+    let out = submit_two_on(server, log);
+    assert!(
+        out.contains(&0) && out.contains(&1),
+        "both sequences should produce output: {out:?}"
+    );
+    let first0 = out.iter().position(|&x| x == 0).unwrap();
+    let last0 = out.iter().rposition(|&x| x == 0).unwrap();
+    let first1 = out.iter().position(|&x| x == 1).unwrap();
+    let last1 = out.iter().rposition(|&x| x == 1).unwrap();
+    assert!(
+        last0 < first1 || last1 < first0,
+        "a budget with room for one reservation must serialize the jobs: {out:?}"
+    );
+}
+
 /// Capacity == 1: admission is one-at-a-time, so the two sequences run SERIALLY (no overlap).
 /// This proves capacity-based admission/backpressure.
 #[test]
@@ -100,6 +126,7 @@ fn at_most_one_prompt_prefills_per_round_while_another_sequence_decodes() {
             generated: 0,
             max_gen: 8,
             finished: false,
+            kv_reservation: 0,
             extra: (),
         }
     }
@@ -178,6 +205,7 @@ fn decoding_sequences_share_one_fused_decode_call() {
             generated: 1,
             max_gen: 8,
             finished: false,
+            kv_reservation: 0,
             extra: (),
         }
     }
@@ -224,6 +252,7 @@ fn a_fused_decode_error_retires_every_decode_row_but_not_a_concurrent_prefill() 
             generated: 1,
             max_gen: 8,
             finished: false,
+            kv_reservation: 0,
             extra: (),
         }
     }
@@ -235,6 +264,7 @@ fn a_fused_decode_error_retires_every_decode_row_but_not_a_concurrent_prefill() 
             generated: 0,
             max_gen: 8,
             finished: false,
+            kv_reservation: 0,
             extra: (),
         }
     }
@@ -287,6 +317,7 @@ fn a_mixed_round_aligns_each_sampled_token_to_its_sequence() {
             generated: 1,
             max_gen: 8,
             finished: false,
+            kv_reservation: 0,
             extra: (),
         }
     }
@@ -298,6 +329,7 @@ fn a_mixed_round_aligns_each_sampled_token_to_its_sequence() {
             generated: 0,
             max_gen: 8,
             finished: false,
+            kv_reservation: 0,
             extra: (),
         }
     }
@@ -350,6 +382,7 @@ fn a_lane_over_the_context_limit_retires_alone_without_failing_its_batch_mates()
             generated: 1,
             max_gen: 100,
             finished: false,
+            kv_reservation: 0,
             extra: (),
         }
     }
@@ -410,6 +443,7 @@ fn a_prompt_longer_than_the_context_window_is_rejected_before_prefill() {
         generated: 0,
         max_gen: 8,
         finished: false,
+        kv_reservation: 0,
         extra: (),
     }];
 
@@ -513,6 +547,7 @@ fn chunked_prefill_defers_sampling_to_the_final_chunk() {
             generated: 0,
             max_gen,
             finished: false,
+            kv_reservation: 0,
             extra: (),
         }
     }
@@ -575,6 +610,7 @@ fn a_failed_prefill_chunk_retires_the_sequence() {
             generated: 0,
             max_gen,
             finished: false,
+            kv_reservation: 0,
             extra: (),
         }
     }

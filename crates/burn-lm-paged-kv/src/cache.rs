@@ -147,6 +147,17 @@ impl PagedKvCache {
         self.layers.iter_mut()
     }
 
+    /// Tokens per KV block.
+    pub fn block_size(&self) -> usize {
+        self.pool.block_size()
+    }
+
+    /// Usable blocks in the pool (the sentinel excluded) — the total an engine budgets sequence
+    /// reservations against.
+    pub fn usable_blocks(&self) -> usize {
+        self.pool.usable_blocks()
+    }
+
     /// Number of lanes (the model's `max_batch_size`).
     pub fn lane_count(&self) -> usize {
         self.pool.lane_count()

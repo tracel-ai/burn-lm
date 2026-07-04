@@ -266,48 +266,75 @@ fn admit<S: BatchedInferenceServer>(
     active: &mut Vec<JobSeq>,
 ) {
     while active.len() < server.batch_capacity().max_slots {
-        let Some(QueuedJob {
-            job,
-            completion,
-            enqueued_at,
-            permit,
-        }) = queue.pop_front()
-        else {
+        // Decide whether the FRONT job fits before taking it off the queue, so a job that must
+        // wait for KV blocks keeps both its place in line and its queue permit. Jobs that will
+        // never run (cancelled, failed tokenize) are popped and answered; only "doesn't fit yet"
+        // leaves the queue untouched.
+        if queue.front().is_none() {
             break;
-        };
-        // The job has now left the queue whatever we decide next, so release its queue permit right
-        // away; that is what lets waiting submitters see capacity free up.
-        drop(permit);
-        let queue_wait = enqueued_at.elapsed();
+        }
 
         // Cancelled while still queued: reply without touching the model — no prefill, no slot.
         // It never produced a token, so unlike an in-flight cancel this comes back as an error.
-        if job.cancel.is_cancelled() {
-            let _ = completion.send(Err(InferenceError::Cancelled));
+        if queue.front().is_some_and(|front| front.job.cancel.is_cancelled()) {
+            let cancelled = queue.pop_front().expect("checked above");
+            let _ = cancelled.completion.send(Err(InferenceError::Cancelled));
             continue;
         }
 
         // Borrow the decoder first, since that's what loads the model if needed — so the
-        // `tokenize`/`detokenize` calls below can count on the tokenizer being ready.
-        if let Err(err) = server.decoder().map(|_| ()) {
-            let _ = completion.send(Err(err));
-            continue;
-        }
+        // `tokenize` call below can count on the tokenizer being ready — and read the context
+        // ceiling while we hold it: it clamps the KV reservation below.
+        let max_context_len = match server.decoder() {
+            Ok(decoder) => decoder.max_context_len(),
+            Err(err) => {
+                let failed = queue.pop_front().expect("checked above");
+                let _ = failed.completion.send(Err(err));
+                continue;
+            }
+        };
 
-        let tokens = match server.tokenize(&job.task) {
+        let front = queue.front().expect("checked above");
+        let tokens = match server.tokenize(&front.job.task) {
             Ok(tokens) => tokens,
             Err(err) => {
-                let _ = completion.send(Err(err));
+                let failed = queue.pop_front().expect("checked above");
+                let _ = failed.completion.send(Err(err));
                 continue;
             }
         };
 
         // A request may ask for fewer tokens than the server's cap, but never more — the cap is an
         // operator-set limit, so anything larger is clamped down to it.
-        let max_gen = match job.params.max_tokens {
+        let max_gen = match front.job.params.max_tokens {
             Some(requested) => requested.min(server.max_gen_tokens()),
             None => server.max_gen_tokens(),
         };
+
+        // The KV half of the admission gate: reserve this sequence's worst case — every prompt
+        // token plus every token it may generate, clamped by the context ceiling — against the
+        // decoder's block budget. The outstanding total is derived from the active set, so retiring
+        // a sequence frees its reservation by construction. Since the pool only ever allocates up
+        // to a sequence's actual length, a reservation that fits here can never find the pool dry
+        // mid-flight. A front job that doesn't fit YET stays queued (with its permit) and admission
+        // stops — first come, first served, drained again after the next retire.
+        let kv = server.batch_capacity().kv;
+        let need = kv.blocks_for((tokens.len() + max_gen).min(max_context_len));
+        let reserved: usize = active.iter().map(|seq| seq.kv_reservation).sum();
+        if need > kv.total_blocks.saturating_sub(reserved) {
+            break;
+        }
+
+        let QueuedJob {
+            job,
+            completion,
+            enqueued_at,
+            permit,
+        } = queue.pop_front().expect("checked above");
+        // The job has now left the queue for good, so release its queue permit; that is what lets
+        // waiting submitters see capacity free up.
+        drop(permit);
+        let queue_wait = enqueued_at.elapsed();
 
         // Give the new sequence the lowest-numbered free slot. Slots are just `0..max_slots`, and a
         // slot is free when no active sequence is using it; the admission check above guarantees at
@@ -342,6 +369,7 @@ fn admit<S: BatchedInferenceServer>(
             generated: 0,
             max_gen,
             finished: false,
+            kv_reservation: need,
             extra: JobMeta {
                 emitter: job.emitter,
                 detok: Utf8Buffer::new(),

@@ -100,6 +100,10 @@ impl<T: Tokenizer + 'static> Llama<T> {
                     generated: 0,
                     max_gen: sample_len,
                     finished: false,
+                    // No engine reservation on the library path: this driver bounds the batch by
+                    // the decoder's lane count up front, and the pool matches that rectangle, so
+                    // block accounting is the serving worker's concern, not this one's.
+                    kv_reservation: 0,
                     extra: state,
                 }
             })

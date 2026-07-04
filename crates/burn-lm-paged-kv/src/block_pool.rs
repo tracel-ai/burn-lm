@@ -92,6 +92,12 @@ impl BlockPool {
         self.free.len()
     }
 
+    /// How many usable blocks the pool holds in total (the sentinel excluded) — free and owned
+    /// alike. Fixed at construction; this is the number an engine budgets reservations against.
+    pub fn usable_blocks(&self) -> usize {
+        self.free.len() + self.tables.iter().map(Vec::len).sum::<usize>()
+    }
+
     /// Number of lanes this pool keeps ledgers for.
     pub fn lane_count(&self) -> usize {
         self.lens.len()

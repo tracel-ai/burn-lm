@@ -35,6 +35,38 @@ pub struct BatchCapacity {
     /// The maximum number of sequences the decoder can run at once. The engine admits new work
     /// while `active.len() < max_slots`, so the free slots are `max_slots - active.len()`.
     pub max_slots: usize,
+    /// The decoder's KV block budget. Admission reserves each sequence's worst case against it, so
+    /// the model's pool can never run dry mid-flight (see `ActiveSeq::kv_reservation`).
+    pub kv: KvBudget,
+}
+
+/// The KV block budget a batched decoder reports: how many blocks its pool holds and how many
+/// tokens each covers. Plain numbers — the engine does block arithmetic with them, but blocks
+/// themselves never cross the decoder trait; which physical block a token lands in is the model's
+/// private concern.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct KvBudget {
+    /// Tokens per KV block.
+    pub block_size: usize,
+    /// Usable blocks in the pool (the model's sentinel block excluded).
+    pub total_blocks: usize,
+}
+
+impl KvBudget {
+    /// A budget that never binds — for decoders whose KV is not block-pooled (or not accounted):
+    /// every reservation fits, and admission reduces to the slot check, exactly as before budgets
+    /// existed.
+    pub fn unlimited() -> Self {
+        Self {
+            block_size: 1,
+            total_blocks: usize::MAX,
+        }
+    }
+
+    /// How many blocks a sequence of `tokens` tokens occupies.
+    pub fn blocks_for(&self, tokens: usize) -> usize {
+        tokens.div_ceil(self.block_size)
+    }
 }
 
 /// One decoding sequence's next input for a round: the token to feed into a slot. This is plain
@@ -202,6 +234,14 @@ pub struct ActiveSeq<Extra = ()> {
     pub max_gen: usize,
     /// Set once a stop id or the cap is hit; the next sweep retires the sequence.
     pub finished: bool,
+    /// KV blocks reserved for this sequence at admission: its worst case,
+    /// `blocks_for(min(prompt + max_gen, max_context_len))`. The engine's total outstanding
+    /// reservation is the sum over the active set — derived, never counted separately, so retiring
+    /// a sequence (any way: finish, stop, error, cancel) frees its reservation by construction.
+    /// The model's pool only ever allocates up to a sequence's actual length, which the reservation
+    /// covers, so whenever admission's arithmetic says a sequence fits, the pool physically has the
+    /// blocks — pool exhaustion is unreachable for live sequences.
+    pub kv_reservation: usize,
     /// The driver-owned payload (emitter and completion, generation context). Opaque to
     /// `step_round`.
     pub extra: Extra,

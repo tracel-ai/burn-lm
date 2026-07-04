@@ -1,6 +1,6 @@
 use super::super::*;
 use crate::{
-    batching::{BatchCapacity, BatchedDecoder, DecodeRow},
+    batching::{BatchCapacity, BatchedDecoder, DecodeRow, KvBudget},
     errors::InferenceError,
     job::{CancelSignal, GenerationParams, InferenceJob, InferenceTask},
     sampler::{Argmax, Sampler},
@@ -177,6 +177,10 @@ pub(super) struct FakeServer {
     /// 1 makes a sequence's first step decode work; tests that must exercise the PREFILL path
     /// (multi-token prompt work) raise it via [`with_prompt_tokens`](Self::with_prompt_tokens).
     pub(super) prompt_tokens: usize,
+    /// The KV block budget `batch_capacity` reports. Unlimited by default, so the KV half of the
+    /// admission gate never binds; a test lowers it via [`with_kv_budget`](Self::with_kv_budget) to
+    /// prove admission waits on blocks.
+    pub(super) kv: KvBudget,
 }
 
 impl Default for FakeServer {
@@ -194,6 +198,7 @@ impl FakeServer {
             capacity_calls: Arc::new(AtomicUsize::new(0)),
             fixed_token: None,
             prompt_tokens: 1,
+            kv: KvBudget::unlimited(),
         }
     }
 
@@ -253,6 +258,15 @@ impl FakeServer {
         self.decoder.fail_prefills = n;
         self
     }
+
+    /// A server reporting a finite KV block budget, so the admission gate's block half can bind.
+    pub(super) fn with_kv_budget(mut self, block_size: usize, total_blocks: usize) -> Self {
+        self.kv = KvBudget {
+            block_size,
+            total_blocks,
+        };
+        self
+    }
 }
 
 impl ServerConfigParsing for FakeServer {
@@ -296,6 +310,7 @@ impl BatchedInferenceServer for FakeServer {
         self.capacity_calls.fetch_add(1, Ordering::Relaxed);
         BatchCapacity {
             max_slots: self.slots,
+            kv: self.kv,
         }
     }
 
@@ -498,7 +513,7 @@ impl BatchedInferenceServer for ByteServer {
     }
 
     fn batch_capacity(&self) -> BatchCapacity {
-        BatchCapacity { max_slots: 1 }
+        BatchCapacity { max_slots: 1, kv: KvBudget::unlimited() }
     }
 
     fn tokenize(&self, task: &InferenceTask) -> InferenceResult<Vec<u32>> {
@@ -531,7 +546,13 @@ impl BatchedInferenceServer for ByteServer {
 
 pub(super) fn submit_two(slots: usize) -> Vec<usize> {
     let log: OrderLog = Arc::new(Mutex::new(Vec::new()));
-    let channel = BatchingChannel::<FakeServer>::with_server(FakeServer::new(slots, log.clone()));
+    submit_two_on(FakeServer::new(slots, log.clone()), log)
+}
+
+/// `submit_two` on a caller-built server — for tests that constrain the server (e.g. a finite KV
+/// budget) and still want the two-job interleaving log.
+pub(super) fn submit_two_on(server: FakeServer, log: OrderLog) -> Vec<usize> {
+    let channel = BatchingChannel::<FakeServer>::with_server(server);
 
     let (job_a, _ha) = InferenceJob::create(
         InferenceTask::Prompt("a".into()),

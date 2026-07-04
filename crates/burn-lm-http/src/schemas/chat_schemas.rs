@@ -168,6 +168,31 @@ impl ChatCompletionChunkSchema {
             service_tier: None,
         }
     }
+
+    /// The stream's final data chunk, per the OpenAI protocol: an empty delta carrying the
+    /// `finish_reason`, sent as the last chunk before `[DONE]` so the client learns WHY the stream
+    /// ended (`stop`: the model finished; `length`: cut off by the token cap — continue with a
+    /// follow-up request or raise `max_tokens`).
+    pub fn finish(id: &str, model: &str, creation_time: i64, reason: FinishReasonSchema) -> Self {
+        Self {
+            id: id.to_owned(),
+            object: "chat.completion.chunk".to_string(),
+            created: creation_time,
+            model: model.to_owned(),
+            choices: vec![ChunkChoiceSchema {
+                index: 0,
+                delta: Some(ChunkChoiceDeltaSchema {
+                    role: None,
+                    content: None,
+                }),
+                finish_reason: Some(reason),
+                logprobs: None,
+            }],
+            usage: None,
+            system_fingerprint: "".to_string(),
+            service_tier: None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, ToSchema)]

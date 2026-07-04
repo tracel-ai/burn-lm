@@ -21,7 +21,7 @@ pub use crate::batching::{
     step_round, ActiveSeq, BatchCapacity, BatchedDecoder, BatchedInferenceServer, DecodeRow, KvBudget,
     PrefillBudget, StepOutcome,
 };
-pub use crate::channels::batching::BatchingChannel;
+pub use crate::channels::batching::{BatchingChannel, FINISH_REASON_STAT_NAME};
 pub use crate::channels::mutex::MutexChannel;
 pub use crate::channels::passthrough::SingleThreadedChannel;
 pub use crate::client::InferenceClient;

@@ -30,6 +30,10 @@ use super::{Command, QueuedJob, WorkerInner};
 struct JobMeta {
     /// The channel we stream this request's generated text back to the caller on.
     emitter: GeneratedItemEmitter,
+    /// Whether a stop token ended this sequence — the distinction the finish reason reports:
+    /// a sequence that stopped itself finished with `stop`; one cut off by its token cap finished
+    /// with `length`, and the client is expected to act on that (continue, or raise `max_tokens`).
+    hit_stop: bool,
     /// The detokenizer cursor for this request. A token is just bytes, and byte-level BPE can split
     /// a single UTF-8 character across two tokens, so we can't simply decode tokens to text one at
     /// a time. Each round we push the new token's raw bytes in here and emit only the text that is
@@ -372,6 +376,7 @@ fn admit<S: BatchedInferenceServer>(
             kv_reservation: need,
             extra: JobMeta {
                 emitter: job.emitter,
+                hit_stop: false,
                 detok: Utf8Buffer::new(),
                 completion: Some(completion),
                 cancel: job.cancel,
@@ -462,6 +467,9 @@ fn step<S: BatchedInferenceServer>(server: &mut S, active: &mut Vec<JobSeq>) {
     for (seq, outcome) in active.iter_mut().zip(outcomes) {
         match outcome {
             StepOutcome::Stepped { token, is_stop, .. } => {
+                if is_stop {
+                    seq.extra.hit_stop = true;
+                }
                 if !is_stop {
                     let bytes = server.detokenize_bytes(&[token]);
                     if let Some(text) = seq.extra.detok.push(&bytes) {
@@ -511,15 +519,25 @@ fn step<S: BatchedInferenceServer>(server: &mut S, active: &mut Vec<JobSeq>) {
                 super::QUEUE_WAIT_STAT_NAME.to_string(),
                 format!("{:.2}s", seq.extra.queue_wait.as_secs_f64()),
             ));
-            // A request cancelled mid-flight still completes with `Ok`: the caller got real tokens,
-            // and this finish-reason stat says why the stream ended early. Only the cancelled path
-            // sets one today, so normally-finished requests keep their existing stats output.
-            if seq.extra.cancelled {
-                stats.entries.insert(crate::StatEntry::Named(
-                    FINISH_REASON_STAT_NAME.to_string(),
-                    "Cancelled".to_string(),
-                ));
-            }
+            // Every retirement reports WHY it ended, so the client can act on it: `Stop` — the
+            // model stopped itself (a stop token, or a degenerate no-op job); `Length` — cut off by
+            // the token cap (the request's `max_tokens`, or the server's `sample_len` default), the
+            // signal to continue with a follow-up request or raise the cap; `Cancelled` — the
+            // caller walked away mid-flight. The HTTP layer maps these onto the OpenAI
+            // `finish_reason` field (`stop` / `length`).
+            let reason = if seq.extra.cancelled {
+                "Cancelled"
+            } else if seq.extra.hit_stop {
+                "Stop"
+            } else if seq.generated >= seq.max_gen {
+                "Length"
+            } else {
+                "Stop"
+            };
+            stats.entries.insert(crate::StatEntry::Named(
+                FINISH_REASON_STAT_NAME.to_string(),
+                reason.to_string(),
+            ));
             retire(&mut seq.extra, Ok(stats));
             false
         } else {

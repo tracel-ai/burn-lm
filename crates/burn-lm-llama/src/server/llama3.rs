@@ -38,7 +38,14 @@ pub struct Llama3ServerConfig {
     /// Maximum sequence length for input text.
     #[config(default = 8192)]
     pub max_seq_len: usize,
-    /// The number of new tokens to generate (i.e., the number of generation steps to take).
+    /// The server's output-token cap: generation ends at a stop token or after this many new
+    /// tokens, whichever comes first — like a model's maximum output length in the OpenAI API. A
+    /// request's `max_tokens` lowers it for that request, never raises it; a response cut off here
+    /// reports `finish_reason: length`, and continuing is the client's move (a follow-up request
+    /// carrying the conversation). This cap is also what KV admission reserves worst-case blocks
+    /// against, so cap semantics and reservation policy are one decision: engines that default to
+    /// run-until-EOS (e.g. vLLM) cannot reserve worst case and pay for it with eviction machinery
+    /// instead.
     #[config(default = 4096, openwebui_param = "max_tokens")]
     pub sample_len: usize,
     /// The seed to use when generating random samples. If it is 0 then a random seed is used for each inference.

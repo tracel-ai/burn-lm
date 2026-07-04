@@ -127,6 +127,22 @@ pub async fn chat_completions(
     }
 }
 
+
+/// The engine's finish-reason stat, mapped onto the OpenAI field. `Length` is the actionable one —
+/// the response was cut off by the token cap, and the client may continue with a follow-up request.
+/// Everything else (a stop token, a cancel from a client that already left) reads as a normal stop.
+fn finish_reason_from(stats: &burn_lm_inference::Stats) -> FinishReasonSchema {
+    let cap_hit = stats.entries.iter().any(|entry| {
+        matches!(entry, burn_lm_inference::StatEntry::Named(name, value)
+            if name == burn_lm_inference::FINISH_REASON_STAT_NAME && value == "Length")
+    });
+    if cap_hit {
+        FinishReasonSchema::Length
+    } else {
+        FinishReasonSchema::Stop
+    }
+}
+
 async fn handle_non_streaming_response(
     state: ModelStoreState,
     payload: ChatCompletionRequestSchema,
@@ -143,7 +159,7 @@ async fn handle_non_streaming_response(
     );
     // Map inference failures to HTTP errors instead of unwrapping: a shed job (`Overloaded`)
     // must become a 429, not a panicking handler — panicking here would defeat backpressure.
-    let _stats = plugin
+    let stats = plugin
         .run_job(job)
         .map_err(crate::errors::ServerError::from)?;
     let content = handle.join();
@@ -161,7 +177,7 @@ async fn handle_non_streaming_response(
                 content,
                 refusal: None,
             },
-            finish_reason: FinishReasonSchema::Stop,
+            finish_reason: finish_reason_from(&stats),
             logprobs: None,
         }],
         usage: UsageSchema::default(),
@@ -350,11 +366,21 @@ async fn handle_streaming_response(
                 }
                 Ok(stats) => stats,
             };
+            let reason = finish_reason_from(&stats);
             let stats = format!("\n\n{}", stats.display_stats());
             let chunk =
                 StreamingChunk::Data(ChatCompletionChunkSchema::new(&id, model, now, &stats));
             // A send error just means the client disconnected; nothing left to do.
             if tx.send(chunk.to_event_stream()).await.is_err() {
+                return;
+            }
+
+            // The protocol-level ending: an empty delta carrying `finish_reason`, so a client that
+            // ignores our stats text still learns whether the response completed (`stop`) or was
+            // cut off by the token cap (`length`) and should be continued.
+            let finish =
+                StreamingChunk::Data(ChatCompletionChunkSchema::finish(&id, model, now, reason));
+            if tx.send(finish.to_event_stream()).await.is_err() {
                 return;
             }
 

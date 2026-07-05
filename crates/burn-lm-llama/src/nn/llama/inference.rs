@@ -91,7 +91,7 @@ impl LlamaDecoder {
             self.model
                 .forward_lanes(input, &mut self.cache, &self.pos_encoding.rope, &plan);
         let fwd_us = t_fwd.elapsed().as_micros() as u64;
-        tracing::debug!(target: "batching", n = lanes.len(), plan_us, fwd_us, "phase-fwd");
+        tracing::debug!(target: "batching", n = lanes.len(), l_max = plan.l_max, plan_us, fwd_us, "phase-fwd");
         let [n, seq_len, vocab] = logits.dims();
         Ok(logits
             .slice([0..n, seq_len - 1..seq_len, 0..vocab])

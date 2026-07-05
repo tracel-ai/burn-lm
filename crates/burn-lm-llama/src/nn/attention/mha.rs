@@ -85,34 +85,83 @@ impl MultiHeadAttention {
     ) -> Tensor<3> {
         let [n, seq_len, hidden_size] = input.dims();
 
+        // TEMP PROFILING (BURN_LM_PROFILE_OPS=1): force-sync at phase boundaries so wall time
+        // between marks is that phase's GPU execution, not just graph building.
+        let profile = std::env::var_os("BURN_LM_PROFILE_OPS").is_some();
+        let sync4 = |t: &Tensor<4>| {
+            let _ = t.clone().slice([0..1, 0..1, 0..1, 0..1]).into_data();
+        };
+        let t0 = std::time::Instant::now();
+
         let (q, k, v) = self.forward_projection(input);
+        let proj_us = if profile {
+            sync4(&v);
+            t0.elapsed().as_micros() as u64
+        } else { 0 };
 
         // Rotate each lane at its own absolute position. Unlike the old single-sequence path, lane
         // mode never shifts the RoPE table: it indexes the precomputed table directly. That stays
         // correct because the table is built with `max_seq_len * 5` rows (see `LlamaConfig::init`)
         // while `prepare_lanes` caps every lane at `max_seq_len`, so no lane position can fall past
         // the precomputed window — the shift the old path used only ever triggered beyond it.
+        let t1 = std::time::Instant::now();
         let q = apply_rope_lanes(rope, q, &plan.starts);
         let k = apply_rope_lanes(rope, k, &plan.starts);
+        let rope_us = if profile {
+            sync4(&k);
+            t1.elapsed().as_micros() as u64
+        } else { 0 };
 
         // The two paged-cache contracts, in order: write this round's K/V (one scatter per store,
         // addressed by the plan), then attend through `paged_attention` — the reference
         // implementation a dedicated cubecl kernel replaces behind the same signature.
+        let t2 = std::time::Instant::now();
         cache.write(plan, k, v);
         let output = paged_attention(q, cache, plan, self.n_heads / self.n_kv_heads);
+        let attn_us = if profile {
+            sync4(&output);
+            t2.elapsed().as_micros() as u64
+        } else { 0 };
 
+        let t3 = std::time::Instant::now();
         let output = output
             .swap_dims(1, 2)
-            .reshape([n, seq_len, hidden_size]);
-        self.wo.forward(output)
+            .reshape([n * seq_len, hidden_size]);
+        let out = self.wo.forward(output).reshape([n, seq_len, hidden_size]);
+        if profile {
+            let _ = out.clone().slice([0..1, 0..1, 0..1]).into_data();
+            tracing::debug!(
+                target: "batching",
+                n,
+                proj_us,
+                rope_us,
+                attn_us,
+                wo_us = t3.elapsed().as_micros() as u64,
+                "phase-ops"
+            );
+        }
+        out
     }
 
     fn forward_projection(&self, input: Tensor<3>) -> (Tensor<4>, Tensor<4>, Tensor<4>) {
         let [batch_size, seq_len, _hidden_size] = input.dims();
 
+        // EXPERIMENT (qkv flatten): same single-GEMM shape fix as the FFN and head.
+        let [b_, s_, d_] = input.dims();
+        let input = input.reshape([b_ * s_, d_]);
         let q = self.wq.forward(input.clone());
         let k = self.wk.forward(input.clone());
         let v = self.wv.forward(input);
+        let (q, k, v) = {
+            let qk = q.dims()[1];
+            let kk = k.dims()[1];
+            let vk = v.dims()[1];
+            (
+                q.reshape([b_, s_, qk]),
+                k.reshape([b_, s_, kk]),
+                v.reshape([b_, s_, vk]),
+            )
+        };
 
         // [batch_size, num_heads, seq_len, head_dim]
         let q = q

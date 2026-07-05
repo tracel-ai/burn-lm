@@ -77,6 +77,14 @@ mod llama_sampler {
             // Greedy fast path: at temperature 0 there is nothing stochastic, so the whole batch is a
             // single argmax — byte-identical to the framework's argmax sampler. This is the path the
             // equivalence and worker tests exercise.
+            // TEMP PROFILING: which sampling path runs, and why.
+            tracing::debug!(
+                target: "batching",
+                temperature = self.settings.temperature,
+                top_p = self.settings.top_p,
+                greedy = self.settings.temperature <= 0.0,
+                "sampler-path"
+            );
             if self.settings.temperature <= 0.0 {
                 return ids_to_host(logits.argmax(1));
             }

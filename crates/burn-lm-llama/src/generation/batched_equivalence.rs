@@ -594,3 +594,39 @@ fn bench_real_weights_batched_decode_throughput() {
     let prompt: Vec<u32> = (0..16).map(|i| 1000 + i * 13).collect();
     run_bench(&prompt, 50, &mut llama.decoder);
 }
+
+/// TEMP: matmul-shape microbench. If `[n, 1, d] @ [d, k]` (batched, M=1 — what Linear sees on the
+/// lane decode path) scales linearly in n while `[n, d] @ [d, k]` (one GEMM, M=n) stays flat, the
+/// decode's per-lane GPU cost is the batched-GEMV pathology and the fix is flattening seq=1.
+#[test]
+#[ignore = "microbench: run manually on a GPU backend"]
+fn bench_matmul_batch_vs_flat() {
+    let device: Device = Default::default();
+    let d = 2048usize;
+    let k = 8192usize;
+    let w2 = Tensor::<2>::random([d, k], burn::tensor::Distribution::Default, &device);
+    let w3 = w2.clone().unsqueeze::<3>();
+    for n in [1usize, 4, 16] {
+        let x3 = Tensor::<3>::random([n, 1, d], burn::tensor::Distribution::Default, &device);
+        let x2 = Tensor::<2>::random([n, d], burn::tensor::Distribution::Default, &device);
+        // warmup + sync
+        let _ = x3.clone().matmul(w3.clone()).into_data();
+        let _ = x2.clone().matmul(w2.clone()).into_data();
+        let reps = 20;
+        // Vary the input every rep (add the rep index) so no graph/result caching can elide the
+        // matmul, and reduce to a scalar so the sync is tiny but the compute is forced.
+        let t = std::time::Instant::now();
+        for r in 0..reps {
+            let x = x3.clone() + (r as f32);
+            let _: f32 = x.matmul(w3.clone()).sum().into_scalar();
+        }
+        let batched = t.elapsed().as_secs_f64() * 1000.0 / reps as f64;
+        let t = std::time::Instant::now();
+        for r in 0..reps {
+            let x = x2.clone() + (r as f32);
+            let _: f32 = x.matmul(w2.clone()).sum().into_scalar();
+        }
+        let flat = t.elapsed().as_secs_f64() * 1000.0 / reps as f64;
+        println!("n={n:>2}  batched [n,1,{d}]x[{d},{k}]: {batched:>7.2} ms   flat [n,{d}]x[{d},{k}]: {flat:>6.2} ms");
+    }
+}

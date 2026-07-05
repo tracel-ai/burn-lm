@@ -54,6 +54,7 @@ use crate::{
 
 use super::InferenceChannel;
 
+mod emission;
 mod worker;
 pub use worker::FINISH_REASON_STAT_NAME;
 

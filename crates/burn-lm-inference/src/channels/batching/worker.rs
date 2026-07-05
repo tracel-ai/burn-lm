@@ -16,9 +16,10 @@ use crate::{
     errors::{InferenceError, InferenceResult},
     job::CancelSignal,
     utf8::Utf8Buffer,
-    GeneratedItem, GeneratedItemEmitter, Stats,
+    Stats,
 };
 
+use super::emission;
 use super::{Command, QueuedJob, WorkerInner};
 
 /// Everything the serving worker needs to remember about one in-flight request, kept next to the
@@ -28,24 +29,14 @@ use super::{Command, QueuedJob, WorkerInner};
 /// up a `JobMeta` when it is admitted, streams through it each round, and is retired from it when
 /// it finishes.
 struct JobMeta {
-    /// The channel we stream this request's generated text back to the caller on.
-    emitter: GeneratedItemEmitter,
+    /// The worker's monotonic key for this request. Slots are reused between requests; ids are
+    /// not — the emission thread files this request's delivery state (emitter, detok cursor,
+    /// completion) under this id from admission to retirement.
+    id: u64,
     /// Whether a stop token ended this sequence — the distinction the finish reason reports:
     /// a sequence that stopped itself finished with `stop`; one cut off by its token cap finished
     /// with `length`, and the client is expected to act on that (continue, or raise `max_tokens`).
     hit_stop: bool,
-    /// The detokenizer cursor for this request. A token is just bytes, and byte-level BPE can split
-    /// a single UTF-8 character across two tokens, so we can't simply decode tokens to text one at
-    /// a time. Each round we push the new token's raw bytes in here and emit only the text that is
-    /// now complete, holding a trailing partial character back until its next byte arrives. Without
-    /// this the stream could surface a broken U+FFFD character, or the decoder could panic on
-    /// invalid UTF-8.
-    detok: Utf8Buffer,
-    /// The one-shot channel that tells the caller their request is done, with stats or an error. It
-    /// is an `Option` so every place that might send must first `take`, to guarantee we reply
-    /// exactly once: the first send wins. This matters because the channel is a bounded one-shot —
-    /// a second send, with the first still sitting unread, would block this whole worker thread.
-    completion: Option<std::sync::mpsc::SyncSender<InferenceResult<Stats>>>,
     /// The caller's cancellation signal. `step` checks it once per round, so a cancelled request
     /// stops promptly instead of running all the way to its natural end.
     cancel: CancelSignal,
@@ -90,6 +81,15 @@ pub(super) fn spawn<S: BatchedInferenceServer + 'static>(seed: S) -> InferenceRe
             let mut server = seed;
             let mut queue: VecDeque<QueuedJob> = VecDeque::new();
             let mut active: Vec<JobSeq> = Vec::new();
+            // The delivery side of this worker (see `emission.rs`): owned by this thread so a
+            // fresh worker always gets a fresh emission thread, and dropping our sender on ANY
+            // exit path — shutdown or panic — is what tells it to fail whatever is still live.
+            let Ok((emission, _emission_handle)) = emission::spawn() else {
+                fail_everything(&mut queue, &mut active);
+                return;
+            };
+            // Monotonic request ids for the emission thread's ledger; slots are reused, ids never.
+            let mut next_id: u64 = 0;
 
             loop {
                 // One panic boundary per loop turn — a turn is the unit we keep consistent. If model
@@ -98,7 +98,7 @@ pub(super) fn spawn<S: BatchedInferenceServer + 'static>(seed: S) -> InferenceRe
                 // because nothing crossing the boundary is reused: the server is dropped on exit, and
                 // `queue`/`active` are only read to send `WorkerDied` replies, then cleared.
                 let flow = catch_unwind(AssertUnwindSafe(|| {
-                    worker_iteration(&mut server, &mut queue, &mut active, &receiver)
+                    worker_iteration(&mut server, &mut queue, &mut active, &receiver, &emission, &mut next_id)
                 }));
                 match flow {
                     Ok(Flow::Continue) => {}
@@ -139,6 +139,8 @@ fn worker_iteration<S: BatchedInferenceServer>(
     queue: &mut VecDeque<QueuedJob>,
     active: &mut Vec<JobSeq>,
     receiver: &std::sync::mpsc::Receiver<Command>,
+    emission: &std::sync::mpsc::Sender<emission::EmissionEvent>,
+    next_id: &mut u64,
 ) -> Flow {
     // Only block for a command when there's genuinely nothing to do: nothing active, and nothing
     // admittable (a queued job with a free slot). We only wake from `recv` when a new command
@@ -166,25 +168,24 @@ fn worker_iteration<S: BatchedInferenceServer>(
 
     // Admit queued jobs while there is room for them. Anything that doesn't fit stays at the front
     // of the queue for a later turn — this is where backpressure happens.
-    admit(server, queue, active);
+    admit(server, queue, active, emission, next_id);
 
     // Advance every decoding sequence by one token (plus at most one prefill), then retire whatever
     // just finished. Each retire frees a slot, so the next turn can admit more.
-    step(server, active);
+    step(server, active, emission);
 
     Flow::Continue
 }
 
-/// Tell everyone the worker has died. Active sequences are retired with `WorkerDied` (same send-once
-/// discipline as a normal retire) and queued jobs answered the same way, each releasing its queue
-/// permit as it drops. Commands still buffered in the channel disconnect when the receiver drops, so
-/// those callers also see `WorkerDied` and their permits drop too — the in-flight counter can't
-/// leak. No slots are released: the server, and every slot's cache with it, dies with the thread,
-/// and the replacement worker starts empty.
+/// Tell everyone the worker has died. Active sequences' delivery state (emitter, cursor,
+/// completion) lives on the emission thread, and this worker exiting right after this call drops
+/// its event sender — the emission thread then flushes and answers every still-live request with
+/// `WorkerDied`. Queued jobs never had delivery state transferred, so they are answered here, each
+/// releasing its queue permit as it drops. Commands still buffered in the channel disconnect when
+/// the receiver drops, so those callers also see `WorkerDied` and their permits drop too — the
+/// in-flight counter can't leak. No slots are released: the server, and every slot's cache with
+/// it, dies with the thread, and the replacement worker starts empty.
 fn fail_everything(queue: &mut VecDeque<QueuedJob>, active: &mut Vec<JobSeq>) {
-    for seq in active.iter_mut() {
-        retire(&mut seq.extra, Err(InferenceError::WorkerDied));
-    }
     active.clear();
     for queued in queue.drain(..) {
         let _ = queued.completion.send(Err(InferenceError::WorkerDied));
@@ -268,6 +269,8 @@ fn admit<S: BatchedInferenceServer>(
     server: &mut S,
     queue: &mut VecDeque<QueuedJob>,
     active: &mut Vec<JobSeq>,
+    emission: &std::sync::mpsc::Sender<emission::EmissionEvent>,
+    next_id: &mut u64,
 ) {
     while active.len() < server.batch_capacity().max_slots {
         // Decide whether the FRONT job fits before taking it off the queue, so a job that must
@@ -370,6 +373,19 @@ fn admit<S: BatchedInferenceServer>(
             "admitted a sequence to a decode lane"
         );
 
+        // Hand this request's delivery state to the emission thread under a fresh id. From here on
+        // the worker never touches the emitter, cursor, or completion — it schedules; the emission
+        // thread delivers (see `emission.rs`). A send can only fail if the emission thread died,
+        // which only happens when this thread is already exiting.
+        let id = *next_id;
+        *next_id += 1;
+        let _ = emission.send(emission::EmissionEvent::Admitted {
+            id,
+            emitter: job.emitter,
+            detok: Utf8Buffer::new(),
+            completion,
+        });
+
         // Release the slot before handing it over, even though retire normally already did. A safety
         // net added after a review: re-releasing a free slot is a no-op, but it guarantees one
         // prompt's leftover state can never bleed into the next if some retire or failed-prefill
@@ -388,10 +404,8 @@ fn admit<S: BatchedInferenceServer>(
             finished: false,
             kv_reservation: need,
             extra: JobMeta {
-                emitter: job.emitter,
+                id,
                 hit_stop: false,
-                detok: Utf8Buffer::new(),
-                completion: Some(completion),
                 cancel: job.cancel,
                 queue_wait,
                 cancelled: false,
@@ -409,7 +423,11 @@ static CAP_LOGGED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool
 /// fused decode over every decoding sequence, plus at most one prefill — and this function handles
 /// the serving-specific part around it: stream each new token out to its caller, and retire the
 /// sequences that just finished.
-fn step<S: BatchedInferenceServer>(server: &mut S, active: &mut Vec<JobSeq>) {
+fn step<S: BatchedInferenceServer>(
+    server: &mut S,
+    active: &mut Vec<JobSeq>,
+    emission: &std::sync::mpsc::Sender<emission::EmissionEvent>,
+) {
     // Nothing active, so don't touch the model. This guard matters because `decoder()` loads
     // lazily: borrowing it on an empty round would force a load — even reloading right after a
     // successful `Unload` in the same turn.
@@ -456,8 +474,11 @@ fn step<S: BatchedInferenceServer>(server: &mut S, active: &mut Vec<JobSeq>) {
             // Couldn't borrow the decoder, so retire every sequence with this error. There's nothing
             // to release slots into (the caches live inside the decoder, and a fresh load starts
             // empty), so clearing `active` is what frees them.
-            for seq in active.iter_mut() {
-                retire(&mut seq.extra, Err(err.clone()));
+            for seq in active.iter() {
+                let _ = emission.send(emission::EmissionEvent::Retire {
+                    id: seq.extra.id,
+                    reply: Err(err.clone()),
+                });
             }
             active.clear();
             return;
@@ -474,33 +495,36 @@ fn step<S: BatchedInferenceServer>(server: &mut S, active: &mut Vec<JobSeq>) {
         );
     }
 
-    // Stream the round's output. For each sequence that advanced, push its new token's bytes through
-    // the detok cursor and emit whatever text is now complete — a stop token isn't streamed, and a
-    // mid-character byte is held back for next round. A sequence whose forward failed is retired here.
+    // Ship the round's output — ONE event for the whole round, whatever the width. The worker only
+    // does the cheap part here (the per-token byte lookup, which needs the server-owned tokenizer);
+    // the per-request delivery work — UTF-8 cursoring, listener wakeups, stream writes — happens on
+    // the emission thread, overlapping the next forward instead of lengthening this round. A stop
+    // token isn't streamed; a failed forward retires its sequence through the same FIFO, so its
+    // trailing bytes still flush before its completion fires.
+    let mut round_tokens: Vec<(u64, Vec<u8>)> = Vec::new();
     for (seq, outcome) in active.iter_mut().zip(outcomes) {
         match outcome {
             StepOutcome::Stepped { token, is_stop, .. } => {
                 if is_stop {
                     seq.extra.hit_stop = true;
-                }
-                if !is_stop {
-                    let bytes = server.detokenize_bytes(&[token]);
-                    if let Some(text) = seq.extra.detok.push(&bytes) {
-                        seq.extra.emitter.completed(GeneratedItem::Text(text));
-                    }
+                } else {
+                    round_tokens.push((seq.extra.id, server.detokenize_bytes(&[token])));
                 }
             }
             StepOutcome::Failed(err) => {
-                // Flush the held-back bytes before completion fires, just like the decoder-error
-                // path above, so that trailing text always reaches the caller before we tell them
-                // the request is done.
-                retire(&mut seq.extra, Err(err));
+                let _ = emission.send(emission::EmissionEvent::Retire {
+                    id: seq.extra.id,
+                    reply: Err(err),
+                });
             }
             StepOutcome::Skipped => {}
             // An intermediate prefill chunk advanced its lane's KV but sampled no token, so there is
             // nothing to stream and nothing to retire — the sequence keeps prefilling next round.
             StepOutcome::Prefilling => {}
         }
+    }
+    if !round_tokens.is_empty() {
+        let _ = emission.send(emission::EmissionEvent::Tokens(round_tokens));
     }
 
     // Retire finished sequences: drop them and signal completion, freeing capacity to admit.
@@ -552,7 +576,10 @@ fn step<S: BatchedInferenceServer>(server: &mut S, active: &mut Vec<JobSeq>) {
                 FINISH_REASON_STAT_NAME.to_string(),
                 reason.to_string(),
             ));
-            retire(&mut seq.extra, Ok(stats));
+            let _ = emission.send(emission::EmissionEvent::Retire {
+                id: seq.extra.id,
+                reply: Ok(stats),
+            });
             false
         } else {
             true
@@ -571,24 +598,4 @@ fn step<S: BatchedInferenceServer>(server: &mut S, active: &mut Vec<JobSeq>) {
     }
 }
 
-/// Flush a retiring sequence's detok cursor out to its emitter. At the true end of a stream a
-/// held-back partial character can never be completed, so this is the one place we allow the lossy
-/// U+FFFD replacement rather than silently dropping those bytes. Every retire path calls it: the
-/// retire sweep in `step` and the decoder-error mass-retire.
-fn flush_detok(meta: &mut JobMeta) {
-    if let Some(text) = meta.detok.finish() {
-        meta.emitter.completed(GeneratedItem::Text(text));
-    }
-}
 
-/// Retire a single sequence: flush its detok cursor to the emitter, then send its completion reply
-/// exactly once. The flush comes first so trailing held-back bytes always reach the caller before
-/// the completion does, and the `take` keeps the bounded one-shot send-once — a second send would
-/// block the worker. Every retire path goes through here; on success the caller builds the `Stats`
-/// first and passes `Ok(stats)`.
-fn retire(meta: &mut JobMeta, reply: InferenceResult<Stats>) {
-    flush_detok(meta);
-    if let Some(completion) = meta.completion.take() {
-        let _ = completion.send(reply);
-    }
-}

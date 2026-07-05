@@ -4,7 +4,7 @@ use burn::{
     nn::{
         Embedding, EmbeddingConfig, Linear, LinearConfig, RmsNorm, RmsNormConfig, RotaryEncoding,
     },
-    tensor::{Bool, Device, Int, Tensor},
+    tensor::{Device, Int, Tensor},
 };
 
 use crate::nn::{

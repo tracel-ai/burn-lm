@@ -63,6 +63,11 @@ pub struct LanePlan {
     pub gather_idx: Tensor<1, Int>,
     /// Blocks per lane in `gather_idx`: enough to cover `l_max`.
     pub blocks_per_lane: usize,
+    /// The round's KV write index, prebuilt like `gather_idx`: `(block, offset)` destination pairs
+    /// for every new token, lane-major in `lanes` order — `[n·seq_len, 2]`. One scatter per store
+    /// per layer writes the whole round through this; a token crossing a block boundary is just a
+    /// different pair. These are the exact inputs a dedicated cache-write kernel takes.
+    pub write_idx: Tensor<2, Int>,
     /// The longest active lane's length after this forward — the width of the gathered KV and of
     /// the mask's last dimension.
     pub l_max: usize,
@@ -275,12 +280,22 @@ impl PagedKvCache {
             &self.device,
         );
 
+        // ...and the round's write index: every new token's (block, offset) destination, shared by
+        // every layer's K and V scatter.
+        let write_ids =
+            crate::block_store::write_indices(&tables, &starts, seq_len, self.pool.block_size());
+        let write_idx = Tensor::<2, Int>::from_data(
+            burn::tensor::TensorData::new(write_ids, [n * seq_len, 2]),
+            &self.device,
+        );
+
         Ok(LanePlan {
             lanes: lanes.to_vec(),
             starts,
             tables,
             gather_idx,
             blocks_per_lane,
+            write_idx,
             l_max,
             mask,
         })

@@ -6,7 +6,7 @@ use burn::{
 
 use crate::nn::pos_encoding::apply_rope_lanes;
 
-use super::{KeyValueCache, LanePlan};
+use super::{paged_attention, KeyValueCache, LanePlan};
 
 /// Configuration to create a [multi-head attention](MultiHeadAttention) module.
 #[derive(Config, Debug)]
@@ -95,14 +95,15 @@ impl MultiHeadAttention {
         let q = apply_rope_lanes(rope, q, &plan.starts);
         let k = apply_rope_lanes(rope, k, &plan.starts);
 
-        // Block-addressed KV write + ragged read-back to the longest active lane, both driven by the
-        // plan's block tables — the cache below is purely physical and knows nothing about lanes.
-        let (k, v) = cache.forward_lanes(plan, k, v);
+        // The two paged-cache contracts, in order: write this round's K/V (one scatter per store,
+        // addressed by the plan), then attend through `paged_attention` — the reference
+        // implementation a dedicated cubecl kernel replaces behind the same signature.
+        cache.write(plan, k, v);
+        let output = paged_attention(q, cache, plan, self.n_heads / self.n_kv_heads);
 
-        // plan.mask is [n, 1, seq_len, l_max]; broadcasts over heads inside forward_attention.
-        let output =
-            self.forward_attention(q, k, v, Some(plan.mask.clone()), n, seq_len, hidden_size);
-
+        let output = output
+            .swap_dims(1, 2)
+            .reshape([n, seq_len, hidden_size]);
         self.wo.forward(output)
     }
 

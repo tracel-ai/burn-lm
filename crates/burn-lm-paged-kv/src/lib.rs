@@ -27,11 +27,13 @@
 //! (`burn-lm-inference`), and nothing here crosses the engine's decoder trait — the engine speaks
 //! slots and token ids; blocks stay a private concern of the model that chose them.
 
+mod attention;
 mod block_pool;
 mod block_store;
 mod cache;
 mod kv_cache;
 
+pub use attention::paged_attention;
 pub use block_pool::*;
 pub use cache::*;
 pub use kv_cache::*;

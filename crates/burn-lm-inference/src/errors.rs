@@ -17,7 +17,7 @@ pub enum InferenceError {
     UnloadError(String, String),
     #[error("Input sequence length ({0} tokens) exceeds maximum context window ({1} tokens). Please shorten your input or increase the maximum context window.")]
     ContextLengthExceeded(usize, usize),
-    #[error("The KV block pool ran dry ({0} block(s) short). Admission reserves worst-case blocks per sequence, so this indicates an engine accounting bug.")]
+    #[error("The request needs {0} more KV block(s) than the pool holds. Lower max_tokens or shorten the prompt.")]
     KvPoolExhausted(usize),
     #[error("Decoder forward violated the batch contract: {0}")]
     BatchContractViolation(String),

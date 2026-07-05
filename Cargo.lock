@@ -960,6 +960,7 @@ dependencies = [
  "base64 0.22.1",
  "burn",
  "burn-lm-inference",
+ "burn-lm-paged-kv",
  "burn-store",
  "clap",
  "dirs 5.0.1",
@@ -981,6 +982,13 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.117",
+]
+
+[[package]]
+name = "burn-lm-paged-kv"
+version = "0.0.1"
+dependencies = [
+ "burn",
 ]
 
 [[package]]

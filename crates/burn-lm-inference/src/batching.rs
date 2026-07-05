@@ -422,10 +422,15 @@ pub fn step_round<D: BatchedDecoder, X>(
     // Guarded so it allocates nothing when debug logging is off.
     if tracing::enabled!(target: "batching", tracing::Level::DEBUG) {
         let decoding_lanes: Vec<usize> = decode_rows.iter().map(|(_, row)| row.slot).collect();
+        // The reservation view of the KV pool: what admission has promised, not what the model has
+        // physically allocated (actual use is at most the reservation; the gap is the worst-case
+        // headroom the admission policy trades for never running dry).
+        let kv_blocks_reserved: usize = active.iter().map(|seq| seq.kv_reservation).sum();
         tracing::debug!(
             target: "batching",
             decode_width,
             prefill_candidates = prefills.len(),
+            kv_blocks_reserved,
             ?decoding_lanes,
             "round"
         );

@@ -58,6 +58,9 @@ pub struct AppConfig {
     /// The chunked-prefill width (`prefill_chunk_size`): prompt tokens prefilled per round. `0` is
     /// unbounded (the whole prompt in one round).
     pub prefill_chunk_size: Option<usize>,
+    /// The KV pool size in tokens (`kv_pool_tokens`): decouples KV memory from
+    /// `max_slots × max_seq_len` so slots can oversubscribe the pool. `0` keeps the full rectangle.
+    pub kv_pool_tokens: Option<usize>,
 }
 
 impl App {
@@ -84,6 +87,7 @@ impl App {
         set_if_unset("BURN_LM_MAX_SLOTS", config.max_slots);
         set_if_unset("BURN_LM_MAX_SEQ_LEN", config.max_seq_len);
         set_if_unset("BURN_LM_PREFILL_CHUNK_SIZE", config.prefill_chunk_size);
+        set_if_unset("BURN_LM_KV_POOL_TOKENS", config.kv_pool_tokens);
         Self::new(host, port)
     }
 }

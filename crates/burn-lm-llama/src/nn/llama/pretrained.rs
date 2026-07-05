@@ -170,6 +170,7 @@ impl LlamaConfig {
     pub fn llama3_2_3b_pretrained(
         max_seq_len: usize,
         max_slots: usize,
+        kv_pool_tokens: usize,
         device: &Device,
     ) -> Result<Llama<Tiktoken>, String> {
         // Llama-3.2 models support context length up to 128K tokens.
@@ -191,6 +192,7 @@ impl LlamaConfig {
             tokenizer.to_str().unwrap(),
             max_seq_len,
             max_slots,
+            kv_pool_tokens,
             device,
         )
     }
@@ -204,6 +206,7 @@ impl LlamaConfig {
     pub fn llama3_2_1b_pretrained(
         max_seq_len: usize,
         max_batch_size: usize,
+        kv_pool_tokens: usize,
         device: &Device,
     ) -> Result<Llama<Tiktoken>, String> {
         // Llama-3.2 models support context length up to 128K tokens.
@@ -223,6 +226,7 @@ impl LlamaConfig {
             tokenizer.to_str().unwrap(),
             max_seq_len,
             max_batch_size,
+            kv_pool_tokens,
             device,
         )
     }
@@ -257,6 +261,7 @@ impl LlamaConfig {
             tokenizer.to_str().unwrap(),
             max_seq_len,
             1,
+            0, // window-per-lane pool: one lane, one window — nothing to oversubscribe
             device,
         )
     }
@@ -271,6 +276,7 @@ impl LlamaConfig {
     pub fn llama3_1_8b_pretrained(
         max_seq_len: usize,
         max_slots: usize,
+        kv_pool_tokens: usize,
         device: &Device,
     ) -> Result<Llama<Tiktoken>, String> {
         // Llama-3.1 models support context length up to 128K tokens.
@@ -292,6 +298,7 @@ impl LlamaConfig {
             tokenizer.to_str().unwrap(),
             max_seq_len,
             max_slots,
+            kv_pool_tokens,
             device,
         )
     }
@@ -306,6 +313,7 @@ impl LlamaConfig {
     pub fn llama3_8b_pretrained(
         max_seq_len: usize,
         max_slots: usize,
+        kv_pool_tokens: usize,
         device: &Device,
     ) -> Result<Llama<Tiktoken>, String> {
         // Llama-3 models support context length up to 8K tokens.
@@ -327,6 +335,7 @@ impl LlamaConfig {
             tokenizer.to_str().unwrap(),
             max_seq_len,
             max_slots,
+            kv_pool_tokens,
             device,
         )
     }

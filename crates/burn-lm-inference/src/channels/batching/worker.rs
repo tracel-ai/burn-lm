@@ -324,6 +324,16 @@ fn admit<S: BatchedInferenceServer>(
         // stops — first come, first served, drained again after the next retire.
         let kv = server.batch_capacity().kv;
         let need = kv.blocks_for((tokens.len() + max_gen).min(max_context_len));
+        // A request whose worst case exceeds the WHOLE pool can never run — waiting would block the
+        // queue head forever. Reject it now, like an over-long prompt, so the jobs behind it keep
+        // flowing. (Lowering `max_tokens` shrinks the worst case, so the client can retry smaller.)
+        if need > kv.total_blocks {
+            let failed = queue.pop_front().expect("checked above");
+            let _ = failed
+                .completion
+                .send(Err(InferenceError::KvPoolExhausted(need - kv.total_blocks)));
+            continue;
+        }
         let reserved: usize = active.iter().map(|seq| seq.kv_reservation).sum();
         if need > kv.total_blocks.saturating_sub(reserved) {
             break;
@@ -354,6 +364,9 @@ fn admit<S: BatchedInferenceServer>(
             target: "batching",
             slot,
             in_flight = active.len() + 1,
+            kv_blocks_reserved = need,
+            kv_blocks_outstanding = reserved + need,
+            kv_blocks_total = kv.total_blocks,
             "admitted a sequence to a decode lane"
         );
 
@@ -506,6 +519,7 @@ fn step<S: BatchedInferenceServer>(server: &mut S, active: &mut Vec<JobSeq>) {
                 target: "batching",
                 slot = seq.slot,
                 generated = seq.generated,
+                kv_blocks_freed = seq.kv_reservation,
                 "retired a sequence from its decode lane"
             );
             let mut stats = Stats::new();

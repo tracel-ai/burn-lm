@@ -66,6 +66,16 @@ pub struct Llama3ServerConfig {
     /// starting in a later change.
     #[config(default = 512)]
     pub prefill_chunk_size: usize,
+    /// The KV pool size, in tokens. `0` (the default) sizes the pool to the full rectangle —
+    /// `max_slots × max_seq_len`, every lane able to reach the context window at once, the old
+    /// slab's capacity. A non-zero value decouples the pool from the rectangle: set it to what the
+    /// device can hold and raise `max_slots` past the old lane count — admission reserves each
+    /// sequence's worst case (`min(prompt + max_tokens, max_seq_len)` tokens) against this pool, so
+    /// many short requests share memory one long lane would have monopolized. Sizing rule of thumb:
+    /// bytes = tokens × KV-bytes-per-token (Llama-3.2-1B: 64 KB at fp32, 32 KB at fp16). Resolved
+    /// at load via `BURN_LM_KV_POOL_TOKENS`.
+    #[config(default = 0)]
+    pub kv_pool_tokens: usize,
 }
 
 impl Llama3ServerConfig {
@@ -345,9 +355,19 @@ macro_rules! impl_batched_llama_server {
                     None => {
                         let max_seq_len = config_usize(self.config.max_seq_len, "BURN_LM_MAX_SEQ_LEN");
                         let block_size = DEFAULT_BLOCK_SIZE.min(max_seq_len);
+                        let pool_tokens =
+                            config_usize(self.config.kv_pool_tokens, "BURN_LM_KV_POOL_TOKENS");
+                        // Mirror `load`'s sizing exactly: the explicit token budget when set, the
+                        // full rectangle otherwise — so pre-load admission and the pool that
+                        // materializes can never disagree.
+                        let total_blocks = if pool_tokens > 0 {
+                            pool_tokens.div_ceil(block_size)
+                        } else {
+                            (configured * max_seq_len).div_ceil(block_size)
+                        };
                         KvBudget {
                             block_size,
-                            total_blocks: (configured * max_seq_len).div_ceil(block_size),
+                            total_blocks,
                         }
                     }
                 };
@@ -703,21 +723,23 @@ impl Llama3BaseServer {
             let prefill_chunk_size =
                 config_usize(config.prefill_chunk_size, "BURN_LM_PREFILL_CHUNK_SIZE");
             tracing::info!(target: "batching", prefill_chunk_size, "prefill chunk size");
+            let kv_pool_tokens = config_usize(config.kv_pool_tokens, "BURN_LM_KV_POOL_TOKENS");
+            tracing::info!(target: "batching", kv_pool_tokens, "kv pool tokens (0 = full rectangle)");
             let model = match self.version {
                 LlamaVersion::Llama3Instruct => {
-                    LlamaConfig::llama3_8b_pretrained(max_seq_len, max_slots, &*INFERENCE_DEVICE)
+                    LlamaConfig::llama3_8b_pretrained(max_seq_len, max_slots, kv_pool_tokens, &*INFERENCE_DEVICE)
                         .unwrap()
                 }
                 LlamaVersion::Llama31Instruct => {
-                    LlamaConfig::llama3_1_8b_pretrained(max_seq_len, max_slots, &*INFERENCE_DEVICE)
+                    LlamaConfig::llama3_1_8b_pretrained(max_seq_len, max_slots, kv_pool_tokens, &*INFERENCE_DEVICE)
                         .unwrap()
                 }
                 LlamaVersion::Llama323bInstruct => {
-                    LlamaConfig::llama3_2_3b_pretrained(max_seq_len, max_slots, &*INFERENCE_DEVICE)
+                    LlamaConfig::llama3_2_3b_pretrained(max_seq_len, max_slots, kv_pool_tokens, &*INFERENCE_DEVICE)
                         .unwrap()
                 }
                 LlamaVersion::Llama321bInstruct => {
-                    LlamaConfig::llama3_2_1b_pretrained(max_seq_len, max_slots, &*INFERENCE_DEVICE)
+                    LlamaConfig::llama3_2_1b_pretrained(max_seq_len, max_slots, kv_pool_tokens, &*INFERENCE_DEVICE)
                         .unwrap()
                 }
                 LlamaVersion::Llama321bInstructQ4FB32 => {

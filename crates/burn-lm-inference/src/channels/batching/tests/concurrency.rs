@@ -60,6 +60,46 @@ fn kv_budget_serializes_admission_when_blocks_run_short() {
     );
 }
 
+/// A request whose worst case exceeds the WHOLE pool can never run: it is rejected at admission
+/// with `KvPoolExhausted` instead of blocking the queue head forever, and the job behind it — which
+/// fits — runs normally.
+#[test]
+fn a_request_larger_than_the_whole_pool_is_rejected_not_queued() {
+    let log: OrderLog = Arc::new(Mutex::new(Vec::new()));
+    // Worst case per job: 1 prompt token + 16 max_gen = 17 blocks at block_size 1. A 10-block pool
+    // can never fit it... for job A. Job B lowers max_tokens to 5 -> 6 blocks -> fits.
+    let server = FakeServer::new(2, log.clone()).with_kv_budget(1, 10);
+    let channel = BatchingChannel::<FakeServer>::with_server(server);
+
+    let (job_a, _ha) = InferenceJob::create(
+        InferenceTask::Prompt("a".into()),
+        GenerationParams::default(), // max_tokens unset -> server cap 16 -> needs 17 blocks
+        NullListener,
+    );
+    let (job_b, _hb) = InferenceJob::create(
+        InferenceTask::Prompt("b".into()),
+        GenerationParams {
+            max_tokens: Some(5),
+            ..GenerationParams::default()
+        },
+        NullListener,
+    );
+
+    let rx_a = channel.submit(job_a).unwrap();
+    let rx_b = channel.submit(job_b).unwrap();
+    let err = match rx_a.recv().unwrap() {
+        Err(err) => err,
+        Ok(_) => panic!("a job needing 17 blocks must be rejected by a 10-block pool"),
+    };
+    assert!(
+        matches!(err, InferenceError::KvPoolExhausted(7)),
+        "17 needed vs 10 in the pool is 7 short: {err:?}"
+    );
+    rx_b.recv().unwrap().unwrap();
+    let out = log.lock().unwrap().clone();
+    assert!(out.contains(&1), "the job behind the rejected one still runs: {out:?}");
+}
+
 /// Capacity == 1: admission is one-at-a-time, so the two sequences run SERIALLY (no overlap).
 /// This proves capacity-based admission/backpressure.
 #[test]

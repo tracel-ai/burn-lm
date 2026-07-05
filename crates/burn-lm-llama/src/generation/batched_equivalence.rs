@@ -122,7 +122,8 @@ fn test_llama_lanes_with_block_size(
     )
     .with_max_seq_len(cfg.max_seq_len)
     .with_norm_eps(cfg.norm_eps);
-    llama.decoder.cache = PagedKvCache::new(tcfg.kv_layout(), n_lanes, block_size, device);
+    llama.decoder.cache =
+        PagedKvCache::with_window_per_lane(tcfg.kv_layout(), n_lanes, block_size, device);
     llama
 }
 
@@ -587,7 +588,7 @@ fn bench_real_weights_batched_decode_throughput() {
     let device: Device = Default::default();
     let max_seq_len = 128;
     // An 8-lane slab so run_bench can drive batch 1..8 against the real fused decode.
-    let mut llama = LlamaConfig::llama3_2_1b_pretrained(max_seq_len, 8, &device)
+    let mut llama = LlamaConfig::llama3_2_1b_pretrained(max_seq_len, 8, 0, &device)
         .expect("Llama-3.2-1B-Instruct weights must already be downloaded");
     // Arbitrary in-vocab prompt token ids; argmax decode only needs ids.
     let prompt: Vec<u32> = (0..16).map(|i| 1000 + i * 13).collect();

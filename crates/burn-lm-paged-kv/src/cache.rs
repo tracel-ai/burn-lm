@@ -82,7 +82,8 @@ pub struct LanePlan {
 pub struct PagedKvCache {
     layers: Vec<KeyValueCache>,
     device: Device,
-    max_seq_len: usize,
+    /// The KV shape this cache was built with — kept so the pool can be rebuilt (`resize_pool`).
+    layout: KvLayout,
     /// The per-lane ledger: each lane's length and block table, plus the shared free stack — in one
     /// type so lengths and tables can never drift apart. One block-id space serves every layer's K
     /// and V stores — block `b` names the same row in all of them.
@@ -90,9 +91,10 @@ pub struct PagedKvCache {
 }
 
 impl PagedKvCache {
-    /// A cache with the default block size (clamped to the context window).
+    /// A cache with the default block size and a window-per-lane pool (see
+    /// [`Self::with_window_per_lane`]).
     pub fn with_default_blocks(layout: KvLayout, max_lanes: usize, device: &Device) -> Self {
-        Self::new(
+        Self::with_window_per_lane(
             layout,
             max_lanes,
             DEFAULT_BLOCK_SIZE.min(layout.max_seq_len),
@@ -105,21 +107,41 @@ impl PagedKvCache {
     /// model that wants no paging chooses this; it is a configuration of the same type, not a
     /// separate implementation, and the equivalence gates cover it as the degenerate block size.
     pub fn unpaged(layout: KvLayout, max_lanes: usize, device: &Device) -> Self {
-        Self::new(layout, max_lanes, layout.max_seq_len, device)
+        Self::with_window_per_lane(layout, max_lanes, layout.max_seq_len, device)
     }
 
-    /// A cache with an explicit block size — the seam the block-size equivalence tests drive, and
-    /// where a measured, per-platform tuning of the default would plug in.
-    pub fn new(layout: KvLayout, max_lanes: usize, block_size: usize, device: &Device) -> Self {
+    /// A cache whose pool holds one full context window per lane — every lane can reach
+    /// `max_seq_len` simultaneously, like the old slab, so nothing is ever oversubscribed. The
+    /// degenerate sizing: safe, and wasteful for ragged traffic in exactly the way paging exists to
+    /// fix. The block-size equivalence tests drive their explicit sizes through here.
+    pub fn with_window_per_lane(
+        layout: KvLayout,
+        max_lanes: usize,
+        block_size: usize,
+        device: &Device,
+    ) -> Self {
+        let window_per_lane = (max_lanes * layout.max_seq_len).div_ceil(block_size);
+        Self::new(layout, max_lanes, block_size, window_per_lane, device)
+    }
+
+    /// The standard constructor: an explicit pool size, decoupled from the lane count — the point
+    /// of paging. With `usable_blocks` below one-window-per-lane, the lanes oversubscribe the pool:
+    /// more sequences can be admitted than could all simultaneously reach `max_seq_len`, and it is
+    /// the serving engine's reservation accounting (worst case per sequence, against
+    /// `usable_blocks`) that keeps the pool from ever running dry mid-flight.
+    pub fn new(
+        layout: KvLayout,
+        max_lanes: usize,
+        block_size: usize,
+        usable_blocks: usize,
+        device: &Device,
+    ) -> Self {
         assert!(
             block_size >= 1 && block_size <= layout.max_seq_len,
             "block_size must be in 1..=max_seq_len"
         );
-        // The pool holds the same tokens as the old rectangle — `max_lanes × max_seq_len` — just
-        // cut into blocks, plus the zeroed sentinel. Decoupling the pool's size from the rectangle
-        // (so lanes can oversubscribe it) is a later, engine-side change; the layout stops
-        // depending on it here.
-        let num_blocks = (max_lanes * layout.max_seq_len).div_ceil(block_size) + 1;
+        assert!(usable_blocks >= 1, "the pool needs at least one usable block");
+        let num_blocks = usable_blocks + 1; // plus the zeroed sentinel
         let layers = (0..layout.n_layers)
             .map(|_| {
                 KeyValueCache::new(
@@ -135,7 +157,7 @@ impl PagedKvCache {
         Self {
             layers,
             device: device.clone(),
-            max_seq_len: layout.max_seq_len,
+            layout,
             pool: BlockPool::new(block_size, num_blocks, max_lanes),
         }
     }
@@ -172,7 +194,7 @@ impl PagedKvCache {
     /// can hold more than this; the engine reads it to retire a sequence before its next forward
     /// would overflow.
     pub fn max_seq_len(&self) -> usize {
-        self.max_seq_len
+        self.layout.max_seq_len
     }
 
     /// Plan one forward of `seq_len` new tokens over the given lanes, and commit it. It checks each
@@ -194,10 +216,10 @@ impl PagedKvCache {
         );
 
         for &lane in lanes {
-            if self.pool.lane_len(lane) + seq_len > self.max_seq_len {
+            if self.pool.lane_len(lane) + seq_len > self.layout.max_seq_len {
                 return Err(PagedKvError::MaxSequenceLengthExceeded {
                     actual: self.pool.lane_len(lane) + seq_len,
-                    max: self.max_seq_len,
+                    max: self.layout.max_seq_len,
                 });
             }
         }
@@ -443,6 +465,27 @@ mod tests {
         let plan = cache.prepare_lanes(&[0, 1], 4).unwrap();
         assert_eq!(plan.tables.len(), 2);
         assert!(plan.tables.iter().all(|t| t.len() == 1));
+    }
+
+    /// An oversubscribed pool: more lanes than could all reach `max_seq_len` at once. Lanes that
+    /// fit run; the round that would exceed the pool fails all-or-nothing (the engine's reservation
+    /// accounting exists to keep live lanes out of that branch). The explicit pool size on `new` is the
+    /// load-time seam that creates this shape.
+    #[test]
+    fn test_oversubscribed_pool_serves_what_fits() {
+        // 4 lanes over a pool of 2 window-sized blocks: half the lanes can be full at once.
+        let mut cache = PagedKvCache::new(lane_test_layout(8), 4, 8, 2, &Default::default());
+        assert_eq!(cache.usable_blocks(), 2);
+
+        // Two lanes can hold a full window each; the third finds the pool dry.
+        cache.prepare_lanes(&[0], 8).unwrap();
+        cache.prepare_lanes(&[1], 8).unwrap();
+        let err = cache.prepare_lanes(&[2], 1).unwrap_err();
+        assert!(matches!(err, PagedKvError::PoolExhausted { short_by: 1 }));
+
+        // Freeing a lane frees its blocks for the next occupant.
+        cache.reset_lane(0);
+        cache.prepare_lanes(&[2], 4).unwrap();
     }
 
     /// The unpaged configuration is the old slab layout: one block spans a lane's whole context, so

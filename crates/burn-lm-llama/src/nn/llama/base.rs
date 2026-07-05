@@ -2,7 +2,7 @@ use crate::{
     inference::{self, LlamaDecoder},
     nn::{
         pos_encoding::{PositionalEncodingState, RopeConfig, RopeFrequencyScaling},
-        attention::PagedKvCache,
+        attention::{PagedKvCache, DEFAULT_BLOCK_SIZE},
         transformer::TransformerConfig,
     },
     tokenizer::Tokenizer,
@@ -67,6 +67,12 @@ pub struct LlamaConfig {
     /// Maximum batch size (used for key-value cache).
     #[config(default = "1")]
     pub max_batch_size: usize,
+    /// The KV pool size in tokens. `0` (the default) holds one full context window per lane —
+    /// the pre-paging capacity. Non-zero decouples KV memory from `max_batch_size × max_seq_len`:
+    /// the pool is born at exactly this size and the serving engine's admission reserves each
+    /// sequence's worst case against it.
+    #[config(default = "0")]
+    pub kv_pool_tokens: usize,
     /// The tokenizer path.
     pub tokenizer: String,
 }
@@ -146,6 +152,7 @@ impl LlamaConfig {
         tokenizer_path: &str,
         max_seq_len: usize,
         max_batch_size: usize,
+        kv_pool_tokens: usize,
         device: &Device,
     ) -> Result<inference::Llama<Tiktoken>, String> {
         use burn::record::NamedMpkFileRecorder;
@@ -153,6 +160,7 @@ impl LlamaConfig {
         let llama = Self::llama3_2_3b(tokenizer_path)
             .with_max_seq_len(max_seq_len)
             .with_max_batch_size(max_batch_size)
+            .with_kv_pool_tokens(kv_pool_tokens)
             .init::<Tiktoken>(device)?;
 
         let recorder = NamedMpkFileRecorder::<HalfPrecisionSettings>::new();
@@ -170,6 +178,7 @@ impl LlamaConfig {
         tokenizer_path: &str,
         max_seq_len: usize,
         max_batch_size: usize,
+        kv_pool_tokens: usize,
         device: &Device,
     ) -> Result<inference::Llama<Tiktoken>, String> {
         use burn::record::NamedMpkFileRecorder;
@@ -177,6 +186,7 @@ impl LlamaConfig {
         let llama = Self::llama3_2_1b(tokenizer_path)
             .with_max_seq_len(max_seq_len)
             .with_max_batch_size(max_batch_size)
+            .with_kv_pool_tokens(kv_pool_tokens)
             .init::<Tiktoken>(device)?;
 
         let recorder = NamedMpkFileRecorder::<HalfPrecisionSettings>::new();
@@ -194,6 +204,7 @@ impl LlamaConfig {
         tokenizer_path: &str,
         max_seq_len: usize,
         max_batch_size: usize,
+        kv_pool_tokens: usize,
         device: &Device,
     ) -> Result<inference::Llama<Tiktoken>, String> {
         use burn::record::NamedMpkFileRecorder;
@@ -201,6 +212,7 @@ impl LlamaConfig {
         let llama = Self::llama3_1_8b(tokenizer_path)
             .with_max_seq_len(max_seq_len)
             .with_max_batch_size(max_batch_size)
+            .with_kv_pool_tokens(kv_pool_tokens)
             .init::<Tiktoken>(device)?;
 
         let recorder = NamedMpkFileRecorder::<HalfPrecisionSettings>::new();
@@ -218,6 +230,7 @@ impl LlamaConfig {
         tokenizer_path: &str,
         max_seq_len: usize,
         max_batch_size: usize,
+        kv_pool_tokens: usize,
         device: &Device,
     ) -> Result<inference::Llama<Tiktoken>, String> {
         use burn::record::NamedMpkFileRecorder;
@@ -225,6 +238,7 @@ impl LlamaConfig {
         let llama = Self::llama3_8b(tokenizer_path)
             .with_max_seq_len(max_seq_len)
             .with_max_batch_size(max_batch_size)
+            .with_kv_pool_tokens(kv_pool_tokens)
             .init::<Tiktoken>(device)?;
 
         let recorder = NamedMpkFileRecorder::<HalfPrecisionSettings>::new();
@@ -273,8 +287,19 @@ impl LlamaConfig {
         .with_norm_eps(self.norm_eps);
 
         let model = config.init(device);
-        let cache =
-            PagedKvCache::with_default_blocks(config.kv_layout(), self.max_batch_size, device);
+        let layout = config.kv_layout();
+        let cache = if self.kv_pool_tokens > 0 {
+            let block_size = DEFAULT_BLOCK_SIZE.min(layout.max_seq_len);
+            PagedKvCache::new(
+                layout,
+                self.max_batch_size,
+                block_size,
+                self.kv_pool_tokens.div_ceil(block_size),
+                device,
+            )
+        } else {
+            PagedKvCache::with_default_blocks(layout, self.max_batch_size, device)
+        };
 
         // Precompute a RoPE window larger than the KV-cache window. With the default
         // max_seq_len=8192 this covers 40960 positions, so normal stateless requests

@@ -126,7 +126,7 @@ impl LlamaConfig {
                 .collect::<Vec<_>>();
         }
 
-        llama.model = llama.model.load_record(record);
+        llama.decoder.model = llama.decoder.model.load_record(record);
         println!("Llama record loaded");
 
         Ok(llama)

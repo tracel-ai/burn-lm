@@ -1,11 +1,15 @@
-use burn::{config::Config, nn::RotaryEncoding, tensor::Tensor};
+use burn::{
+    config::Config,
+    nn::RotaryEncoding,
+    tensor::{Int, Tensor, TensorData},
+};
 
 /// Tracks the state of rotary positional encodings during autoregressive inference.
 ///
 /// Manages shifting of precomputed frequency tables when the sequence length exceeds
 /// the initially allocated range. Used to avoid recomputing RoPE values on-the-fly
 /// while maintaining correct positional alignment across decoding steps.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PositionalEncodingState {
     /// Rotary positional encoding (RoPE).
     pub rope: RotaryEncoding,
@@ -77,6 +81,63 @@ impl PositionalEncodingState {
         }
         index
     }
+}
+
+/// Apply RoPE to `n` lanes that sit at different positions, in one batched pass. Lane `j` starts at
+/// position `starts[j]`, so its row `r` is rotated at absolute position `starts[j] + r`. The
+/// frequency row for each `(lane, row)` is gathered from RoPE's precomputed `freq_complex` table in
+/// a single `select`, and then every lane is rotated with the same tensor ops `RotaryEncoding::apply`
+/// uses for the single-position case — this gather is what lets the batched path rotate ragged lanes
+/// without looping over them.
+///
+/// The positions index the table directly. Lane mode never shifts the table, which is safe because
+/// `prepare_lanes` keeps every lane length under `max_seq_len`, well inside the precomputed window.
+///
+/// # Shapes
+///
+/// - x: `[n_lanes, heads, seq_len, head_dim]`
+/// - output: same.
+pub(crate) fn apply_rope_lanes(rope: &RotaryEncoding, x: Tensor<4>, starts: &[usize]) -> Tensor<4> {
+    let [n, heads, q, head_dim] = x.dims();
+    debug_assert_eq!(n, starts.len());
+    // Every gathered position must land inside the precomputed table, or the `select` below reads out
+    // of bounds. The caller guarantees it through the per-lane capacity check in `prepare_lanes`: a
+    // lane that fills up finishes rather than sliding the table, because a slide re-bases positions
+    // globally and that cannot coexist with lanes sitting at different positions. This assert keeps
+    // that guarantee from silently depending on every future caller remembering the pairing.
+    let table_rows = rope.freq_complex.dims()[0];
+    debug_assert!(
+        starts.iter().all(|s| s + q <= table_rows),
+        "lane position past the rotation table: need row {}, table has {table_rows}",
+        starts.iter().map(|s| s + q).max().unwrap_or(0),
+    );
+    let device = x.device();
+
+    let mut idx = Vec::with_capacity(n * q);
+    for s in starts.iter() {
+        for r in 0..q {
+            idx.push((s + r) as i64);
+        }
+    }
+    let idx = Tensor::<1, Int>::from_data(TensorData::new(idx, [n * q]), &device);
+    let freqs = rope
+        .freq_complex
+        .clone()
+        .select(0, idx) // [n * q, head_dim, 2]
+        .reshape([n, 1, q, head_dim, 2])
+        .expand([n, heads, q, head_dim, 2])
+        .reshape([n * heads, q, head_dim, 2]);
+
+    // 2D rotation matrix [[cos, -sin], [sin, cos]] expansion.
+    let sign = Tensor::<2>::from_floats([[1.0, 0.0, 0.0, 1.0], [0.0, -1.0, 1.0, 0.0]], &device);
+
+    let out = x
+        .reshape([n * heads, q, head_dim / 2, 2])
+        .matmul(sign.unsqueeze::<4>())
+        .reshape([n * heads, q, head_dim, 2])
+        * freqs;
+
+    out.sum_dim(3).reshape([n, heads, q, head_dim])
 }
 
 /// Rotary positional encoding (RoPE)
@@ -176,6 +237,34 @@ mod tests {
         output
             .into_data()
             .assert_approx_eq::<f32>(&expected, Tolerance::relative(0.05));
+    }
+
+    /// The gather RoPE path equals the production `RotaryEncoding::apply` at every lane's position —
+    /// the authoritative cross-check against the single-position op.
+    #[test]
+    fn test_rope_lanes_gather_matches_production_apply() {
+        let device: Device = Default::default();
+        let rope = RotaryEncodingConfig::new(64, 4).init(&device);
+
+        // 3 lanes at divergent positions, q = 2.
+        let starts = [37usize, 5, 0];
+        let x = TestTensor::<4>::random(
+            [3, 2, 2, 4],
+            burn::tensor::Distribution::Uniform(-1.0, 1.0),
+            &device,
+        );
+
+        let gathered = apply_rope_lanes(&rope, x.clone(), &starts);
+
+        for (j, &start) in starts.iter().enumerate() {
+            let lane = x.clone().slice([j..j + 1, 0..2, 0..2, 0..4]);
+            let expected = rope.apply(lane, start);
+            gathered
+                .clone()
+                .slice([j..j + 1, 0..2, 0..2, 0..4])
+                .into_data()
+                .assert_approx_eq::<f32>(&expected.into_data(), Tolerance::rel_abs(1e-5, 1e-6));
+        }
     }
 
     #[test]

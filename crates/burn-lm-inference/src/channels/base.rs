@@ -13,4 +13,11 @@ pub trait InferenceChannel<Server: InferenceServer>: Clone + Send + Sync + Debug
     fn unload(&self) -> InferenceResult<Option<Stats>>;
     fn run_job(&self, job: InferenceJob) -> InferenceResult<Stats>;
     fn clear_state(&self) -> InferenceResult<()>;
+    /// Advisory backpressure probe: whether a job submitted right now would be shed with
+    /// `InferenceError::Overloaded`. Channels without a bounded queue never shed, hence the
+    /// `false` default. "Advisory" because the answer can change between the probe and a
+    /// subsequent submit; the submit itself is the authoritative shed point.
+    fn is_overloaded(&self) -> bool {
+        false
+    }
 }

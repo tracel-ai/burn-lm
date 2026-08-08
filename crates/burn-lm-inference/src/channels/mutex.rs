@@ -5,9 +5,19 @@ use crate::{errors::InferenceResult, server::InferenceServer, InferenceJob, Stat
 use super::InferenceChannel;
 
 /// ARC Mutex channel that lock the server each time the client reaches to it.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct MutexChannel<Server: InferenceServer> {
     server: Arc<Mutex<Server>>,
+}
+
+// Manual `Clone` (clones the shared `Arc`) so we don't require `Server: Clone` — the derived impl
+// would, even though the server is never deep-cloned.
+impl<Server: InferenceServer> Clone for MutexChannel<Server> {
+    fn clone(&self) -> Self {
+        Self {
+            server: Arc::clone(&self.server),
+        }
+    }
 }
 
 impl<Server: InferenceServer> Default for MutexChannel<Server> {

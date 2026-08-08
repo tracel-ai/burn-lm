@@ -34,7 +34,7 @@ pub struct ParrotServerConfig {
 //         server_type = "ParrotServer",
 //     ),
 //
-#[derive(InferenceServer, Clone, Default, Debug)]
+#[derive(InferenceServer, Default, Debug)]
 #[inference_server(
     model_name = "Parrot",
     model_creation_date = "2025/01/28",

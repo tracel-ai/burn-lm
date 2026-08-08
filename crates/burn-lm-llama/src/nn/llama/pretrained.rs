@@ -164,10 +164,12 @@ impl LlamaConfig {
     ///
     /// # Arguments
     /// - `max_seq_len` - The maximum sequence length for input text.
+    /// - `max_slots` - The number of concurrent sequences (KV slab lanes) to size for.
     /// - `device` - The device to load the model on.
     #[cfg(feature = "llama3")]
     pub fn llama3_2_3b_pretrained(
         max_seq_len: usize,
+        max_slots: usize,
         device: &Device,
     ) -> Result<Llama<Tiktoken>, String> {
         // Llama-3.2 models support context length up to 128K tokens.
@@ -182,10 +184,13 @@ impl LlamaConfig {
             .download_tokenizer()
             .map_err(|err| format!("Could not download tokenizer.\nError: {err}"))?;
 
+        // `max_slots` sizes the shared KV slab: one lane per concurrent sequence the batched server
+        // can admit. The 3b server passes its per-model slot count here (see its `Default`).
         Self::load_llama3_2_3b(
             checkpoint.to_str().unwrap(),
             tokenizer.to_str().unwrap(),
             max_seq_len,
+            max_slots,
             device,
         )
     }
@@ -198,6 +203,7 @@ impl LlamaConfig {
     #[cfg(feature = "llama3")]
     pub fn llama3_2_1b_pretrained(
         max_seq_len: usize,
+        max_batch_size: usize,
         device: &Device,
     ) -> Result<Llama<Tiktoken>, String> {
         // Llama-3.2 models support context length up to 128K tokens.
@@ -216,6 +222,7 @@ impl LlamaConfig {
             checkpoint.to_str().unwrap(),
             tokenizer.to_str().unwrap(),
             max_seq_len,
+            max_batch_size,
             device,
         )
     }
@@ -242,10 +249,14 @@ impl LlamaConfig {
             .download_tokenizer()
             .map_err(|err| format!("Could not download tokenizer.\nError: {err}"))?;
 
+        // The Q4 server is single-shot (not a `BatchedInferenceServer`), so it only ever drives lane
+        // 0. A single-lane slab is correct and avoids eagerly allocating KV for lanes it can never
+        // use — the opposite of what a quantized, memory-saving model wants.
         Self::load_llama3_2_1b(
             checkpoint.to_str().unwrap(),
             tokenizer.to_str().unwrap(),
             max_seq_len,
+            1,
             device,
         )
     }
@@ -254,10 +265,12 @@ impl LlamaConfig {
     ///
     /// # Arguments
     /// - `max_seq_len` - The maximum sequence length for input text.
+    /// - `max_slots` - The number of concurrent sequences (KV slab lanes) to size for.
     /// - `device` - The device to load the model on.
     #[cfg(feature = "llama3")]
     pub fn llama3_1_8b_pretrained(
         max_seq_len: usize,
+        max_slots: usize,
         device: &Device,
     ) -> Result<Llama<Tiktoken>, String> {
         // Llama-3.1 models support context length up to 128K tokens.
@@ -272,10 +285,13 @@ impl LlamaConfig {
             .download_tokenizer()
             .map_err(|err| format!("Could not download tokenizer.\nError: {err}"))?;
 
+        // `max_slots` sizes the shared KV slab: one lane per concurrent sequence the batched server
+        // can admit. The 3.1-8b server passes its per-model slot count here (see its `Default`).
         Self::load_llama3_1_8b(
             checkpoint.to_str().unwrap(),
             tokenizer.to_str().unwrap(),
             max_seq_len,
+            max_slots,
             device,
         )
     }
@@ -284,10 +300,12 @@ impl LlamaConfig {
     ///
     /// # Arguments
     /// - `max_seq_len` - The maximum sequence length for input text.
+    /// - `max_slots` - The number of concurrent sequences (KV slab lanes) to size for.
     /// - `device` - The device to load the model on.
     #[cfg(feature = "llama3")]
     pub fn llama3_8b_pretrained(
         max_seq_len: usize,
+        max_slots: usize,
         device: &Device,
     ) -> Result<Llama<Tiktoken>, String> {
         // Llama-3 models support context length up to 8K tokens.
@@ -302,10 +320,13 @@ impl LlamaConfig {
             .download_tokenizer()
             .map_err(|err| format!("Could not download tokenizer.\nError: {err}"))?;
 
+        // `max_slots` sizes the shared KV slab: one lane per concurrent sequence the batched server
+        // can admit. The 8b server passes its per-model slot count here (see its `Default`).
         Self::load_llama3_8b(
             checkpoint.to_str().unwrap(),
             tokenizer.to_str().unwrap(),
             max_seq_len,
+            max_slots,
             device,
         )
     }

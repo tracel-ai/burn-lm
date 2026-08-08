@@ -42,7 +42,14 @@ impl FeedForward {
     /// - input: `[batch_size, seq_length, d_model]`
     /// - output: `[batch_size, seq_length, d_model]`
     pub fn forward(&self, input: Tensor<3>) -> Tensor<3> {
-        self.w2.forward(self.swiglu.forward(input))
+        // Flattened to one [batch·seq, d] GEMM per weight — see `nn::linear_flat` for why the 3-D
+        // shape (a batch of M=1 rows during decode) re-streams the weights per lane. The FFN is
+        // ~80% of a layer's weight bytes, so this site carries most of the win.
+        let [b, s, d] = input.dims();
+        let hidden = self.swiglu.forward(input.reshape([b * s, d]));
+        let out = self.w2.forward(hidden);
+        let k = out.dims()[1];
+        out.reshape([b, s, k])
     }
 }
 

@@ -24,9 +24,10 @@ readme = "README.md"
 # burn = { git = "https://github.com/tracel-ai/burn", rev = "db484c75a510d709e72d8840669f543169a9ab6e", default-features = false }
 # burn-store = { git = "https://github.com/tracel-ai/burn", rev = "db484c75a510d709e72d8840669f543169a9ab6e", default-features = false, package = "burn-store" }
 
-# Track burn main.
-burn = { git = "https://github.com/tracel-ai/burn", branch = "main", default-features = false }
-burn-store = { git = "https://github.com/tracel-ai/burn", branch = "main", default-features = false, package = "burn-store" }
+# Pinned to a fixed burn rev: `main` has since moved `burn::record`, which our code does not build
+# against yet. Pin here until we update to the latest main deliberately.
+burn = { git = "https://github.com/tracel-ai/burn", rev = "2384148e", default-features = false }
+burn-store = { git = "https://github.com/tracel-ai/burn", rev = "2384148e", default-features = false, package = "burn-store" }
 
 # crates.io (previous pin)
 # burn = { version = "=0.21.0-pre.5", default-features = false }

@@ -102,7 +102,7 @@ impl Transformer {
         }
 
         let h = self.norm.forward(h);
-        self.output.forward(h)
+        crate::nn::linear_flat(&self.output, h)
     }
 
     /// Forward with non-autoregressive and creates a mask for training.

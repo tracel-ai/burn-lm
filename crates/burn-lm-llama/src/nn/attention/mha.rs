@@ -68,7 +68,7 @@ impl MultiHeadAttention {
         };
 
         let output = self.forward_attention(q, k, v, mask, batch_size, seq_len, hidden_size);
-        self.wo.forward(output)
+        crate::nn::linear_flat(&self.wo, output)
     }
 
     /// The cached attention step, one active lane per input row. It rotates each lane's queries and
@@ -102,15 +102,24 @@ impl MultiHeadAttention {
         let output =
             self.forward_attention(q, k, v, Some(plan.mask.clone()), n, seq_len, hidden_size);
 
-        self.wo.forward(output)
+        crate::nn::linear_flat(&self.wo, output)
     }
 
     fn forward_projection(&self, input: Tensor<3>) -> (Tensor<4>, Tensor<4>, Tensor<4>) {
         let [batch_size, seq_len, _hidden_size] = input.dims();
 
+        // Flatten once and share the 2-D activation across all three projections — same reasoning
+        // as `nn::linear_flat`, spelled out here so the reshape happens once instead of per weight.
+        let [b, s, d] = input.dims();
+        let input = input.reshape([b * s, d]);
         let q = self.wq.forward(input.clone());
         let k = self.wk.forward(input.clone());
         let v = self.wv.forward(input);
+        let (q, k, v) = (
+            q.reshape([b, s, self.n_heads * self.head_dim]),
+            k.reshape([b, s, self.n_kv_heads * self.head_dim]),
+            v.reshape([b, s, self.n_kv_heads * self.head_dim]),
+        );
 
         // [batch_size, num_heads, seq_len, head_dim]
         let q = q

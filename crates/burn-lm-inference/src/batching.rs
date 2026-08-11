@@ -497,24 +497,10 @@ pub fn step_round<D: BatchedDecoder, X>(
     // `expect_rows` contract still guards against a silently misaligned row count.
     if !decode_rows.is_empty() {
         let rows: Vec<DecodeRow> = decode_rows.iter().map(|(_, row)| *row).collect();
-        // TEMP PROFILING: decode() builds/launches the round's graph; sample() contains the
-        // device sync (readback). Their split says how much wall time is host graph-build vs
-        // GPU execution + sync.
-        let t0 = std::time::Instant::now();
-        let logits_result = decoder.decode(&rows);
-        let t_decode = t0.elapsed();
-        let t1 = std::time::Instant::now();
-        let sampled = logits_result
+        let sampled = decoder
+            .decode(&rows)
             .and_then(|logits| expect_rows(logits, rows.len()))
             .and_then(|logits| sample(logits));
-        let t_sample = t1.elapsed();
-        tracing::debug!(
-            target: "batching",
-            width = rows.len(),
-            decode_us = t_decode.as_micros() as u64,
-            sample_us = t_sample.as_micros() as u64,
-            "phase"
-        );
         match sampled {
             Ok(ids) if ids.len() == decode_rows.len() => {
                 // Fan each sampled id back to its sequence, in row order, through the shared advance

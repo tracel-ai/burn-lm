@@ -46,7 +46,7 @@ test-wgpu = [
     # "burn/autotune-checks",
     "test-non-default",
 ]
-# TEMP: bench on the same backend the Metal server uses.
+# Bench/test on the same backend the Metal server uses.
 test-metal = [
     "burn/metal",
     "burn/default",

@@ -72,8 +72,6 @@ impl LlamaDecoder {
         input: Tensor<2, Int>,
     ) -> InferenceResult<Tensor<2>> {
         let seq_len_in = input.dims()[1];
-        // TEMP PROFILING: how much of the round is host-side plan building (mask + index uploads).
-        let t_plan = std::time::Instant::now();
         let plan = self
             .cache
             .prepare_lanes(lanes, seq_len_in)
@@ -85,13 +83,9 @@ impl LlamaDecoder {
                     InferenceError::KvPoolExhausted(short_by)
                 }
             })?;
-        let plan_us = t_plan.elapsed().as_micros() as u64;
-        let t_fwd = std::time::Instant::now();
         let logits =
             self.model
                 .forward_lanes(input, &mut self.cache, &self.pos_encoding.rope, &plan);
-        let fwd_us = t_fwd.elapsed().as_micros() as u64;
-        tracing::debug!(target: "batching", n = lanes.len(), l_max = plan.l_max, plan_us, fwd_us, "phase-fwd");
         let [n, seq_len, vocab] = logits.dims();
         Ok(logits
             .slice([0..n, seq_len - 1..seq_len, 0..vocab])

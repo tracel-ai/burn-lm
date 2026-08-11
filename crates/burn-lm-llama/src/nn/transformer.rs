@@ -105,51 +105,14 @@ impl Transformer {
         rope: &RotaryEncoding,
         plan: &LanePlan,
     ) -> Tensor<3> {
-        // TEMP PROFILING (BURN_LM_PROFILE_OPS=1): the top-level phases, force-synced — in
-        // particular the LM HEAD, the [2048 x 128256] projection the per-layer profile never
-        // covered.
-        let profile = std::env::var_os("BURN_LM_PROFILE_OPS").is_some();
-        // A slice-read can be NARROWED by the lazy engine (it computes only the sliced element,
-        // as the head's impossible 0.0ms proved). A full-tensor sum cannot — every element must
-        // exist — so this forces true materialization at the phase boundary.
-        let sync3 = |t: &Tensor<3>| {
-            let _: f32 = t.clone().sum().into_scalar();
-        };
-        let t0 = std::time::Instant::now();
         let mut h = self.tok_embeddings.forward(input);
-        let embed_us = if profile { sync3(&h); t0.elapsed().as_micros() as u64 } else { 0 };
 
-        let t1 = std::time::Instant::now();
         for (layer, c) in self.layers.iter().zip(cache.layers_mut()) {
             h = layer.forward_lanes(h, c, rope, plan);
         }
-        let layers_us = if profile { sync3(&h); t1.elapsed().as_micros() as u64 } else { 0 };
 
-        let t2 = std::time::Instant::now();
         let h = self.norm.forward(h);
-        let norm_us = if profile { sync3(&h); t2.elapsed().as_micros() as u64 } else { 0 };
-
-        let t3 = std::time::Instant::now();
-        // EXPERIMENT (head-only flatten): hand the LM head a 2-D [n·seq, d] activation so the
-        // vocab projection is ONE GEMM sharing a single weight-stream across lanes, instead of a
-        // batched matmul with M=1 rows that re-streams the 1.05 GB weight per lane.
-        let [n_, seq_, d_] = h.dims();
-        let out = self.output.forward(h.reshape([n_ * seq_, d_]));
-        let vocab = out.dims()[1];
-        let out = out.reshape([n_, seq_, vocab]);
-        if profile {
-            sync3(&out);
-            tracing::debug!(
-                target: "batching",
-                n = out.dims()[0],
-                embed_us,
-                layers_us,
-                norm_us,
-                head_us = t3.elapsed().as_micros() as u64,
-                "phase-top"
-            );
-        }
-        out
+        crate::nn::linear_flat(&self.output, h)
     }
 
     /// Forward with non-autoregressive and creates a mask for training.
@@ -238,14 +201,6 @@ impl TransformerBlock {
                 rope,
                 plan,
             );
-        // TEMP PROFILING: the FFN half of the block, force-synced (see forward_cache_lanes).
-        if std::env::var_os("BURN_LM_PROFILE_OPS").is_some() {
-            let t = std::time::Instant::now();
-            let out = h.clone() + self.feed_forward.forward(self.ffn_norm.forward(h));
-            let _ = out.clone().slice([0..1, 0..1, 0..1]).into_data();
-            tracing::debug!(target: "batching", ffn_us = t.elapsed().as_micros() as u64, "phase-ffn");
-            return out;
-        }
         h.clone() + self.feed_forward.forward(self.ffn_norm.forward(h))
     }
 

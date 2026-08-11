@@ -1,5 +1,7 @@
 use anyhow::Error;
-use burn_lm_inference::{InferenceJob, InferenceTask, Message, MessageRole, StdOutListener};
+use burn_lm_inference::{
+    GenerationParams, InferenceJob, InferenceTask, Message, MessageRole, StdOutListener,
+};
 use burn_lm_registry::Registry;
 use clap::CommandFactory as _;
 use rustyline::{history::DefaultHistory, Editor};
@@ -146,7 +148,12 @@ pub(crate) fn handle(
                     refusal: None,
                 };
                 let task = InferenceTask::Message(formatted_msg);
-                let (job, handle) = InferenceJob::create(task, StdOutListener::default());
+                // Chat settings come from the parsed CLI config; no per-request overrides.
+                let (job, handle) = InferenceJob::create(
+                    task,
+                    GenerationParams::default(),
+                    StdOutListener::default(),
+                );
                 let result = plugin.run_job(job);
                 handle.join();
 

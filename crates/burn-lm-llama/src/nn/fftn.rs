@@ -42,7 +42,14 @@ impl FeedForward {
     /// - input: `[batch_size, seq_length, d_model]`
     /// - output: `[batch_size, seq_length, d_model]`
     pub fn forward(&self, input: Tensor<3>) -> Tensor<3> {
-        self.w2.forward(self.swiglu.forward(input))
+        // EXPERIMENT (FFN flatten): one [n·seq, d] GEMM per linear instead of a batched matmul of
+        // M=1 rows re-streaming the weights per lane — same fix as the LM head, ~80% of each
+        // layer's weight bytes.
+        let [b, s, d] = input.dims();
+        let hidden = self.swiglu.forward(input.reshape([b * s, d]));
+        let out = self.w2.forward(hidden);
+        let k = out.dims()[1];
+        out.reshape([b, s, k])
     }
 }
 

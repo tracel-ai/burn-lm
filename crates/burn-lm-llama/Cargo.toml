@@ -46,8 +46,15 @@ test-wgpu = [
     # "burn/autotune-checks",
     "test-non-default",
 ]
+# Bench/test on the same backend the Metal server uses.
+test-metal = [
+    "burn/metal",
+    "burn/default",
+    "test-non-default",
+]
 
 [dependencies]
+burn-lm-paged-kv = { path = "../burn-lm-paged-kv", version = "0.0.1" }
 burn = { workspace = true, features = [
     "std",
     "ndarray",

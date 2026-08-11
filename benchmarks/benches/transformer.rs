@@ -1,52 +1,61 @@
 use burn::{
-    nn::RotaryEncodingConfig,
+    nn::{RotaryEncoding, RotaryEncodingConfig},
     tensor::{DType, Device, Distribution, Int, Tensor},
 };
-use burn_lm_llama::nn::{
-    pos_encoding::PositionalEncodingState,
-    transformer::{Transformer, TransformerCache, TransformerConfig},
-};
+use burn_lm_llama::nn::attention::{LanePlan, PagedKvCache};
+use burn_lm_llama::nn::transformer::{Transformer, TransformerConfig};
 use burnbench::{run_benchmark, Benchmark, BenchmarkResult};
 
+// Lane-aware whole-transformer decode benchmark, swept over the lane count (batch) 1, 2, 4, 8. Each
+// run times one `Transformer::forward_lanes` (token ids in, logits out) over a slab prefilled to a
+// fixed prompt length, every active lane contributing one new token. See `attention.rs` for the
+// shared shape of these benches.
+
+/// Prompt length each lane is prefilled to before the timed decode step.
+const PROMPT_LEN: usize = 64;
+
 pub struct TransformerBenchmark {
-    seq_length: usize,
     batch_size: usize,
     config: Config,
-    config_transformer: TransformerConfig,
     device: Device,
     transformer: Transformer,
-    pos_encoding: PositionalEncodingState,
+    rope: RotaryEncoding,
+    cache: PagedKvCache,
+    plan: LanePlan,
     dtype: DType,
 }
 
 impl Benchmark for TransformerBenchmark {
-    type Input = (Tensor<2, Int>, TransformerCache);
+    type Input = (Tensor<2, Int>, PagedKvCache);
     type Output = Tensor<3>;
 
     fn name(&self) -> String {
-        format!("transformer-{}-{:?}", self.config.name, self.dtype,).to_lowercase()
+        format!(
+            "transformer-lanes-{}-{}-{:?}",
+            self.batch_size, self.config.name, self.dtype
+        )
+        .to_lowercase()
     }
 
     fn shapes(&self) -> Vec<Vec<usize>> {
-        vec![vec![self.batch_size, self.seq_length, self.config.d_model]]
+        vec![vec![self.batch_size, 1, self.config.d_model]]
     }
 
     fn execute(&self, (input, mut cache): Self::Input) -> Self::Output {
         self.transformer
-            .forward(input, &mut cache, &self.pos_encoding, None)
+            .forward_lanes(input, &mut cache, &self.rope, &self.plan)
     }
 
     fn prepare(&self) -> Self::Input {
+        // One new token id per lane: an `[n, 1]` decode input. The cache is cloned so each sample
+        // starts from the prefilled slab.
         let input = Tensor::<2>::random(
-            [self.batch_size, self.seq_length],
-            Distribution::Uniform(0., 10000.0),
+            [self.batch_size, 1],
+            Distribution::Uniform(0., self.config.vocab_size as f64),
             &self.device,
         )
         .int();
-
-        let cache = TransformerCache::new(&self.config_transformer, self.batch_size, &self.device);
-
-        (input, cache)
+        (input, self.cache.clone())
     }
 
     fn sync(&self) {
@@ -70,7 +79,7 @@ fn bench(device: &Device, dtype: DType) -> Vec<BenchmarkResult> {
 
     let mut results = Vec::new();
 
-    for (batch_size, seq_length) in [(32, 1), (1, max_seq_length)] {
+    for batch_size in [1usize, 2, 4, 8] {
         // Layer of 1 for now.
         for config in [
             Config {
@@ -108,23 +117,40 @@ fn bench(device: &Device, dtype: DType) -> Vec<BenchmarkResult> {
                 config.hidden_size,
                 config.n_heads,
                 config.n_heads_kv,
-            );
+            )
+            .with_max_seq_len(max_seq_length);
             let transformer = config_transformer.init(device);
             let rope =
                 RotaryEncodingConfig::new(max_seq_length * 2, config.d_model / config.n_heads)
                     .init(device);
+
+            // Prefill every lane to PROMPT_LEN through the real lane forward so the cache holds true
+            // KV, then build the decode-round plan (one new token per lane).
+            let mut cache = PagedKvCache::with_default_blocks(config_transformer.kv_layout(), batch_size, device);
+            for lane in 0..batch_size {
+                let prefill_plan = cache.prepare_lanes(&[lane], PROMPT_LEN).unwrap();
+                let prompt = Tensor::<2>::random(
+                    [1, PROMPT_LEN],
+                    Distribution::Uniform(0., config.vocab_size as f64),
+                    device,
+                )
+                .int();
+                transformer.forward_lanes(prompt, &mut cache, &rope, &prefill_plan);
+            }
+            let lanes: Vec<usize> = (0..batch_size).collect();
+            let plan = cache.prepare_lanes(&lanes, 1).unwrap();
+
             let benchmark = TransformerBenchmark {
                 batch_size,
-                seq_length,
                 config,
-                config_transformer,
                 device: device.clone(),
                 transformer,
-                pos_encoding: PositionalEncodingState::new(rope),
+                rope,
+                cache,
+                plan,
                 dtype,
             };
-            let result = run_benchmark(benchmark);
-            results.push(result);
+            results.push(run_benchmark(benchmark));
         }
     }
 
@@ -132,7 +158,8 @@ fn bench(device: &Device, dtype: DType) -> Vec<BenchmarkResult> {
 }
 
 fn main() {
-    // needs and update to burnbench
-    // burnbench::bench_on_backend!();
-    todo!()
+    let device = Device::default();
+    for result in bench(&device, DType::F32) {
+        println!("{}: mean {:?}, median {:?}", result.name, result.computed.mean, result.computed.median);
+    }
 }

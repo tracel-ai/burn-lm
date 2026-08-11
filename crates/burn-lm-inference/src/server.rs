@@ -18,7 +18,7 @@ pub trait ServerConfigParsing {
 
 /// Inference server interface aimed to be implemented to be able to register a
 /// model in Burn LM registry.
-pub trait InferenceServer: ServerConfigParsing + Clone + Default + Send + Sync + Debug {
+pub trait InferenceServer: ServerConfigParsing + Default + Send + Sync + Debug {
     /// Return closure of a function to download the model
     fn downloader(&mut self) -> Option<fn() -> InferenceResult<Option<Stats>>> {
         None

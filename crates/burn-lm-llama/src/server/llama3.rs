@@ -1,15 +1,31 @@
-use rand::RngExt;
 use serde::Deserialize;
-use std::sync::{Arc, Mutex};
 
 use crate::{
-    generation::{GenerationError, Sampler, TopP},
-    inference::Llama,
+    generation::LlamaSampler,
+    nn::attention::DEFAULT_BLOCK_SIZE,
+    inference::LlamaDecoder,
     pretrained::ModelMeta,
-    tokenizer::Tiktoken,
+    tokenizer::{Tiktoken, Tokenizer},
     LlamaConfig, LlamaVersion,
 };
 use burn_lm_inference::{InferenceJob, *};
+
+use super::{loaded_model::LoadedModel, params::SamplingSettings};
+
+/// Resolve a `usize` load-time config field, letting an environment variable override the configured
+/// default. The HTTP harness builds this server from `Default` config with no override hook (see
+/// `burn_lm_http::App::new`, which takes only host and port), and the `#[inference_server_config]`
+/// macro only accepts literal defaults — so for a containerized deployment (e.g. Modal) these env vars
+/// are the one knob that reaches `max_slots` / `max_seq_len` without a code change. Both are inherently
+/// load-time: the KV slab is sized once when the model loads, so a value set here takes effect on the
+/// next load. `BURN_LM_MAX_SLOTS` is the batch cap (slab lane count); `BURN_LM_MAX_SEQ_LEN` the context
+/// window. A missing or unparseable value falls back to the configured default.
+fn config_usize(configured: usize, var: &str) -> usize {
+    std::env::var(var)
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(configured)
+}
 
 #[inference_server_config]
 pub struct Llama3ServerConfig {
@@ -22,15 +38,59 @@ pub struct Llama3ServerConfig {
     /// Maximum sequence length for input text.
     #[config(default = 8192)]
     pub max_seq_len: usize,
-    /// The number of new tokens to generate (i.e., the number of generation steps to take).
+    /// The server's output-token cap: generation ends at a stop token or after this many new
+    /// tokens, whichever comes first — like a model's maximum output length in the OpenAI API. A
+    /// request's `max_tokens` lowers it for that request, never raises it; a response cut off here
+    /// reports `finish_reason: length`, and continuing is the client's move (a follow-up request
+    /// carrying the conversation). This cap is also what KV admission reserves worst-case blocks
+    /// against, so cap semantics and reservation policy are one decision: engines that default to
+    /// run-until-EOS (e.g. vLLM) cannot reserve worst case and pay for it with eviction machinery
+    /// instead.
     #[config(default = 4096, openwebui_param = "max_tokens")]
     pub sample_len: usize,
     /// The seed to use when generating random samples. If it is 0 then a random seed is used for each inference.
     #[config(default = 0)]
     pub seed: u64,
+    /// Maximum number of sequences the batched decoder runs concurrently. For a batched
+    /// `BatchedInferenceServer` (the 1b, 3b, and both real 8b Llamas) this single knob both sizes the
+    /// shared KV slab (one lane per slot) and is what the engine reads as
+    /// `batch_capacity().max_slots`, so the two can never disagree. The Q4 1b ignores it and keeps a
+    /// one-lane slab. Operators set the right value per deployment; the slab is sized at load, so a
+    /// raised value takes effect on the next reload.
+    #[config(default = 4)]
+    pub max_slots: usize,
+    /// How many prompt tokens to prefill per round. A long prompt is sliced into chunks of this width
+    /// so it advances one chunk per round alongside the fused decode, instead of stalling every
+    /// decoder for one giant prefill. `0` means unbounded — the whole prompt in one round, the
+    /// pre-chunking behavior. Resolved at load via `BURN_LM_PREFILL_CHUNK_SIZE`; the scheduler reads it
+    /// starting in a later change.
+    #[config(default = 512)]
+    pub prefill_chunk_size: usize,
+    /// The KV pool size, in tokens. `0` (the default) sizes the pool to the full rectangle —
+    /// `max_slots × max_seq_len`, every lane able to reach the context window at once, the old
+    /// slab's capacity. A non-zero value decouples the pool from the rectangle: set it to what the
+    /// device can hold and raise `max_slots` past the old lane count — admission reserves each
+    /// sequence's worst case (`min(prompt + max_tokens, max_seq_len)` tokens) against this pool, so
+    /// many short requests share memory one long lane would have monopolized. Sizing rule of thumb:
+    /// bytes = tokens × KV-bytes-per-token (Llama-3.2-1B: 64 KB at fp32, 32 KB at fp16). Resolved
+    /// at load via `BURN_LM_KV_POOL_TOKENS`.
+    #[config(default = 0)]
+    pub kv_pool_tokens: usize,
 }
 
-#[derive(InferenceServer, Clone, Debug)]
+impl Llama3ServerConfig {
+    /// This config's sampling fields as the per-job merge defaults (see `SamplingSettings`).
+    fn sampling_defaults(&self) -> SamplingSettings {
+        SamplingSettings {
+            top_p: self.top_p,
+            temperature: self.temperature,
+            sample_len: self.sample_len,
+            seed: self.seed,
+        }
+    }
+}
+
+#[derive(InferenceServer, Debug)]
 #[inference_server(
     model_name = "Llama 3 (8B Instruct)",
     model_cli_param_name = "llama3",
@@ -125,7 +185,7 @@ impl InferenceServer for Llama3InstructServer {
     }
 }
 
-#[derive(InferenceServer, Clone, Debug)]
+#[derive(InferenceServer, Debug)]
 #[inference_server(
     model_name = "Llama 3.1 (8B Instruct)",
     model_cli_param_name = "llama31",
@@ -193,7 +253,7 @@ impl InferenceServer for Llama31InstructServer {
     }
 }
 
-#[derive(InferenceServer, Clone, Debug)]
+#[derive(InferenceServer, Debug)]
 #[inference_server(
     model_name = "Llama 3.2 (1B Instruct)",
     model_cli_param_name = "llama32",
@@ -261,7 +321,113 @@ impl InferenceServer for Llama321bInstructServer {
     }
 }
 
-#[derive(InferenceServer, Clone, Debug)]
+/// Generates the `BatchedInferenceServer` impl for a Llama server. The impl is identical pure
+/// delegation for all four real Llama servers, since they are the same `{ config, server }` pair.
+/// It is a macro rather than a blanket `impl<T> BatchedInferenceServer for T` because the trait is
+/// foreign — it lives in `burn-lm-inference` — so Rust's orphan rule forbids the blanket impl. That
+/// leaves duplicating the impl per server or generating it once; this generates it once.
+macro_rules! impl_batched_llama_server {
+    ($server:ty) => {
+        impl BatchedInferenceServer for $server {
+            type Decoder = LlamaDecoder;
+
+            fn decoder(&mut self) -> InferenceResult<&mut LlamaDecoder> {
+                self.server.decoder(&self.config)
+            }
+
+            fn batch_capacity(&self) -> BatchCapacity {
+                // Cap the reported budget at the loaded lane count so a `max_slots` raised between
+                // rounds cannot hand admission a slot past the fixed-size slab, which would index a
+                // lane vector out of bounds and panic the worker. The slab only grows on reload. The
+                // configured value honours the same `BURN_LM_MAX_SLOTS` override the slab is sized from
+                // (see `config_usize`), so the reported cap and the actual slab always agree.
+                let configured = config_usize(self.config.max_slots, "BURN_LM_MAX_SLOTS");
+                let max_slots = match self.server.loaded_lane_count() {
+                    Some(lanes) => configured.min(lanes),
+                    None => configured,
+                };
+                // The KV block budget admission reserves against. Loaded, it is the pool's real
+                // numbers; before load, the same rectangle the pool will be sized to, computed from
+                // the same env-overridden config values `load` uses — so the budget an early
+                // admission sees matches the pool that materializes.
+                let kv = match self.server.loaded_kv_budget() {
+                    Some((block_size, total_blocks)) => KvBudget { block_size, total_blocks },
+                    None => {
+                        let max_seq_len = config_usize(self.config.max_seq_len, "BURN_LM_MAX_SEQ_LEN");
+                        let block_size = DEFAULT_BLOCK_SIZE.min(max_seq_len);
+                        let pool_tokens =
+                            config_usize(self.config.kv_pool_tokens, "BURN_LM_KV_POOL_TOKENS");
+                        // Mirror `load`'s sizing exactly: the explicit token budget when set, the
+                        // full rectangle otherwise — so pre-load admission and the pool that
+                        // materializes can never disagree.
+                        let total_blocks = if pool_tokens > 0 {
+                            pool_tokens.div_ceil(block_size)
+                        } else {
+                            (configured * max_seq_len).div_ceil(block_size)
+                        };
+                        KvBudget {
+                            block_size,
+                            total_blocks,
+                        }
+                    }
+                };
+                BatchCapacity { max_slots, kv }
+            }
+
+            fn prefill_chunk_size(&self) -> usize {
+                // Turn chunked prefill on by default for the batched Llama servers: a long prompt is
+                // sliced so it advances one chunk per round instead of stalling the in-flight decoders
+                // for one giant forward. Resolved with the same env-override mechanism as the slab
+                // sizing, so the value the worker schedules with matches the one logged at load.
+                config_usize(self.config.prefill_chunk_size, "BURN_LM_PREFILL_CHUNK_SIZE")
+            }
+
+            fn tokenize(&self, task: &InferenceTask) -> InferenceResult<Vec<u32>> {
+                let prompt = match task {
+                    InferenceTask::Message(message) => self.server.prompt(vec![message.clone()])?,
+                    InferenceTask::Context(messages) => self.server.prompt(messages.clone())?,
+                    InferenceTask::Prompt(prompt) => prompt.clone(),
+                };
+                self.server.encode(&prompt)
+            }
+
+            fn detokenize(&self, tokens: &[u32]) -> String {
+                self.server.decode(tokens)
+            }
+
+            fn detokenize_bytes(&self, tokens: &[u32]) -> Vec<u8> {
+                self.server.decode_bytes(tokens)
+            }
+
+            fn stop_ids(&self) -> Vec<u32> {
+                self.server.stop_ids()
+            }
+
+            fn max_gen_tokens(&self) -> usize {
+                self.config.sample_len
+            }
+
+            // The `Sampler` trait is open, so a framework consumer can write their own `impl Sampler`
+            // and run it on any model. Today, though, this method hardcodes `LlamaSampler`, so that
+            // openness stops at the trait: someone who picks up Llama can't actually swap in their own
+            // sampler without editing this line. The change we want later is to make the sampler
+            // injectable through the server config — the config already owns the sampling settings, so
+            // it can carry the sampler choice too, and this method just returns whatever the config was
+            // built with, defaulting to `LlamaSampler`. That turns "swap Llama's sampler" into a config
+            // decision a deployment makes, with no edit to the model code.
+            fn sampler(&self) -> Box<dyn Sampler> {
+                Box::new(LlamaSampler::new(self.config.sampling_defaults()))
+            }
+        }
+    };
+}
+
+impl_batched_llama_server!(Llama321bInstructServer);
+impl_batched_llama_server!(Llama323bInstructServer);
+impl_batched_llama_server!(Llama3InstructServer);
+impl_batched_llama_server!(Llama31InstructServer);
+
+#[derive(InferenceServer, Debug)]
 #[inference_server(
     model_name = "Llama 3.2 (3B Instruct)",
     model_cli_param_name = "llama32-3b",
@@ -329,7 +495,7 @@ impl InferenceServer for Llama323bInstructServer {
     }
 }
 
-#[derive(InferenceServer, Clone, Debug)]
+#[derive(InferenceServer, Debug)]
 #[inference_server(
     model_name = "Llama 3.2 (1BQ4 Instruct)",
     model_cli_param_name = "llama32-q4",
@@ -397,38 +563,22 @@ impl InferenceServer for Llama321bInstructQ4Server {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Default)]
 pub struct Llama3BaseServer {
-    model: Option<Arc<Mutex<Llama<Tiktoken>>>>,
+    model: LoadedModel<Tiktoken>,
     version: LlamaVersion,
 }
 
 impl Llama3BaseServer {
     pub fn new(version: LlamaVersion) -> Self {
         Self {
-            model: None,
+            model: LoadedModel::default(),
             version,
         }
     }
 
-    fn unload(&mut self, model_name: &str) -> InferenceResult<Option<Stats>> {
-        if let Some(arc_model) = self.model.take() {
-            match Arc::try_unwrap(arc_model) {
-                Ok(mutex) => {
-                    let model = mutex
-                        .into_inner()
-                        .expect("should be able to extract model from mutex");
-                    drop(model);
-                }
-                Err(_) => {
-                    return Err(InferenceError::UnloadError(
-                        model_name.to_string(),
-                        "Multiple references exist".to_string(),
-                    ))
-                }
-            }
-        }
-        Ok(None)
+    fn unload(&mut self, _model_name: &str) -> InferenceResult<Option<Stats>> {
+        self.model.unload()
     }
 
     fn run_job(
@@ -441,44 +591,30 @@ impl Llama3BaseServer {
             InferenceTask::Context(messages) => self.prompt(messages)?,
             InferenceTask::Prompt(prompt) => prompt,
         };
-        self.complete(prompt, config, job.emitter)
+        self.complete(prompt, config, &job.params, job.emitter)
     }
 
     fn complete(
         &mut self,
         prompt: Prompt,
         config: &Llama3ServerConfig,
+        params: &GenerationParams,
         emitter: GeneratedItemEmitter,
     ) -> InferenceResult<Stats> {
         let load_stats = self.load(config)?;
-        let seed = match config.seed {
-            0 => rand::rng().random::<u64>(),
-            s => s,
-        };
-        let mut sampler = if config.temperature > 0.0 {
-            Sampler::TopP(TopP::new(config.top_p, seed))
-        } else {
-            Sampler::Argmax
-        };
-        let generated = match &self.model {
-            Some(arc_model) => {
-                let mut model = arc_model
-                    .lock()
-                    .expect("should lock the model for inference");
-                match model.generate(
-                    &prompt,
-                    config.sample_len,
-                    config.temperature,
-                    &mut sampler,
-                    emitter,
-                ) {
-                    Ok(result) => result,
-                    Err(GenerationError::MaxSequenceLengthExceeded { actual, max }) => {
-                        return Err(InferenceError::ContextLengthExceeded(actual, max));
-                    }
-                }
-            }
-            None => return Err(InferenceError::ModelNotLoaded),
+        // Request params merged over config — the same `SamplingSettings` resolution as the
+        // batching path, so a request means the same thing on either channel. Default params
+        // resolve to exactly the config, keeping config-driven callers (CLI) unchanged.
+        let settings = SamplingSettings::resolve(config.sampling_defaults(), params);
+        let sample_len = settings.sample_len;
+        let sampler = LlamaSampler::new(settings);
+        // Drive the single request through the batched path (a lone request is the batch-of-one
+        // degenerate case of the same plumbing).
+        let generated = {
+            let model = self.model.get_mut()?;
+            let mut outputs =
+                model.generate_batch(vec![&prompt], sample_len, &sampler, vec![emitter])?;
+            outputs.pop().expect("one sequence in yields one output")
         };
         let mut stats = Stats::default();
         let mut total_duration = generated.time;
@@ -506,44 +642,111 @@ impl Llama3BaseServer {
     }
 
     fn clear_state(&mut self) -> InferenceResult<()> {
-        match &self.model {
-            Some(arc_model) => {
-                let mut model = arc_model
-                    .lock()
-                    .expect("should lock the model for inference");
-                model.reset();
-                Ok(())
-            }
-            None => Err(InferenceError::ModelNotLoaded),
-        }
+        self.model.get_mut()?.reset();
+        Ok(())
+    }
+
+    /// The loaded decoder's KV-slab lane count, or `None` if the model is not loaded yet. The slab
+    /// is sized once at load, so this is the real upper bound on admittable slots regardless of any
+    /// later `config.max_slots` change.
+    fn loaded_lane_count(&self) -> Option<usize> {
+        self.model
+            .get()
+            .ok()
+            .map(|model| model.decoder.cache.lane_count())
+    }
+
+    /// The loaded pool's real KV budget, `(block_size, usable_blocks)` — `None` before load. Like
+    /// `loaded_lane_count`, this reports what was actually sized at load so admission's arithmetic
+    /// and the pool can never disagree.
+    fn loaded_kv_budget(&self) -> Option<(usize, usize)> {
+        self.model.get().ok().map(|model| {
+            let cache = &model.decoder.cache;
+            (cache.block_size(), cache.usable_blocks())
+        })
+    }
+
+    /// Mutably borrow the loaded decoder, loading the model first if needed.
+    /// Used by `BatchedInferenceServer::decoder`.
+    fn decoder(&mut self, config: &Llama3ServerConfig) -> InferenceResult<&mut LlamaDecoder> {
+        self.load(config)?;
+        Ok(&mut self.model.get_mut()?.decoder)
+    }
+
+    /// Encode a prompt into token ids using the loaded model's tokenizer.
+    ///
+    /// Thin wrapper over the existing Tiktoken tokenizer, exposed so the framework continuous loop
+    /// can tokenize without owning the tokenizer. Requires the model to be loaded (the engine
+    /// borrows the decoder, which loads the model, before tokenizing).
+    fn encode(&self, prompt: &str) -> InferenceResult<Vec<u32>> {
+        Ok(self.model.get()?.tokenizer.encode(prompt, false, false))
+    }
+
+    /// Decode token ids back to text using the loaded model's tokenizer.
+    fn decode(&self, tokens: &[u32]) -> String {
+        self.model
+            .get()
+            .map(|model| model.tokenizer.decode(tokens))
+            .unwrap_or_default()
+    }
+
+    /// Decode token ids to raw bytes using the loaded model's tokenizer. Unlike `decode`, this is
+    /// total per token: Tiktoken's byte-level decode cannot fail on a multi-byte character split
+    /// across tokens.
+    fn decode_bytes(&self, tokens: &[u32]) -> Vec<u8> {
+        self.model
+            .get()
+            .map(|model| model.tokenizer.decode_bytes(tokens))
+            .unwrap_or_default()
+    }
+
+    /// Stop token ids from the loaded model's tokenizer (EOS/EOT/EOM).
+    fn stop_ids(&self) -> Vec<u32> {
+        self.model
+            .get()
+            .map(|model| model.tokenizer.stop_ids())
+            .unwrap_or_default()
     }
 
     fn load(&mut self, config: &Llama3ServerConfig) -> InferenceResult<Option<Stats>> {
         if !self.is_loaded() {
             let now = std::time::Instant::now();
+            // The slab is sized here, once, from the configured values — with env overrides applied so
+            // a containerized deployment can raise the batch cap (and shrink the context window to fit
+            // it in memory) without a code change. `batch_capacity` reads the same `BURN_LM_MAX_SLOTS`,
+            // so the reported cap matches the slab it sizes here.
+            let max_seq_len = config_usize(config.max_seq_len, "BURN_LM_MAX_SEQ_LEN");
+            let max_slots = config_usize(config.max_slots, "BURN_LM_MAX_SLOTS");
+            // The chunked-prefill width, resolved with the same env-override mechanism so it is fixed
+            // and visible at load. Logged but not yet consumed — the scheduler reads it in a later
+            // change; this commit only establishes the knob.
+            let prefill_chunk_size =
+                config_usize(config.prefill_chunk_size, "BURN_LM_PREFILL_CHUNK_SIZE");
+            tracing::info!(target: "batching", prefill_chunk_size, "prefill chunk size");
+            let kv_pool_tokens = config_usize(config.kv_pool_tokens, "BURN_LM_KV_POOL_TOKENS");
+            tracing::info!(target: "batching", kv_pool_tokens, "kv pool tokens (0 = full rectangle)");
             let model = match self.version {
                 LlamaVersion::Llama3Instruct => {
-                    LlamaConfig::llama3_8b_pretrained(config.max_seq_len, &*INFERENCE_DEVICE)
+                    LlamaConfig::llama3_8b_pretrained(max_seq_len, max_slots, kv_pool_tokens, &*INFERENCE_DEVICE)
                         .unwrap()
                 }
                 LlamaVersion::Llama31Instruct => {
-                    LlamaConfig::llama3_1_8b_pretrained(config.max_seq_len, &*INFERENCE_DEVICE)
+                    LlamaConfig::llama3_1_8b_pretrained(max_seq_len, max_slots, kv_pool_tokens, &*INFERENCE_DEVICE)
                         .unwrap()
                 }
                 LlamaVersion::Llama323bInstruct => {
-                    LlamaConfig::llama3_2_3b_pretrained(config.max_seq_len, &*INFERENCE_DEVICE)
+                    LlamaConfig::llama3_2_3b_pretrained(max_seq_len, max_slots, kv_pool_tokens, &*INFERENCE_DEVICE)
                         .unwrap()
                 }
                 LlamaVersion::Llama321bInstruct => {
-                    LlamaConfig::llama3_2_1b_pretrained(config.max_seq_len, &*INFERENCE_DEVICE)
+                    LlamaConfig::llama3_2_1b_pretrained(max_seq_len, max_slots, kv_pool_tokens, &*INFERENCE_DEVICE)
                         .unwrap()
                 }
                 LlamaVersion::Llama321bInstructQ4FB32 => {
-                    LlamaConfig::llama3_2_1b_pretrained_q4(config.max_seq_len, &*INFERENCE_DEVICE)
-                        .unwrap()
+                    LlamaConfig::llama3_2_1b_pretrained_q4(max_seq_len, &*INFERENCE_DEVICE).unwrap()
                 }
             };
-            self.model = Some(Arc::new(Mutex::new(model)));
+            self.model.store(model);
             let mut stats = Stats::new();
             stats
                 .entries
@@ -555,7 +758,7 @@ impl Llama3BaseServer {
     }
 
     fn is_loaded(&mut self) -> bool {
-        self.model.is_some()
+        self.model.is_loaded()
     }
 
     fn prompt(

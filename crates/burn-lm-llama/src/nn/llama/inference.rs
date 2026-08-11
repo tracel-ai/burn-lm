@@ -8,10 +8,16 @@ use burn::{
 };
 use std::time::Instant;
 
+use burn_lm_inference::{
+    batching::{BatchedDecoder, DecodeRow},
+    InferenceError, InferenceResult,
+};
+
 use crate::{
     nn::{
+        attention::{PagedKvCache, PagedKvError},
         pos_encoding::PositionalEncodingState,
-        transformer::{Transformer, TransformerCache},
+        transformer::Transformer,
     },
     tokenizer::Tokenizer,
 };
@@ -21,13 +27,120 @@ use crate::{
 pub struct Llama<T: Tokenizer> {
     /// The tokenizer.
     pub tokenizer: T,
+    /// Reusable decoder state for autoregressive inference.
+    pub decoder: LlamaDecoder,
+}
+
+/// Reusable Llama decoder state for autoregressive inference.
+///
+/// The KV and RoPE state is a single shared slab: `cache` holds `max_batch_size` lanes (one per
+/// engine slot, per `BatchCapacity`), and a whole round of active sequences advances through one
+/// lane-aware forward. Slot numbers index lanes directly (the server sets
+/// `max_batch_size == max_slots`).
+#[derive(Debug)]
+pub struct LlamaDecoder {
     /// Llama decoder-only transformer.
     pub model: Transformer,
-    /// Key-value cache for each transformer block.
-    pub cache: TransformerCache,
-    /// Rotary positional encoding (RoPE).
+    /// Shared paged KV cache (one lane per engine slot): per-layer block stores plus the block
+    /// allocator and lane lengths. Writes and reads are addressed through per-lane block tables,
+    /// and `release` frees a lane's blocks back to the pool.
+    pub cache: PagedKvCache,
+    /// Rotary positional encoding (RoPE). Lane decode reads `rope` directly at each lane's absolute
+    /// position, with no table shift.
     pub pos_encoding: PositionalEncodingState,
     pub device: Device,
+}
+
+impl LlamaDecoder {
+    /// Reset decoder state between independent generations.
+    pub fn reset(&mut self) {
+        self.cache.reset();
+        self.pos_encoding.reset();
+    }
+
+    /// Forward `seq_len` new tokens for each lane in `lanes` (all the same length) through the
+    /// shared slab, returning each lane's last-position logits, `[lanes.len(), vocab]`.
+    ///
+    /// Prefill is one lane with `seq_len == prompt_len`; fused decode is several active lanes with
+    /// `seq_len == 1`. `prepare_lanes` snapshots each lane's start position, builds the per-lane
+    /// causal and padding mask, and advances the lane lengths; the model then writes and reads each
+    /// lane sliced and rotates each at its own absolute position. A lane past `max_seq_len` is an
+    /// error (lane mode has no cache eviction), surfaced as `ContextLengthExceeded`.
+    fn forward_lanes(
+        &mut self,
+        lanes: &[usize],
+        input: Tensor<2, Int>,
+    ) -> InferenceResult<Tensor<2>> {
+        let seq_len_in = input.dims()[1];
+        let plan = self
+            .cache
+            .prepare_lanes(lanes, seq_len_in)
+            .map_err(|err| match err {
+                PagedKvError::MaxSequenceLengthExceeded { actual, max } => {
+                    InferenceError::ContextLengthExceeded(actual, max)
+                }
+                PagedKvError::PoolExhausted { short_by } => {
+                    InferenceError::KvPoolExhausted(short_by)
+                }
+            })?;
+        let logits =
+            self.model
+                .forward_lanes(input, &mut self.cache, &self.pos_encoding.rope, &plan);
+        let [n, seq_len, vocab] = logits.dims();
+        Ok(logits
+            .slice([0..n, seq_len - 1..seq_len, 0..vocab])
+            .reshape([n, vocab]))
+    }
+}
+
+impl BatchedDecoder for LlamaDecoder {
+    /// Run a whole prompt into one lane, returning the last position's logits (`[1, vocab]`).
+    ///
+    /// A `position == 0` prompt is a new sequence: reset the lane first so a fresh sequence can
+    /// never resume a previous occupant's KV. Normally `release` already did this, so resetting
+    /// again is a no-op that lets the lane recover if some release was missed. A chunked prompt
+    /// (`position > 0`) legitimately continues the lane's state: `prefill` may be called repeatedly
+    /// on the same slot with strictly increasing `position` and contiguous token ranges, each call
+    /// appending KV at `position == lane_len(slot)`.
+    fn prefill(
+        &mut self,
+        slot: usize,
+        tokens: &[u32],
+        position: usize,
+    ) -> InferenceResult<Tensor<2>> {
+        if position == 0 {
+            self.cache.reset_lane(slot);
+        }
+        debug_assert_eq!(
+            position,
+            self.cache.lane_len(slot),
+            "prefill position must equal the lane's current length"
+        );
+        let ids: Vec<i32> = tokens.iter().map(|&t| t as i32).collect();
+        let input =
+            Tensor::<2, Int>::from_data(TensorData::new(ids, [1, tokens.len()]), &self.device);
+        self.forward_lanes(&[slot], input)
+    }
+
+    /// Advance every row's lane by one token in one fused forward, returning logits
+    /// `[rows.len(), vocab]` where row `i` belongs to `rows[i]`. Each lane sits at its own absolute
+    /// position; the lane-aware forward writes and reads each sliced and masks each lane's stale
+    /// tail.
+    fn decode(&mut self, rows: &[DecodeRow]) -> InferenceResult<Tensor<2>> {
+        let lanes: Vec<usize> = rows.iter().map(|row| row.slot).collect();
+        let ids: Vec<i32> = rows.iter().map(|row| row.token as i32).collect();
+        let input =
+            Tensor::<2, Int>::from_data(TensorData::new(ids, [rows.len(), 1]), &self.device);
+        self.forward_lanes(&lanes, input)
+    }
+
+    fn release(&mut self, slot: usize) {
+        self.cache.reset_lane(slot);
+    }
+
+    fn max_context_len(&self) -> usize {
+        self.cache.max_seq_len()
+    }
 }
 
 impl<T: Tokenizer> Llama<T> {
@@ -36,14 +149,14 @@ impl<T: Tokenizer> Llama<T> {
         let tokens = self.tokenizer.encode(text, false, false);
 
         let shape = Shape::new([tokens.len()]);
-        Tensor::<1, Int>::from_data(TensorData::new(tokens, shape), &self.device)
+        Tensor::<1, Int>::from_data(TensorData::new(tokens, shape), &self.decoder.device)
     }
 
     /// Save Llama model to file using the specified recorder.
     pub fn save<R: FileRecorder>(self, file_path: &str, recorder: &R) -> Result<(), RecorderError> {
         println!("Saving record...");
         let now = Instant::now();
-        self.model.save_file(file_path, recorder)?;
+        self.decoder.model.save_file(file_path, recorder)?;
         let elapsed = now.elapsed().as_secs();
         println!("Saved in {elapsed}s");
 
@@ -56,14 +169,16 @@ impl<T: Tokenizer> Llama<T> {
         file_path: &str,
         recorder: &R,
     ) -> Result<Self, RecorderError> {
-        self.model = self.model.load_file(file_path, recorder, &self.device)?;
+        self.decoder.model =
+            self.decoder
+                .model
+                .load_file(file_path, recorder, &self.decoder.device)?;
         Ok(self)
     }
 
     /// Reset the model state (used between generations)
     pub fn reset(&mut self) {
-        self.cache.reset();
-        self.pos_encoding.reset();
+        self.decoder.reset()
     }
 
     /// Quantize the model weights.
@@ -73,21 +188,25 @@ impl<T: Tokenizer> Llama<T> {
             calibration,
             scheme,
         };
-        let device = &self.model.devices()[0];
+        let device = &self.decoder.model.devices()[0];
 
         // TODO: improve module mapper usage for quantization (currently, this leads to additional memory usage)
-        // self.model = self.model.quantize_weights(&mut quantizer);
+        // self.decoder.model = self.decoder.model.quantize_weights(&mut quantizer);
 
         // Quantizing by layer reduces the peak memory usage
-        let mut layers = Vec::with_capacity(self.model.layers.len());
-        for layer in self.model.layers.drain(..) {
+        let mut layers = Vec::with_capacity(self.decoder.model.layers.len());
+        for layer in self.decoder.model.layers.drain(..) {
             layers.push(layer.quantize_weights(&mut quantizer));
         }
-        self.model.layers = layers;
+        self.decoder.model.layers = layers;
         let _ = device.sync();
 
-        self.model.tok_embeddings = self.model.tok_embeddings.quantize_weights(&mut quantizer);
-        self.model.output = self.model.output.quantize_weights(&mut quantizer);
+        self.decoder.model.tok_embeddings = self
+            .decoder
+            .model
+            .tok_embeddings
+            .quantize_weights(&mut quantizer);
+        self.decoder.model.output = self.decoder.model.output.quantize_weights(&mut quantizer);
 
         self
     }

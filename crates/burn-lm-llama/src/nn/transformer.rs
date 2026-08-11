@@ -4,18 +4,13 @@ use burn::{
     nn::{
         Embedding, EmbeddingConfig, Linear, LinearConfig, RmsNorm, RmsNormConfig, RotaryEncoding,
     },
-    tensor::{Bool, Device, Int, Tensor},
+    tensor::{Device, Int, Tensor},
 };
 
-use crate::{
-    generation::GenerationError,
-    nn::{
-        attention::*,
-        fftn::{FeedForward, FeedForwardConfig},
-    },
+use crate::nn::{
+    attention::*,
+    fftn::{FeedForward, FeedForwardConfig},
 };
-
-use super::pos_encoding::PositionalEncodingState;
 
 /// Configuration to create a Llama [decoder-only transformer](Transformer).
 #[derive(Config, Debug)]
@@ -73,6 +68,19 @@ impl TransformerConfig {
     }
 }
 
+impl TransformerConfig {
+    /// This transformer's KV shape, for building its paged cache: the cache cares about layer
+    /// count, KV-head geometry, and the context window — nothing else about the model.
+    pub fn kv_layout(&self) -> KvLayout {
+        KvLayout {
+            n_layers: self.n_layers,
+            n_kv_heads: self.n_kv_heads,
+            head_dim: self.d_model / self.n_heads,
+            max_seq_len: self.max_seq_len,
+        }
+    }
+}
+
 /// Llama decoder-only transformer.
 #[derive(Module, Debug)]
 pub struct Transformer {
@@ -85,21 +93,26 @@ pub struct Transformer {
 }
 
 impl Transformer {
-    pub fn forward(
+    /// Advance the active lanes through every layer by `seq_len` tokens and return their logits,
+    /// shaped `[n, seq_len, vocab]`. All lanes in one call share the same input length (one token for
+    /// a decode round, the prompt length for a prefill); they differ only in where each one sits in
+    /// the KV buffer, which the `plan` carries as the per-lane start position and mask. The plan is
+    /// built by `PagedKvCache::prepare_lanes` and described on `LanePlan`.
+    pub fn forward_lanes(
         &self,
         input: Tensor<2, Int>,
-        cache: &mut TransformerCache,
-        pos_encoding: &PositionalEncodingState,
-        mask: Option<Tensor<4, Bool>>,
+        cache: &mut PagedKvCache,
+        rope: &RotaryEncoding,
+        plan: &LanePlan,
     ) -> Tensor<3> {
         let mut h = self.tok_embeddings.forward(input);
 
-        for (layer, c) in self.layers.iter().zip(cache.layers.iter_mut()) {
-            h = layer.forward(h, c, pos_encoding, mask.clone());
+        for (layer, c) in self.layers.iter().zip(cache.layers_mut()) {
+            h = layer.forward_lanes(h, c, rope, plan);
         }
 
         let h = self.norm.forward(h);
-        self.output.forward(h)
+        crate::nn::linear_flat(&self.output, h)
     }
 
     /// Forward with non-autoregressive and creates a mask for training.
@@ -112,76 +125,6 @@ impl Transformer {
 
         let h = self.norm.forward(h);
         self.output.forward(h)
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct TransformerCache {
-    layers: Vec<KeyValueCache>,
-    device: Device,
-    max_seq_len: usize,
-    curr_seq_len: usize,
-}
-
-impl TransformerCache {
-    pub fn new(config: &TransformerConfig, max_batch_size: usize, device: &Device) -> Self {
-        let cache = (0..config.n_layers)
-            .map(|_| {
-                KeyValueCache::new(
-                    max_batch_size,
-                    config.n_kv_heads,
-                    config.max_seq_len,
-                    config.d_model / config.n_heads,
-                    device,
-                )
-            })
-            .collect::<Vec<_>>();
-
-        Self {
-            layers: cache,
-            device: device.clone(),
-            max_seq_len: config.max_seq_len,
-            curr_seq_len: 0,
-        }
-    }
-
-    pub fn prepare(&mut self, seq_len: usize) -> Result<Option<Tensor<4, Bool>>, GenerationError> {
-        if seq_len > self.max_seq_len {
-            return Err(GenerationError::MaxSequenceLengthExceeded {
-                actual: seq_len,
-                max: self.max_seq_len,
-            });
-        }
-
-        self.curr_seq_len += seq_len;
-        if self.curr_seq_len > self.max_seq_len {
-            let num_removed = self.curr_seq_len - self.max_seq_len;
-            self.layers
-                .iter_mut()
-                .for_each(|cache| cache.prepare(num_removed));
-            self.curr_seq_len -= num_removed;
-        }
-
-        Ok(self.mask_attn(seq_len))
-    }
-
-    fn mask_attn(&self, seq_len: usize) -> Option<Tensor<4, Bool>> {
-        if seq_len <= 1 {
-            return None;
-        }
-
-        let mask = Tensor::<2, Bool>::tril_mask(
-            [seq_len, self.curr_seq_len],
-            (self.curr_seq_len - seq_len) as i64, // offset
-            &self.device,
-        );
-
-        Some(mask.unsqueeze::<4>())
-    }
-
-    pub fn reset(&mut self) {
-        self.curr_seq_len = 0;
-        self.layers.iter_mut().for_each(|cache| cache.reset());
     }
 }
 
@@ -227,30 +170,36 @@ impl TransformerBlockConfig {
 /// Decoder-only transformer block.
 #[derive(Module, Debug)]
 pub struct TransformerBlock {
+    // The fields are `pub(crate)` so the batched-equivalence test harness
+    // (`generation/batched_equivalence.rs`) can hand-roll a per-lane forward pass with the production
+    // weights and check the batched path against it.
     /// Self-attention.
-    attention: MultiHeadAttention,
+    pub(crate) attention: MultiHeadAttention,
     /// Feed-forward transformation.
-    feed_forward: FeedForward,
+    pub(crate) feed_forward: FeedForward,
     /// Attention pre-normalization.
-    attention_norm: RmsNorm,
+    pub(crate) attention_norm: RmsNorm,
     /// Feed-forward pre-normalization.
-    ffn_norm: RmsNorm,
+    pub(crate) ffn_norm: RmsNorm,
 }
 
 impl TransformerBlock {
-    pub fn forward(
+    /// One block of the lane-aware forward: pre-norm, the cached per-lane attention, and the
+    /// feed-forward, each wrapped in its residual. The `plan` carries the per-lane RoPE positions, KV
+    /// offsets, and mask through to the attention layer.
+    pub fn forward_lanes(
         &self,
         input: Tensor<3>,
         cache: &mut KeyValueCache,
-        pos_encoding: &PositionalEncodingState,
-        mask: Option<Tensor<4, Bool>>,
+        rope: &RotaryEncoding,
+        plan: &LanePlan,
     ) -> Tensor<3> {
         let h = input.clone()
-            + self.attention.forward_cache(
+            + self.attention.forward_cache_lanes(
                 self.attention_norm.forward(input),
                 cache,
-                pos_encoding,
-                mask,
+                rope,
+                plan,
             );
         h.clone() + self.feed_forward.forward(self.ffn_norm.forward(h))
     }
@@ -270,10 +219,7 @@ mod tests {
     use super::*;
     use crate::tests::*;
 
-    use burn::{
-        nn::RotaryEncodingConfig,
-        tensor::{TensorData, Tolerance},
-    };
+    use burn::tensor::{TensorData, Tolerance};
 
     #[test]
     fn test_rms_norm() {
@@ -294,165 +240,5 @@ mod tests {
         output
             .into_data()
             .assert_approx_eq::<f32>(&expected, Tolerance::relative(0.05));
-    }
-
-    #[test]
-    fn test_transformer() {
-        let device: Device = Default::default();
-        let config = TransformerConfig::new(8, 2, 8, 16, 2, 1);
-        let transformer: Transformer = config.init(&device);
-
-        let batch_size = 2;
-        let seq_length = 2;
-
-        let mut cache = TransformerCache::new(&config, batch_size, &device);
-
-        let rope = RotaryEncodingConfig::new(seq_length * 2, config.d_model / config.n_heads)
-            .init(&device);
-        let rope = PositionalEncodingState::new(rope);
-
-        let input = Tensor::arange(0..(batch_size * seq_length) as i64, &device)
-            .reshape([batch_size, seq_length]);
-
-        let transformer = Reinitializer::default()
-            .range_float(0.0, 5.0)
-            .apply(transformer);
-
-        let mask = cache.prepare(seq_length).unwrap();
-        let output = transformer.forward(input, &mut cache, &rope, mask);
-
-        let expected = TensorData::from([
-            [
-                [
-                    56.37573, 57.77283, 59.169933, 60.567043, 61.964146, 63.361248, 64.758354,
-                    66.15546,
-                ],
-                [
-                    56.374626, 57.77171, 59.168793, 60.56588, 61.962963, 63.360046, 64.75713,
-                    66.15422,
-                ],
-            ],
-            [
-                [
-                    56.374252, 57.771328, 59.168407, 60.565487, 61.962566, 63.359642, 64.75672,
-                    66.1538,
-                ],
-                [
-                    56.37408, 57.771156, 59.168232, 60.565304, 61.96238, 63.359455, 64.75653,
-                    66.15361,
-                ],
-            ],
-        ]);
-        output
-            .into_data()
-            .assert_approx_eq::<f32>(&expected, Tolerance::relative(0.001));
-    }
-
-    pub struct ForwardCacheTestCase {
-        cache: TransformerCache,
-        config: TransformerConfig,
-        device: Device,
-    }
-
-    impl ForwardCacheTestCase {
-        fn new(config: TransformerConfig, device: Device) -> Self {
-            Self {
-                cache: TransformerCache::new(&config, 1, &device),
-                config,
-                device,
-            }
-        }
-
-        fn forward_seq(&mut self, seq_len: usize) {
-            let x = Tensor::ones(
-                [
-                    1,
-                    self.config.n_kv_heads,
-                    seq_len,
-                    self.config.d_model / self.config.n_heads,
-                ],
-                &self.device,
-            );
-            self.cache.prepare(seq_len).unwrap();
-            self.forward(x);
-        }
-
-        fn forward(&mut self, x: Tensor<4>) {
-            for cache in self.cache.layers.iter_mut() {
-                // - input:  `[batch_size, num_heads, seq_len_input, d_model]`
-                // - output: `[batch_size, num_heads, seq_len_previous + seq_len_input, d_model]`
-                cache.forward(x.clone(), x.clone());
-            }
-        }
-
-        fn assert_eq_cache_len(&self, len: usize) {
-            for cache in self.cache.layers.iter() {
-                assert_eq!(cache.len(), len);
-            }
-        }
-    }
-
-    #[test]
-    fn test_transformer_cache_should_shrink() {
-        let max_seq_len = 8;
-        let num_heads = 2;
-        let num_kv_heads = 1;
-        let d_model = 4;
-        let config = TransformerConfig::new(8, 2, d_model, 4, num_heads, num_kv_heads)
-            .with_max_seq_len(max_seq_len);
-
-        let mut model = ForwardCacheTestCase::new(config, Default::default());
-        assert_eq!(model.cache.max_seq_len, max_seq_len);
-        assert_eq!(model.cache.curr_seq_len, 0);
-
-        let seq_len = 4;
-        model.forward_seq(seq_len);
-        assert_eq!(model.cache.curr_seq_len, seq_len);
-        model.assert_eq_cache_len(seq_len);
-
-        let seq_len = 1;
-        model.forward_seq(seq_len);
-        assert_eq!(model.cache.curr_seq_len, 5);
-        model.assert_eq_cache_len(5);
-
-        let seq_len = 1;
-        model.forward_seq(seq_len);
-        assert_eq!(model.cache.curr_seq_len, 6);
-        model.assert_eq_cache_len(6);
-
-        // Shrink: any subsequent calls will shift the cache and have `max_seq_len`
-        let seq_len = 6;
-        model.forward_seq(seq_len);
-        assert_eq!(model.cache.curr_seq_len, max_seq_len);
-        model.assert_eq_cache_len(max_seq_len);
-
-        let seq_len = 1;
-        model.forward_seq(seq_len);
-        assert_eq!(model.cache.curr_seq_len, max_seq_len);
-        model.assert_eq_cache_len(max_seq_len);
-
-        let seq_len = 1;
-        model.forward_seq(seq_len);
-        assert_eq!(model.cache.curr_seq_len, max_seq_len);
-        model.assert_eq_cache_len(max_seq_len);
-    }
-
-    #[test]
-    fn test_transformer_cache_exceeded_max_seq_len() {
-        let max_seq_len = 8;
-        let num_heads = 2;
-        let num_kv_heads = 1;
-        let d_model = 4;
-        let config = TransformerConfig::new(8, 2, d_model, 4, num_heads, num_kv_heads)
-            .with_max_seq_len(max_seq_len);
-        let mut cache = TransformerCache::new(&config, 1, &Default::default());
-
-        // When the previous inputs and generated tokens are accumulated and provided as context
-        // with a new input, or the input sequence simply exceeds the max_seq_len, the cache should
-        // return an error
-        assert!(matches!(
-            cache.prepare(16),
-            Err(GenerationError::MaxSequenceLengthExceeded { actual: 16, max: 8 })
-        ));
     }
 }

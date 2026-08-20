@@ -17,7 +17,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: tracel-ai/github-actions/check-version@v5
+      - uses: tracel-ai/github-actions/check-version@v11
         with:
           tag: ${{ github.ref_name }}
           cargo_toml_path: Cargo.toml
@@ -27,9 +27,10 @@ jobs:
   publish-burn-lm-macros:
     needs:
       - check-version
-    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v5
+    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v11
     with:
       crate: burn-lm-macros
+      tag-validation: false
       dry-run-only: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run-only || false }}
     secrets:
       CRATES_IO_API_TOKEN: ${{ secrets.CRATES_IO_API_TOKEN }}
@@ -37,9 +38,10 @@ jobs:
   publish-burn-lm-inference:
     needs:
       - publish-burn-lm-macros
-    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v3
+    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v11
     with:
       crate: burn-lm-inference
+      tag-validation: false
       dry-run-only: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run-only || false }}
     secrets:
       CRATES_IO_API_TOKEN: ${{ secrets.CRATES_IO_API_TOKEN }}
@@ -50,9 +52,10 @@ jobs:
       - publish-burn-lm-llama
       - publish-burn-lm-inference
       - publish-burn-lm-macros
-    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v3
+    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v11
     with:
       crate: burn-lm-registry
+      tag-validation: false
       dry-run-only: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run-only || false }}
     secrets:
       CRATES_IO_API_TOKEN: ${{ secrets.CRATES_IO_API_TOKEN }}
@@ -61,9 +64,10 @@ jobs:
     needs:
       - publish-burn-lm-registry
       - publish-burn-lm-inference
-    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v3
+    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v11
     with:
       crate: burn-lm-cli
+      tag-validation: false
       dry-run-only: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run-only || false }}
     secrets:
       CRATES_IO_API_TOKEN: ${{ secrets.CRATES_IO_API_TOKEN }}
@@ -72,9 +76,10 @@ jobs:
     needs:
       - publish-burn-lm-registry
       - publish-burn-lm-inference
-    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v3
+    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v11
     with:
       crate: burn-lm-http
+      tag-validation: false
       dry-run-only: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run-only || false }}
     secrets:
       CRATES_IO_API_TOKEN: ${{ secrets.CRATES_IO_API_TOKEN }}
@@ -86,9 +91,10 @@ jobs:
       - publish-burn-lm-cli
       - publish-burn-lm-http
       - publish-burn-lm-registry
-    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v3
+    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v11
     with:
       crate: burn-lm
+      tag-validation: false
       dry-run-only: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run-only || false }}
     secrets:
       CRATES_IO_API_TOKEN: ${{ secrets.CRATES_IO_API_TOKEN }}
@@ -98,9 +104,10 @@ jobs:
   publish-burn-lm-llama:
     needs:
       - publish-burn-lm-inference
-    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v3
+    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v11
     with:
       crate: burn-lm-llama
+      tag-validation: false
       dry-run-only: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run-only || false }}
     secrets:
       CRATES_IO_API_TOKEN: ${{ secrets.CRATES_IO_API_TOKEN }}
@@ -108,9 +115,10 @@ jobs:
   publish-burn-lm-parrot:
     needs:
       - publish-burn-lm-inference
-    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v3
+    uses: tracel-ai/github-actions/.github/workflows/publish-crate.yml@v11
     with:
       crate: burn-lm-parrot
+      tag-validation: false
       dry-run-only: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run-only || false }}
     secrets:
       CRATES_IO_API_TOKEN: ${{ secrets.CRATES_IO_API_TOKEN }}

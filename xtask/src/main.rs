@@ -6,7 +6,7 @@ extern crate log;
 use std::time::Instant;
 use tracel_xtask::prelude::*;
 
-#[macros::base_commands(Build, Bump, Check, Compile, Fix, Test, Publish)]
+#[macros::base_commands]
 enum Command {
     /// Run commands to manage the book.
     Book(commands::book::BookArgs),
@@ -15,11 +15,11 @@ enum Command {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let start = Instant::now();
-    let args = init_xtask::<Command>(parse_args::<Command>()?)?;
+    let (args, environment) = init_xtask::<Command>(parse_args::<Command>()?)?;
 
     match args.command {
         Command::Book(book_args) => book_args.parse(),
-        _ => dispatch_base_commands(args),
+        _ => dispatch_base_commands(args, environment),
     }?;
 
     let duration = start.elapsed();

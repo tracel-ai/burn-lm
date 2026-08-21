@@ -1,10 +1,10 @@
 use burn::{
     nn::{Linear, LinearConfig, RotaryEncoding},
     prelude::*,
-    tensor::activation::softmax,
+    tensor::{module::attention, ops::AttentionModuleOptions},
 };
 
-use crate::nn::pos_encoding::PositionalEncodingState;
+use crate::nn::{pos_encoding::apply_rope_lanes, transformer::LanePlan};
 
 use super::kv_cache::KeyValueCache;
 
@@ -21,18 +21,21 @@ pub struct MultiHeadAttentionConfig {
 
 #[derive(Module, Debug)]
 pub struct MultiHeadAttention {
+    // The fields are `pub(crate)` so the batched-equivalence test harness
+    // (`generation/batched_equivalence.rs`) can drive the attention math directly with per-lane KV
+    // and RoPE positions, checking the batched path against a hand-rolled per-lane reference.
     /// Query projection.
-    wq: Linear,
+    pub(crate) wq: Linear,
     /// Key projection.
-    wk: Linear,
+    pub(crate) wk: Linear,
     /// Value projection.
-    wv: Linear,
+    pub(crate) wv: Linear,
     /// Output projection.
-    wo: Linear,
+    pub(crate) wo: Linear,
 
-    n_heads: usize,
-    n_kv_heads: usize,
-    head_dim: usize,
+    pub(crate) n_heads: usize,
+    pub(crate) n_kv_heads: usize,
+    pub(crate) head_dim: usize,
 }
 
 impl MultiHeadAttention {
@@ -65,65 +68,58 @@ impl MultiHeadAttention {
         };
 
         let output = self.forward_attention(q, k, v, mask, batch_size, seq_len, hidden_size);
-        self.wo.forward(output)
+        crate::nn::linear_flat(&self.wo, output)
     }
 
-    /// Applies the forward pass on the input tensors.
-    ///
-    /// # Shapes
-    ///
-    /// - query: `[batch_size, seq_length_1, d_model]`
-    /// - key: `[batch_size, seq_length_2, d_model]`
-    /// - value: `[batch_size, seq_length_2, d_model]`
-    /// - output: `[batch_size, seq_length_1, d_model]`
-    pub fn forward_cache(
+    /// The cached attention step, one active lane per input row. It rotates each lane's queries and
+    /// keys at that lane's own absolute position, writes and reads the keys and values into the
+    /// shared per-lane KV buffer, and attends under the per-lane causal and padding mask. `input` is
+    /// `[n, seq_len, d_model]`, one row per active lane. This is the per-layer core of the batched
+    /// decode loop; the single-token decode and the multi-token prefill both come through here.
+    pub fn forward_cache_lanes(
         &self,
         input: Tensor<3>,
         cache: &mut KeyValueCache,
-        pos_encoding: &PositionalEncodingState,
-        mask: Option<Tensor<4, Bool>>,
+        rope: &RotaryEncoding,
+        plan: &LanePlan,
     ) -> Tensor<3> {
-        let device = input.device();
-        let [batch_size, seq_len, hidden_size] = input.dims();
+        let [n, seq_len, hidden_size] = input.dims();
 
         let (q, k, v) = self.forward_projection(input);
 
-        let q = pos_encoding.apply(q);
-        let k = pos_encoding.apply(k);
+        // Rotate each lane at its own absolute position. Unlike the old single-sequence path, lane
+        // mode never shifts the RoPE table: it indexes the precomputed table directly. That stays
+        // correct because the table is built with `max_seq_len * 5` rows (see `LlamaConfig::init`)
+        // while `prepare_lanes` caps every lane at `max_seq_len`, so no lane position can fall past
+        // the precomputed window — the shift the old path used only ever triggered beyond it.
+        let q = apply_rope_lanes(rope, q, &plan.starts);
+        let k = apply_rope_lanes(rope, k, &plan.starts);
 
-        // Key-value caching
-        let (k, v) = cache.forward(k, v);
+        // Lane-sliced KV write + ragged read-back to the longest active lane.
+        let (k, v) = cache.forward_lanes(&plan.lanes, &plan.starts, k, v);
 
-        let mask = if seq_len > 1 {
-            match mask {
-                Some(mask) => Some(mask),
-                None => {
-                    // We ensure that the correct mask is applied
-                    let cache_seq_len = cache.len();
-                    let mask = Tensor::<2, Bool>::tril_mask(
-                        [seq_len, cache_seq_len],
-                        (cache_seq_len - seq_len) as i64, // offset
-                        &device,
-                    );
+        // plan.mask is [n, 1, seq_len, l_max]; broadcasts over heads inside forward_attention.
+        let output =
+            self.forward_attention(q, k, v, Some(plan.mask.clone()), n, seq_len, hidden_size);
 
-                    Some(mask.unsqueeze::<4>())
-                }
-            }
-        } else {
-            None
-        };
-
-        let output = self.forward_attention(q, k, v, mask, batch_size, seq_len, hidden_size);
-
-        self.wo.forward(output)
+        crate::nn::linear_flat(&self.wo, output)
     }
 
     fn forward_projection(&self, input: Tensor<3>) -> (Tensor<4>, Tensor<4>, Tensor<4>) {
         let [batch_size, seq_len, _hidden_size] = input.dims();
 
+        // Flatten once and share the 2-D activation across all three projections — same reasoning
+        // as `nn::linear_flat`, spelled out here so the reshape happens once instead of per weight.
+        let [b, s, d] = input.dims();
+        let input = input.reshape([b * s, d]);
         let q = self.wq.forward(input.clone());
         let k = self.wk.forward(input.clone());
         let v = self.wv.forward(input);
+        let (q, k, v) = (
+            q.reshape([b, s, self.n_heads * self.head_dim]),
+            k.reshape([b, s, self.n_kv_heads * self.head_dim]),
+            v.reshape([b, s, self.n_kv_heads * self.head_dim]),
+        );
 
         // [batch_size, num_heads, seq_len, head_dim]
         let q = q
@@ -153,17 +149,7 @@ impl MultiHeadAttention {
         let k = self.repeat_kv(k);
         let v = self.repeat_kv(v);
 
-        // Attention scores
-        let mut scores = q
-            .matmul(k.swap_dims(2, 3))
-            .div_scalar((self.head_dim as f32).sqrt());
-
-        if let Some(mask) = mask {
-            scores = scores.mask_fill(mask, f32::NEG_INFINITY);
-        }
-
-        let scores = softmax(scores, 3);
-        let output = scores.matmul(v);
+        let output = attention(q, k, v, mask, None, AttentionModuleOptions::default());
 
         output
             .swap_dims(1, 2)
@@ -171,7 +157,7 @@ impl MultiHeadAttention {
     }
 
     /// Repeats a key or value tensor for grouped query attention.
-    fn repeat_kv(&self, x: Tensor<4>) -> Tensor<4> {
+    pub(crate) fn repeat_kv(&self, x: Tensor<4>) -> Tensor<4> {
         let n_rep = self.n_heads / self.n_kv_heads;
         if n_rep == 1 {
             x
@@ -222,43 +208,6 @@ mod tests {
     use burn::{nn::RotaryEncodingConfig, tensor::Tolerance};
 
     #[test]
-    pub fn test_attention_empty_cache() {
-        let seq_length = 3;
-        let batch_size = 2;
-        let config = MultiHeadAttentionConfig::new(32, 2, 2);
-        let device: Device = Default::default();
-        let mha = config.init(&device);
-
-        let mha = Reinitializer::default()
-            .random_float(0, -2.0, 2.0)
-            .apply(mha);
-
-        let shape = Shape::from([batch_size, seq_length, config.d_model]);
-        let input = Tensor::arange(0..shape.num_elements() as i64, &device)
-            .reshape(shape)
-            .float();
-
-        let mut cache = KeyValueCache::new(
-            batch_size,
-            config.n_heads,
-            seq_length,
-            config.d_model,
-            &device,
-        );
-
-        let rope = RotaryEncodingConfig::new(seq_length * 2, config.d_model / config.n_heads)
-            .init(&device);
-        let rope = PositionalEncodingState::new(rope);
-
-        let output = mha.forward_cache(input, &mut cache, &rope, None);
-        let expected = arange_mha_expected_value();
-
-        output
-            .into_data()
-            .assert_approx_eq::<f32>(&expected, Tolerance::relative(0.05));
-    }
-
-    #[test]
     pub fn test_attention_masked() {
         let seq_length = 3;
         let batch_size = 2;
@@ -279,69 +228,6 @@ mod tests {
             .init(&device);
 
         let output = mha.forward_masked(input, &rope);
-        let expected = arange_mha_expected_value();
-
-        output
-            .into_data()
-            .assert_approx_eq::<f32>(&expected, Tolerance::relative(0.05));
-    }
-
-    #[test]
-    pub fn test_attention_decoding() {
-        let seq_length = 3;
-        let batch_size = 2;
-        let config = MultiHeadAttentionConfig::new(32, 2, 2);
-        let device: Device = Default::default();
-        let mha = config.init(&device);
-
-        let mha = Reinitializer::default()
-            .random_float(0, -2.0, 2.0)
-            .apply(mha);
-
-        let shape = Shape::from([batch_size, seq_length, config.d_model]);
-        let input = Tensor::arange(0..shape.num_elements() as i64, &device)
-            .reshape(shape)
-            .float();
-
-        let rope = RotaryEncodingConfig::new(seq_length * 2, config.d_model / config.n_heads)
-            .init(&device);
-        let rope = PositionalEncodingState::new(rope);
-
-        let mut cache = KeyValueCache::new(
-            batch_size,
-            config.n_heads,
-            seq_length,
-            config.d_model,
-            &device,
-        );
-
-        let out_1 = mha.forward_cache(
-            input
-                .clone()
-                .slice([0..batch_size, 0..1, 0..config.d_model]),
-            &mut cache,
-            &rope,
-            None,
-        );
-        let out_2 = mha.forward_cache(
-            input
-                .clone()
-                .slice([0..batch_size, 1..2, 0..config.d_model]),
-            &mut cache,
-            &rope,
-            None,
-        );
-        let out_3 = mha.forward_cache(
-            input
-                .clone()
-                .slice([0..batch_size, 2..3, 0..config.d_model]),
-            &mut cache,
-            &rope,
-            None,
-        );
-
-        let output = Tensor::cat(vec![out_1, out_2, out_3], 1);
-
         let expected = arange_mha_expected_value();
 
         output

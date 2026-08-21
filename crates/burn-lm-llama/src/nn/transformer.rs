@@ -15,8 +15,6 @@ use crate::{
     },
 };
 
-use super::pos_encoding::PositionalEncodingState;
-
 /// Configuration to create a Llama [decoder-only transformer](Transformer).
 #[derive(Config, Debug)]
 pub struct TransformerConfig {
@@ -85,21 +83,26 @@ pub struct Transformer {
 }
 
 impl Transformer {
-    pub fn forward(
+    /// Advance the active lanes through every layer by `seq_len` tokens and return their logits,
+    /// shaped `[n, seq_len, vocab]`. All lanes in one call share the same input length (one token for
+    /// a decode round, the prompt length for a prefill); they differ only in where each one sits in
+    /// the KV buffer, which the `plan` carries as the per-lane start position and mask. The plan is
+    /// built by `TransformerCache::prepare_lanes` and described on `LanePlan`.
+    pub fn forward_lanes(
         &self,
         input: Tensor<2, Int>,
         cache: &mut TransformerCache,
-        pos_encoding: &PositionalEncodingState,
-        mask: Option<Tensor<4, Bool>>,
+        rope: &RotaryEncoding,
+        plan: &LanePlan,
     ) -> Tensor<3> {
         let mut h = self.tok_embeddings.forward(input);
 
         for (layer, c) in self.layers.iter().zip(cache.layers.iter_mut()) {
-            h = layer.forward(h, c, pos_encoding, mask.clone());
+            h = layer.forward_lanes(h, c, rope, plan);
         }
 
         let h = self.norm.forward(h);
-        self.output.forward(h)
+        crate::nn::linear_flat(&self.output, h)
     }
 
     /// Forward with non-autoregressive and creates a mask for training.
@@ -115,12 +118,41 @@ impl Transformer {
     }
 }
 
+/// Everything one lane-aware forward needs to know about where its lanes sit, produced by
+/// `TransformerCache::prepare_lanes` and consumed unchanged all the way down to the attention layer.
+/// It names which buffer lanes take part, each lane's start position (used both as the RoPE position
+/// and as the KV write offset), and the per-lane mask over the shared KV buffer.
+#[derive(Debug)]
+pub struct LanePlan {
+    /// The active buffer lanes, one per row of the forward input.
+    pub lanes: Vec<usize>,
+    /// Each lane's sequence length before this forward. It serves two roles: the absolute RoPE
+    /// position of the lane's first new token, and the offset its new tokens are written to in the KV
+    /// buffer.
+    pub starts: Vec<usize>,
+    /// The per-lane attention mask, shaped `[n, 1, q, l_max]`, where `true` means masked. Row `r` of
+    /// lane `j` may attend to columns `0..=starts[j] + r`; everything past that is masked off — both
+    /// the lane's own future and the stale buffer tail out to the longest active lane. The attention
+    /// op turns masked positions into negative infinity before the softmax. Because the lanes are
+    /// ragged, even a single-token decode round (`q == 1`) needs this mask to hide each lane's tail,
+    /// which the old single-sequence path could skip.
+    pub mask: Tensor<4, Bool>,
+}
+
+/// The model-owned KV cache for one batch of lanes: the per-layer key/value buffers plus the only
+/// length bookkeeping in the system. Each lane is an independent sequence sharing the fixed-size
+/// buffers, and a lane is addressed by its row index throughout. The whole batched decode loop runs
+/// against one of these.
 #[derive(Clone, Debug)]
 pub struct TransformerCache {
     layers: Vec<KeyValueCache>,
     device: Device,
     max_seq_len: usize,
-    curr_seq_len: usize,
+    /// Each lane's current sequence length, one entry per buffer lane. This is the single source of
+    /// truth for lane lengths: `prepare_lanes` reads these into `LanePlan.starts` and the model
+    /// threads them down as the KV write offsets, so the underlying KV buffers need no counter of
+    /// their own. `prepare_lanes` grows an entry; `reset_lane` zeroes one.
+    lens: Vec<usize>,
 }
 
 impl TransformerCache {
@@ -141,47 +173,113 @@ impl TransformerCache {
             layers: cache,
             device: device.clone(),
             max_seq_len: config.max_seq_len,
-            curr_seq_len: 0,
+            lens: vec![0; max_batch_size],
         }
     }
 
-    pub fn prepare(&mut self, seq_len: usize) -> Result<Option<Tensor<4, Bool>>, GenerationError> {
-        if seq_len > self.max_seq_len {
-            return Err(GenerationError::MaxSequenceLengthExceeded {
-                actual: seq_len,
-                max: self.max_seq_len,
-            });
-        }
-
-        self.curr_seq_len += seq_len;
-        if self.curr_seq_len > self.max_seq_len {
-            let num_removed = self.curr_seq_len - self.max_seq_len;
-            self.layers
-                .iter_mut()
-                .for_each(|cache| cache.prepare(num_removed));
-            self.curr_seq_len -= num_removed;
-        }
-
-        Ok(self.mask_attn(seq_len))
+    /// Number of buffer lanes (the model's `max_batch_size`).
+    pub fn lane_count(&self) -> usize {
+        self.lens.len()
     }
 
-    fn mask_attn(&self, seq_len: usize) -> Option<Tensor<4, Bool>> {
-        if seq_len <= 1 {
-            return None;
+    /// Sequence length of one lane.
+    pub fn lane_len(&self, lane: usize) -> usize {
+        self.lens[lane]
+    }
+
+    /// The hard per-lane token capacity (the context window). Lane mode does not evict, so no lane
+    /// can hold more than this; the engine reads it to retire a sequence before its next forward
+    /// would overflow.
+    pub fn max_seq_len(&self) -> usize {
+        self.max_seq_len
+    }
+
+    /// Plan one forward of `seq_len` new tokens over the given lanes, and commit it. It checks each
+    /// lane has room, snapshots the lanes' start positions, builds the per-lane mask, advances the
+    /// lane lengths, and returns the resulting `LanePlan`. A prefill calls this with a single lane;
+    /// a decode round calls it with all the active lanes at once.
+    ///
+    /// Lane mode does not evict: a lane that would pass `max_seq_len` is an error rather than having
+    /// its oldest tokens dropped. The engine retires a sequence with `ContextLengthExceeded` before
+    /// its next forward would push a lane past `max_seq_len` (see `step_round`'s classification), so
+    /// a live lane never reaches the check below — it stays here as the model-side guard.
+    pub fn prepare_lanes(
+        &mut self,
+        lanes: &[usize],
+        seq_len: usize,
+    ) -> Result<LanePlan, GenerationError> {
+        // Two invariants the per-lane correctness rests on, checked only in debug builds. The lanes
+        // must be distinct: a repeated lane would advance its length twice while the RoPE and mask
+        // for the second row used the stale start, silently corrupting that lane. And the lanes must
+        // be in range, since an out-of-range lane would otherwise be a raw indexing panic below.
+        debug_assert!(
+            lanes.iter().collect::<std::collections::HashSet<_>>().len() == lanes.len(),
+            "prepare_lanes got a duplicate lane: {lanes:?}"
+        );
+        debug_assert!(
+            lanes.iter().all(|&lane| lane < self.lens.len()),
+            "prepare_lanes got a lane >= lane_count ({}): {lanes:?}",
+            self.lens.len()
+        );
+
+        for &lane in lanes {
+            if self.lens[lane] + seq_len > self.max_seq_len {
+                return Err(GenerationError::MaxSequenceLengthExceeded {
+                    actual: self.lens[lane] + seq_len,
+                    max: self.max_seq_len,
+                });
+            }
         }
 
-        let mask = Tensor::<2, Bool>::tril_mask(
-            [seq_len, self.curr_seq_len],
-            (self.curr_seq_len - seq_len) as i64, // offset
+        let starts: Vec<usize> = lanes.iter().map(|&lane| self.lens[lane]).collect();
+        let n = lanes.len();
+        let l_max = starts.iter().map(|s| s + seq_len).max().expect("n >= 1");
+
+        // Host-built per-lane causal + padding mask, `true` = masked.
+        let mut mask_data = Vec::with_capacity(n * seq_len * l_max);
+        for s in starts.iter() {
+            for r in 0..seq_len {
+                for c in 0..l_max {
+                    mask_data.push(c > s + r);
+                }
+            }
+        }
+        let mask = Tensor::<4, Bool>::from_data(
+            burn::tensor::TensorData::new(mask_data, [n, 1, seq_len, l_max]),
             &self.device,
         );
 
-        Some(mask.unsqueeze::<4>())
+        for &lane in lanes {
+            self.lens[lane] += seq_len;
+        }
+
+        Ok(LanePlan {
+            lanes: lanes.to_vec(),
+            starts,
+            mask,
+        })
     }
 
+    /// Reset the whole cache by zeroing every lane's length, reused between independent generations.
     pub fn reset(&mut self) {
-        self.curr_seq_len = 0;
-        self.layers.iter_mut().for_each(|cache| cache.reset());
+        for lane in 0..self.lens.len() {
+            self.reset_lane(lane);
+        }
+    }
+
+    /// Free one lane by zeroing its length. Nothing clears the buffer row itself; the next use of the
+    /// lane overwrites it, because the next `prepare_lanes` reads a zeroed start and the KV write
+    /// lands at offset 0.
+    ///
+    /// A lane index past the buffer is silently ignored rather than panicking. This guards against a
+    /// slot the buffer never had — for instance if `config.max_slots` were set above the loaded lane
+    /// count — reaching here and indexing the fixed-length length vector out of bounds. Admission
+    /// already caps slots at `lane_count` (see `batch_capacity`), so this is a second line of defense.
+    pub fn reset_lane(&mut self, lane: usize) {
+        if lane >= self.lens.len() {
+            return;
+        }
+        self.lens[lane] = 0;
     }
 }
 
@@ -227,30 +325,36 @@ impl TransformerBlockConfig {
 /// Decoder-only transformer block.
 #[derive(Module, Debug)]
 pub struct TransformerBlock {
+    // The fields are `pub(crate)` so the batched-equivalence test harness
+    // (`generation/batched_equivalence.rs`) can hand-roll a per-lane forward pass with the production
+    // weights and check the batched path against it.
     /// Self-attention.
-    attention: MultiHeadAttention,
+    pub(crate) attention: MultiHeadAttention,
     /// Feed-forward transformation.
-    feed_forward: FeedForward,
+    pub(crate) feed_forward: FeedForward,
     /// Attention pre-normalization.
-    attention_norm: RmsNorm,
+    pub(crate) attention_norm: RmsNorm,
     /// Feed-forward pre-normalization.
-    ffn_norm: RmsNorm,
+    pub(crate) ffn_norm: RmsNorm,
 }
 
 impl TransformerBlock {
-    pub fn forward(
+    /// One block of the lane-aware forward: pre-norm, the cached per-lane attention, and the
+    /// feed-forward, each wrapped in its residual. The `plan` carries the per-lane RoPE positions, KV
+    /// offsets, and mask through to the attention layer.
+    pub fn forward_lanes(
         &self,
         input: Tensor<3>,
         cache: &mut KeyValueCache,
-        pos_encoding: &PositionalEncodingState,
-        mask: Option<Tensor<4, Bool>>,
+        rope: &RotaryEncoding,
+        plan: &LanePlan,
     ) -> Tensor<3> {
         let h = input.clone()
-            + self.attention.forward_cache(
+            + self.attention.forward_cache_lanes(
                 self.attention_norm.forward(input),
                 cache,
-                pos_encoding,
-                mask,
+                rope,
+                plan,
             );
         h.clone() + self.feed_forward.forward(self.ffn_norm.forward(h))
     }
@@ -270,10 +374,7 @@ mod tests {
     use super::*;
     use crate::tests::*;
 
-    use burn::{
-        nn::RotaryEncodingConfig,
-        tensor::{TensorData, Tolerance},
-    };
+    use burn::tensor::{TensorData, Tolerance};
 
     #[test]
     fn test_rms_norm() {
@@ -296,163 +397,124 @@ mod tests {
             .assert_approx_eq::<f32>(&expected, Tolerance::relative(0.05));
     }
 
+    fn lane_test_config(max_seq_len: usize) -> TransformerConfig {
+        TransformerConfig::new(8, 2, 4, 4, 2, 1).with_max_seq_len(max_seq_len)
+    }
+
+    fn mask_rows(mask: &Tensor<4, Bool>) -> Vec<bool> {
+        mask.clone().into_data().iter::<bool>().collect()
+    }
+
+    /// Decode step for two lanes at divergent positions: each lane's mask row
+    /// allows exactly its own history plus the new token, and masks the
+    /// buffer tail up to the longest active lane.
     #[test]
-    fn test_transformer() {
-        let device: Device = Default::default();
-        let config = TransformerConfig::new(8, 2, 8, 16, 2, 1);
-        let transformer: Transformer = config.init(&device);
+    fn test_prepare_lanes_decode_mask_covers_exactly_the_dead_columns() {
+        let config = lane_test_config(8);
+        let mut cache = TransformerCache::new(&config, 2, &Default::default());
 
-        let batch_size = 2;
-        let seq_length = 2;
+        // Lane 0 holds 3 positions, lane 1 holds 1.
+        cache.prepare_lanes(&[0], 3).unwrap();
+        cache.prepare_lanes(&[1], 1).unwrap();
+        assert_eq!(cache.lane_len(0), 3);
+        assert_eq!(cache.lane_len(1), 1);
 
-        let mut cache = TransformerCache::new(&config, batch_size, &device);
-
-        let rope = RotaryEncodingConfig::new(seq_length * 2, config.d_model / config.n_heads)
-            .init(&device);
-        let rope = PositionalEncodingState::new(rope);
-
-        let input = Tensor::arange(0..(batch_size * seq_length) as i64, &device)
-            .reshape([batch_size, seq_length]);
-
-        let transformer = Reinitializer::default()
-            .range_float(0.0, 5.0)
-            .apply(transformer);
-
-        let mask = cache.prepare(seq_length).unwrap();
-        let output = transformer.forward(input, &mut cache, &rope, mask);
-
-        let expected = TensorData::from([
-            [
-                [
-                    56.37573, 57.77283, 59.169933, 60.567043, 61.964146, 63.361248, 64.758354,
-                    66.15546,
-                ],
-                [
-                    56.374626, 57.77171, 59.168793, 60.56588, 61.962963, 63.360046, 64.75713,
-                    66.15422,
-                ],
-            ],
-            [
-                [
-                    56.374252, 57.771328, 59.168407, 60.565487, 61.962566, 63.359642, 64.75672,
-                    66.1538,
-                ],
-                [
-                    56.37408, 57.771156, 59.168232, 60.565304, 61.96238, 63.359455, 64.75653,
-                    66.15361,
-                ],
-            ],
-        ]);
-        output
-            .into_data()
-            .assert_approx_eq::<f32>(&expected, Tolerance::relative(0.001));
+        // Fused decode: one new token per lane; l_max = 4.
+        let plan = cache.prepare_lanes(&[0, 1], 1).unwrap();
+        assert_eq!(plan.lanes, vec![0, 1]);
+        assert_eq!(plan.starts, vec![3, 1]);
+        assert_eq!(plan.mask.dims(), [2, 1, 1, 4]);
+        // Lane 0 attends to columns 0..=3 (nothing masked); lane 1 attends to
+        // columns 0..=1 and columns 2..4 (stale tail) are masked.
+        assert_eq!(
+            mask_rows(&plan.mask),
+            vec![false, false, false, false, false, false, true, true]
+        );
+        assert_eq!(cache.lane_len(0), 4);
+        assert_eq!(cache.lane_len(1), 2);
     }
 
-    pub struct ForwardCacheTestCase {
-        cache: TransformerCache,
-        config: TransformerConfig,
-        device: Device,
-    }
-
-    impl ForwardCacheTestCase {
-        fn new(config: TransformerConfig, device: Device) -> Self {
-            Self {
-                cache: TransformerCache::new(&config, 1, &device),
-                config,
-                device,
-            }
-        }
-
-        fn forward_seq(&mut self, seq_len: usize) {
-            let x = Tensor::ones(
-                [
-                    1,
-                    self.config.n_kv_heads,
-                    seq_len,
-                    self.config.d_model / self.config.n_heads,
-                ],
-                &self.device,
-            );
-            self.cache.prepare(seq_len).unwrap();
-            self.forward(x);
-        }
-
-        fn forward(&mut self, x: Tensor<4>) {
-            for cache in self.cache.layers.iter_mut() {
-                // - input:  `[batch_size, num_heads, seq_len_input, d_model]`
-                // - output: `[batch_size, num_heads, seq_len_previous + seq_len_input, d_model]`
-                cache.forward(x.clone(), x.clone());
-            }
-        }
-
-        fn assert_eq_cache_len(&self, len: usize) {
-            for cache in self.cache.layers.iter() {
-                assert_eq!(cache.len(), len);
-            }
-        }
-    }
-
+    /// Single-lane prefill: the per-lane mask reduces to the ordinary causal
+    /// triangle over the lane's own (empty) history.
     #[test]
-    fn test_transformer_cache_should_shrink() {
-        let max_seq_len = 8;
-        let num_heads = 2;
-        let num_kv_heads = 1;
-        let d_model = 4;
-        let config = TransformerConfig::new(8, 2, d_model, 4, num_heads, num_kv_heads)
-            .with_max_seq_len(max_seq_len);
+    fn test_prepare_lanes_prefill_mask_is_causal() {
+        let config = lane_test_config(8);
+        let mut cache = TransformerCache::new(&config, 2, &Default::default());
 
-        let mut model = ForwardCacheTestCase::new(config, Default::default());
-        assert_eq!(model.cache.max_seq_len, max_seq_len);
-        assert_eq!(model.cache.curr_seq_len, 0);
-
-        let seq_len = 4;
-        model.forward_seq(seq_len);
-        assert_eq!(model.cache.curr_seq_len, seq_len);
-        model.assert_eq_cache_len(seq_len);
-
-        let seq_len = 1;
-        model.forward_seq(seq_len);
-        assert_eq!(model.cache.curr_seq_len, 5);
-        model.assert_eq_cache_len(5);
-
-        let seq_len = 1;
-        model.forward_seq(seq_len);
-        assert_eq!(model.cache.curr_seq_len, 6);
-        model.assert_eq_cache_len(6);
-
-        // Shrink: any subsequent calls will shift the cache and have `max_seq_len`
-        let seq_len = 6;
-        model.forward_seq(seq_len);
-        assert_eq!(model.cache.curr_seq_len, max_seq_len);
-        model.assert_eq_cache_len(max_seq_len);
-
-        let seq_len = 1;
-        model.forward_seq(seq_len);
-        assert_eq!(model.cache.curr_seq_len, max_seq_len);
-        model.assert_eq_cache_len(max_seq_len);
-
-        let seq_len = 1;
-        model.forward_seq(seq_len);
-        assert_eq!(model.cache.curr_seq_len, max_seq_len);
-        model.assert_eq_cache_len(max_seq_len);
+        let plan = cache.prepare_lanes(&[1], 3).unwrap();
+        assert_eq!(plan.starts, vec![0]);
+        assert_eq!(plan.mask.dims(), [1, 1, 3, 3]);
+        assert_eq!(
+            mask_rows(&plan.mask),
+            vec![false, true, true, false, false, true, false, false, false]
+        );
     }
 
+    /// A lane that would exceed its capacity is an error; lane mode has no
+    /// Shift eviction.
     #[test]
-    fn test_transformer_cache_exceeded_max_seq_len() {
-        let max_seq_len = 8;
-        let num_heads = 2;
-        let num_kv_heads = 1;
-        let d_model = 4;
-        let config = TransformerConfig::new(8, 2, d_model, 4, num_heads, num_kv_heads)
-            .with_max_seq_len(max_seq_len);
-        let mut cache = TransformerCache::new(&config, 1, &Default::default());
+    fn test_prepare_lanes_exceeded_max_seq_len() {
+        let config = lane_test_config(4);
+        let mut cache = TransformerCache::new(&config, 2, &Default::default());
 
-        // When the previous inputs and generated tokens are accumulated and provided as context
-        // with a new input, or the input sequence simply exceeds the max_seq_len, the cache should
-        // return an error
+        cache.prepare_lanes(&[0], 3).unwrap();
+        // Lane 1 is fine on its own...
+        cache.prepare_lanes(&[1], 1).unwrap();
+        // ...but lane 0 cannot take 2 more positions.
         assert!(matches!(
-            cache.prepare(16),
-            Err(GenerationError::MaxSequenceLengthExceeded { actual: 16, max: 8 })
+            cache.prepare_lanes(&[0, 1], 2),
+            Err(GenerationError::MaxSequenceLengthExceeded { actual: 5, max: 4 })
         ));
+        // A failed plan advances nothing.
+        assert_eq!(cache.lane_len(0), 3);
+        assert_eq!(cache.lane_len(1), 1);
+    }
+
+    /// `reset_lane` zeroes one lane's length, leaving the other lane untouched.
+    /// With `TransformerCache.lens` the single source of length, the freed
+    /// lane's next write lands at offset 0 (the KV caches carry no counter).
+    #[test]
+    fn test_reset_lane_isolates_one_lane() {
+        let device: Device = Default::default();
+        let config = lane_test_config(8);
+        let mut cache = TransformerCache::new(&config, 2, &device);
+        let head_dim = config.d_model / config.n_heads;
+
+        // Write real KV rows; the plan's starts come from this cache's lengths.
+        let write = |cache: &mut TransformerCache, lanes: &[usize], seq_len: usize| {
+            let x = Tensor::ones([lanes.len(), config.n_kv_heads, seq_len, head_dim], &device);
+            let plan = cache.prepare_lanes(lanes, seq_len).unwrap();
+            for layer in cache.layers.iter_mut() {
+                layer.forward_lanes(&plan.lanes, &plan.starts, x.clone(), x.clone());
+            }
+        };
+
+        write(&mut cache, &[0], 3);
+        write(&mut cache, &[1], 1);
+        write(&mut cache, &[0, 1], 1);
+        assert_eq!(cache.lane_len(0), 4);
+        assert_eq!(cache.lane_len(1), 2);
+
+        cache.reset_lane(0);
+        assert_eq!(cache.lane_len(0), 0);
+        assert_eq!(cache.lane_len(1), 2);
+
+        // Lane 0 is recycled from position 0; lane 1 keeps growing from its own length.
+        write(&mut cache, &[0], 2);
+        write(&mut cache, &[1], 1);
+        assert_eq!(cache.lane_len(0), 2);
+        assert_eq!(cache.lane_len(1), 3);
+    }
+
+    /// Releasing a lane outside the slab is a no-op, not a panic — defends against a
+    /// `config.max_slots` raised above the loaded lane count handing admission an out-of-range slot.
+    #[test]
+    fn test_reset_lane_out_of_range_is_a_noop() {
+        let config = lane_test_config(8);
+        let mut cache = TransformerCache::new(&config, 2, &Default::default());
+        cache.prepare_lanes(&[0], 3).unwrap();
+        cache.reset_lane(5); // 5 >= lane_count 2 — must not panic
+        assert_eq!(cache.lane_count(), 2);
+        assert_eq!(cache.lane_len(0), 3, "an in-range lane is untouched");
     }
 }

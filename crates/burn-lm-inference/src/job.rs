@@ -4,12 +4,45 @@ use std::{
     marker::PhantomData,
     sync::{
         atomic::{AtomicBool, Ordering},
-        mpsc::SyncSender,
+        mpsc::{Sender, SyncSender},
         Arc,
     },
 };
 
 use crate::{Message, Prompt};
+
+/// Per-job generation parameters, merged over the server's config defaults.
+///
+/// `None` means "use the server's configured default". Carrying this on the job (instead of
+/// mutating shared server config before `run_job`) is what makes concurrent requests safe — two
+/// jobs in flight through the batching channel each carry their own cap. Sampling itself is
+/// config-driven now: temperature, top-p, and seed live in the server's sampling config, not on the
+/// per-request params, so the only knob a request carries is its token cap.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct GenerationParams {
+    /// Caps the number of generated tokens. Merged over the server's configured cap and can only
+    /// LOWER it, never raise it (the server cap stays authoritative).
+    pub max_tokens: Option<usize>,
+}
+
+/// Fire-once cancellation signal for an [inference job](InferenceJob).
+///
+/// Cloned into the [JobHandle] (and any caller that needs to signal disconnection, e.g. an HTTP
+/// handler watching its SSE stream); observed by the engine executing the job.
+#[derive(Clone, Debug, Default)]
+pub struct CancelSignal(Arc<AtomicBool>);
+
+impl CancelSignal {
+    /// Signal cancellation. Idempotent; cannot be unset.
+    pub fn cancel(&self) {
+        self.0.store(true, Ordering::Relaxed);
+    }
+
+    /// Whether cancellation has been requested.
+    pub fn is_cancelled(&self) -> bool {
+        self.0.load(Ordering::Relaxed)
+    }
+}
 
 /// Defines a job to be run during inference.
 pub struct InferenceJob {
@@ -17,12 +50,16 @@ pub struct InferenceJob {
     pub task: InferenceTask,
     /// The emitter for the current job.
     pub emitter: GeneratedItemEmitter,
+    /// Per-job generation parameters, merged over server config defaults.
+    pub params: GenerationParams,
+    /// Cancellation signal, shared with the [JobHandle].
+    pub cancel: CancelSignal,
 }
 
 /// An emitter is responsible to send [generated items](GeneratedItem) to the [inference job](InferenceJob)
 /// channel.
 pub struct GeneratedItemEmitter {
-    sender: SyncSender<Msg>,
+    sender: Sender<Msg>,
     done: Arc<AtomicBool>,
 }
 
@@ -56,20 +93,37 @@ impl InferenceJob {
     /// [completed method](Self::completed).
     pub fn create<L: InferenceJobListener>(
         task: InferenceTask,
+        params: GenerationParams,
         listener: L,
     ) -> (Self, JobHandle<L>) {
         let (emitter, handle) = GeneratedItemEmitter::init(listener);
+        let cancel = handle.cancel_signal();
 
-        (Self { task, emitter }, handle)
+        (
+            Self {
+                task,
+                emitter,
+                params,
+                cancel,
+            },
+            handle,
+        )
     }
 }
 
 impl GeneratedItemEmitter {
     pub fn init<L: InferenceJobListener>(mut listener: L) -> (Self, JobHandle<L>) {
-        let (sender, receiver) = std::sync::mpsc::sync_channel::<Msg>(1);
+        // Unbounded on purpose. The batching worker streams every sequence's tokens inline on its
+        // single thread, so a bounded channel here lets one slow consumer — a backpressured SSE
+        // socket whose `on_text` write blocks — fill the buffer and wedge the worker's next `send`,
+        // head-of-line blocking every other in-flight request. An unbounded channel makes `send`
+        // never block; each job's output is capped by `max_gen_tokens`, so the buffer can't grow
+        // without bound. Regression: `a_blocking_listener_must_not_stall_other_jobs`.
+        let (sender, receiver) = std::sync::mpsc::channel::<Msg>();
 
         let handle = JobHandle {
             sender: sender.clone(),
+            cancel: CancelSignal::default(),
             _c: PhantomData,
         };
         let done = Arc::new(AtomicBool::new(false));
@@ -78,7 +132,12 @@ impl GeneratedItemEmitter {
             done: done.clone(),
         };
 
-        // TODO: We could use a threadpool for inference jobs.
+        // One listener thread per job, deliberately not a thread pool. This thread blocks in
+        // `on_text` on the client's socket, so a bounded pool would let a few slow clients hold every
+        // pool thread hostage and starve the rest — reintroducing the head-of-line stall the
+        // unbounded channel above removes. Per-job threads isolate clients (a slow one ties up only
+        // its own thread) at the cost of an unbounded thread count; the real fix for that is an async
+        // drain with no blocking thread at all, not a pool. A connection timeout bounds it meanwhile.
         std::thread::spawn(move || {
             for msg in receiver {
                 match msg {
@@ -103,7 +162,14 @@ impl GeneratedItemEmitter {
             let msg = match item {
                 GeneratedItem::Text(text) => Msg::Text(text),
             };
-            self.sender.send(msg).unwrap();
+            // The listener thread may already be gone — e.g. the client dropped its stream and the
+            // writer's pipe broke, panicking the listener. A failed send must NOT panic the caller:
+            // on the batching worker thread a single panic here would unwind and brick the channel
+            // for every other client. Treat a closed channel as "stop delivering" and latch `done`
+            // so we don't keep retrying for this job.
+            if self.sender.send(msg).is_err() {
+                self.done.store(true, Ordering::Relaxed);
+            }
         }
     }
 }
@@ -145,8 +211,14 @@ impl<W: Write + Send + 'static> InferenceJobListener for WriteListener<W> {
     type CompletedItem = W;
 
     fn on_text(&mut self, text: String) {
-        write!(self.writer, "{text}").unwrap();
-        self.writer.flush().unwrap();
+        // The writer may be a client stream that has gone away (e.g. the HTTP client
+        // dropped the SSE connection -> BrokenPipe). A failed write here must NOT panic:
+        // this runs on the listener thread, and a panic kills it, which both bricks the
+        // batch for every OTHER concurrent client and makes `join()` panic on the now-
+        // closed channel. Swallow the error — the generation finishes normally and the
+        // already-hardened `completed()` (closed-channel -> latch `done`) stops delivery.
+        let _ = write!(self.writer, "{text}");
+        let _ = self.writer.flush();
     }
 
     fn on_finished(self) -> Self::CompletedItem {
@@ -202,11 +274,23 @@ impl InferenceJobListener for StdOutListener {
 /// This handle should be used to indicate when a job is finished using the
 /// [join method](JobHandle::join).
 pub struct JobHandle<C: InferenceJobListener> {
-    sender: SyncSender<Msg>,
+    sender: Sender<Msg>,
+    cancel: CancelSignal,
     _c: PhantomData<C>,
 }
 
 impl<C: InferenceJobListener> JobHandle<C> {
+    /// Request cancellation of the job. Fire-once; the engine executing the job observes the
+    /// token and stops generating.
+    pub fn cancel(&self) {
+        self.cancel.cancel();
+    }
+
+    /// A clone of the job's cancellation signal (e.g. to wire to a client disconnect signal).
+    pub fn cancel_signal(&self) -> CancelSignal {
+        self.cancel.clone()
+    }
+
     /// Wait for the job to complete and returns the
     /// [InferenceJobListener::CompletedItem] from the job listener.
     ///
@@ -228,4 +312,28 @@ impl<C: InferenceJobListener> JobHandle<C> {
 enum Msg {
     Text(String),
     Finished(SyncSender<Box<dyn Any + Send>>),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The handle's token and the job's token are the SAME token (cancelling one is visible on
+    /// the other), and cancellation is idempotent — fire-once, never unset.
+    #[test]
+    fn cancel_signal_is_shared_between_job_and_handle() {
+        let (job, handle) = InferenceJob::create(
+            InferenceTask::Prompt("p".to_string()),
+            GenerationParams::default(),
+            TextGenerationListener::default(),
+        );
+        assert!(!job.cancel.is_cancelled());
+        handle.cancel();
+        assert!(job.cancel.is_cancelled());
+        handle.cancel();
+        assert!(job.cancel.is_cancelled());
+        // Drain the listener thread.
+        drop(job);
+        handle.join();
+    }
 }

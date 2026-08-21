@@ -324,6 +324,11 @@ struct InferenceServerEntry {
     crate_namespace: String,
     #[darling(rename = "server_type")]
     server_ty: String,
+    /// Optional per-server channel type. When omitted the registry-wide `Channel` alias is used
+    /// (the default plumbing). Set this for a single server to wire it through a different channel
+    /// (e.g. `BatchingChannel`) without changing the default for every other model.
+    #[darling(default)]
+    channel_type: Option<String>,
 }
 
 #[derive(Debug, Default, FromMeta)]
@@ -377,10 +382,31 @@ pub fn inference_server_registry(attr: TokenStream, item: TokenStream) -> TokenS
                 .into();
             }
         };
+        // Each server uses the registry-wide `Channel` alias unless it opts into a specific
+        // channel type. This lets a single model be wired through a different channel (e.g.
+        // `BatchingChannel`) while every other model keeps the default.
+        let channel_ty: syn::Type = match &server.channel_type {
+            Some(channel_ty_str) => match syn::parse_str(channel_ty_str) {
+                Ok(ty) => ty,
+                Err(e) => {
+                    let msg = format!("Invalid channel_type `{channel_ty_str}`: {e}");
+                    return syn::Error::new_spanned(
+                        syn::Lit::Str(syn::LitStr::new(
+                            channel_ty_str,
+                            proc_macro2::Span::call_site(),
+                        )),
+                        msg,
+                    )
+                    .to_compile_error()
+                    .into();
+                }
+            },
+            None => syn::parse_str("Channel").expect("`Channel` is a valid path"),
+        };
         let registry_entry = quote! {
             {
                 type S = #server_ty;
-                type C = InferenceClient<#server_ty, Channel<#server_ty>>;
+                type C = InferenceClient<#server_ty, #channel_ty<#server_ty>>;
                 map.insert(
                     S::model_name(),
                     Box::new(C::new(
@@ -389,7 +415,7 @@ pub fn inference_server_registry(attr: TokenStream, item: TokenStream) -> TokenS
                         S::model_creation_date(),
                         S::created_by(),
                         <S as ServerConfigParsing>::Config::command,
-                        Channel::<S>::new(),
+                        #channel_ty::<S>::new(),
                     )),
                 );
             }

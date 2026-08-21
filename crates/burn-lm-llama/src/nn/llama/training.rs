@@ -96,9 +96,10 @@ impl LlamaInput {
 
 impl<T: Tokenizer> From<inference::Llama<T>> for Llama {
     fn from(inference_llama: inference::Llama<T>) -> Self {
+        let decoder = inference_llama.decoder;
         Llama {
-            model: inference_llama.model,
-            rope: inference_llama.pos_encoding.rope,
+            model: decoder.model,
+            rope: decoder.pos_encoding.rope,
         }
     }
 }

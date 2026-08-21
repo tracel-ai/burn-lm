@@ -12,10 +12,20 @@ version.workspace = true
 license.workspace = true
 readme.workspace = true
 
+[features]
+# Optional in-process CPU profiler exposed over HTTP on the same port the server already
+# binds (see `src/profiling.rs`). Off by default so the normal server stays lean; the
+# benchmark harness turns it on to profile a deployed Modal @web_server container.
+profiling = ["dep:pprof"]
+
 [dependencies]
 burn = { workspace = true }
 burn-lm-inference = { path = "../burn-lm-inference", version = "0.0.1" }
 burn-lm-registry = { path = "../burn-lm-registry", version = "0.0.1" }
+
+# CPU profiler (feature = "profiling"). flamegraph -> /debug/pprof/flamegraph SVG;
+# protobuf-codec -> /debug/pprof/profile pprof.pb for `pprof -http`.
+pprof = { version = "0.14", default-features = false, features = ["flamegraph", "protobuf-codec"], optional = true }
 
 async-trait = { workspace = true }
 axum = { workspace = true }

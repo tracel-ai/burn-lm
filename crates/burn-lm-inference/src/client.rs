@@ -8,7 +8,7 @@ use crate::{
     InferenceJob, Stats,
 };
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct InferenceClient<Server: InferenceServer + 'static, Channel: 'static> {
     model_name: &'static str,
     model_cli_param_name: &'static str,
@@ -17,6 +17,24 @@ pub struct InferenceClient<Server: InferenceServer + 'static, Channel: 'static> 
     create_cli_flags_fn: CreateCliFlagsFn,
     channel: Channel,
     _phantom_server: PhantomData<Server>,
+}
+
+// Manual `Clone` so we don't require `Server: Clone` (it appears only as `PhantomData`); only the
+// `Channel` needs to be cloneable.
+impl<Server: InferenceServer + 'static, Channel: Clone + 'static> Clone
+    for InferenceClient<Server, Channel>
+{
+    fn clone(&self) -> Self {
+        Self {
+            model_name: self.model_name,
+            model_cli_param_name: self.model_cli_param_name,
+            model_creation_date: self.model_creation_date,
+            created_by: self.created_by,
+            create_cli_flags_fn: self.create_cli_flags_fn,
+            channel: self.channel.clone(),
+            _phantom_server: PhantomData,
+        }
+    }
 }
 
 impl<Server, Channel> InferenceClient<Server, Channel>
@@ -99,6 +117,10 @@ where
 
     fn run_job(&self, job: InferenceJob) -> InferenceResult<Stats> {
         self.channel.run_job(job)
+    }
+
+    fn is_overloaded(&self) -> bool {
+        self.channel.is_overloaded()
     }
 
     fn model_name(&self) -> &'static str {
